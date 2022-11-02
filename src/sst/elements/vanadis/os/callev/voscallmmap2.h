@@ -13,8 +13,8 @@
 // information, see the LICENSE file in the top level directory of the
 // distribution.
 
-#ifndef _H_VANADIS_SYSCALL_MMAP
-#define _H_VANADIS_SYSCALL_MMAP
+#ifndef _H_VANADIS_SYSCALL_MMAP2
+#define _H_VANADIS_SYSCALL_MMAP2
 
 #include "os/voscallev.h"
 
@@ -24,16 +24,16 @@
 namespace SST {
 namespace Vanadis {
 
-class VanadisSyscallMemoryMapEvent : public VanadisSyscallEvent {
+class VanadisSyscallMemoryMap2Event : public VanadisSyscallEvent {
 public:
-    VanadisSyscallMemoryMapEvent() : VanadisSyscallEvent() {}
+    VanadisSyscallMemoryMap2Event() : VanadisSyscallEvent() {}
 
-    VanadisSyscallMemoryMapEvent(uint32_t core, uint32_t thr, VanadisOSBitType bittype, uint64_t addr, uint64_t len, int64_t prot, int64_t flags,
-                                 int fd, uint64_t offset)
+    VanadisSyscallMemoryMap2Event(uint32_t core, uint32_t thr, VanadisOSBitType bittype, uint64_t addr, uint64_t len, int64_t prot, int64_t flags,
+                                 uint64_t stack_p, uint64_t offset_multiplier)
         : VanadisSyscallEvent(core, thr, bittype), address(addr), length(len), page_prot(prot), alloc_flags(flags),
-          fd(fd), offset(offset) {}
+          stack_pointer(stack_p), offset_units(offset_multiplier) {}
 
-    VanadisSyscallOp getOperation() { return SYSCALL_OP_MMAP; }
+    VanadisSyscallOp getOperation() { return SYSCALL_OP_MMAP2; }
 
     uint64_t getAllocationAddress() const { return address; }
     uint64_t getAllocationLength() const { return length; }
@@ -46,16 +46,16 @@ public:
 
     bool isAllocationAnonymous() const { return (alloc_flags & 0x800) != 0; }
 
-    uint64_t getFd() const { return fd; }
-    uint64_t getOffset() const { return offset; }
+    uint64_t getStackPointer() const { return stack_pointer; }
+    uint64_t getOffsetUnits() const { return offset_units; }
 
 private:
     uint64_t address;
     uint64_t length;
     int64_t page_prot;
     int64_t alloc_flags;
-    int fd;
-    uint64_t offset;
+    uint64_t stack_pointer;
+    uint64_t offset_units;
 };
 
 } // namespace Vanadis
