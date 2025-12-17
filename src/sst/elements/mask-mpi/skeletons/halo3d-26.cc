@@ -43,7 +43,10 @@ Questions? Contact sst-macro-help@sandia.gov
 */
 
 #include <mask_mpi.h>
+#include <cstdlib>
+#include <ctime>
 #include <mercury/common/skeleton.h>
+
 //#include <sstmac/replacements/sys/time.h>
 //#include <sstmac/replacements/time.h>
 
