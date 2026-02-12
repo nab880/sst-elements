@@ -10,7 +10,7 @@
 // distribution.
 
 #include "sst/elements/carcosa/injectors/faultInjectorMemH.h"
-#include "sst/elements/carcosa/PMDataRegistry.h"
+#include "sst/elements/carcosa/Components/PMDataRegistry.h"
 #include <sstream>
 
 using namespace SST::Carcosa;

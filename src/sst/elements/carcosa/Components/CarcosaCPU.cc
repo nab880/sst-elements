@@ -107,8 +107,8 @@ CarcosaCPU::CarcosaCPU(ComponentId_t id, Params& params) :
         out.fatal(CALL_INFO, -1, "%s, Error: StandardCPU cannot issue less than one request at a time...fix your input deck\n", getName().c_str());
     }
     HaliLink = configureLink("haliToCPU", new Event::Handler2<CarcosaCPU, &CarcosaCPU::handleCpuEvent>(this));
-    if(!HaliLink) {
-	out.fatal(CALL_INFO, -1, " %s Hali link exists\n", getName().c_str());
+    if (!HaliLink) {
+        out.fatal(CALL_INFO, -1, "%s, Error: 'haliToCPU' port is not connected\n", getName().c_str());
     }
     // Tell the simulator not to end until we OK it
     registerAsPrimaryComponent();
@@ -152,13 +152,12 @@ CarcosaCPU::CarcosaCPU(ComponentId_t id, Params& params) :
 }
 void CarcosaCPU::handleCpuEvent(SST::Event *ev)
 {
-	Carcosa::CpuEvent *event = dynamic_cast<Carcosa::CpuEvent*>(ev);
-	if (event) {
-		delete event;
-	}
-	else {
-		out.output("ERROR: Unexpected event type received\n");
-	}
+    Carcosa::CpuEvent *event = dynamic_cast<Carcosa::CpuEvent*>(ev);
+    if (event) {
+        delete event;
+    } else {
+        out.output("ERROR: Unexpected event type received\n");
+    }
 }
 void CarcosaCPU::init(unsigned int phase)
 {
@@ -198,16 +197,14 @@ bool CarcosaCPU::clockTic( Cycle_t )
     if(clock_ticks % 1000 == 0)
     {
 #ifdef __SST_DEBUG_OUTPUT__
-	out.output("test1 open from Carcosa\n");
+        out.output("test1 open from Carcosa\n");
 #endif
-	Carcosa::CpuEvent *ev = new Carcosa::CpuEvent("test1.txt", 0, 200);
-	HaliLink->send(ev);
-        std::string cmdStr = "FlushCache";
-        Interfaces::StandardMem::Request* req;
-        req = createFlushCache();
-        std::string cmdString = "FlushCache";
+        Carcosa::CpuEvent *ev = new Carcosa::CpuEvent("test1.txt", 0, 200);
+        HaliLink->send(ev);
+        Interfaces::StandardMem::Request* req = createFlushCache();
         if (req->needsResponse()) {
-		requests[req->getID()] =  std::make_pair(getCurrentSimTime(), cmdStr);
+            std::string cmdStr = "FlushCache";
+            requests[req->getID()] = std::make_pair(getCurrentSimTime(), cmdStr);
         }
 
         memory->send(req);
@@ -215,10 +212,10 @@ bool CarcosaCPU::clockTic( Cycle_t )
     else if(clock_ticks % 500 == 0)
     {
 #ifdef __SST_DEBUG_OUTPUT__
-	out.output("test2 open from Carcosa\n");
+        out.output("test2 open from Carcosa\n");
 #endif
-	Carcosa::CpuEvent *ev = new Carcosa::CpuEvent("test2.txt", 0, 200);
-	HaliLink->send(ev);
+        Carcosa::CpuEvent *ev = new Carcosa::CpuEvent("test2.txt", 0, 200);
+        HaliLink->send(ev);
     }
     ++clock_ticks;
     // Histogram bin the requests pending per cycle
@@ -242,27 +239,20 @@ bool CarcosaCPU::clockTic( Cycle_t )
 
                 StandardMem::Addr addr = rng.generateNextUInt64() % 200;
 
-                std::vector<uint8_t> data;
-                data.resize(4);
-                data[0] = (addr >> 24) & 0xff;
-                data[1] = (addr >> 16) & 0xff;
-                data[2] = (addr >>  8) & 0xff;
-                data[3] = (addr >>  0) & 0xff;
+                // Consume RNG value to maintain deterministic sequence
+                rng.generateNextUInt32();
 
-                uint32_t instNum = rng.generateNextUInt32() % high_mark;
-                uint64_t size = 4;
                 std::string cmdString = "Read";
-                Interfaces::StandardMem::Request* req;
-                req = createRead(addr);
+                Interfaces::StandardMem::Request* req = createRead(addr);
 
                 if (req->needsResponse()) {
-		    requests[req->getID()] =  std::make_pair(getCurrentSimTime(), cmdString);
+                    requests[req->getID()] = std::make_pair(getCurrentSimTime(), cmdString);
                 }
 
                 memory->send(req);
 
                 ops--;
-	    }
+            }
         }
     }
 
@@ -304,7 +294,7 @@ StandardMem::Request* CarcosaCPU::createRead(Addr addr) {
     num_reads_issued->addData(1);
     if (addr >= noncacheableRangeStart && addr < noncacheableRangeEnd) {
 #ifdef __SST_DEBUG_OUTPUT__
-	out.output("non cachable read\n");
+        out.output("non cacheable read\n");
 #endif
         req->setNoncacheable();
         noncacheableReads->addData(1);

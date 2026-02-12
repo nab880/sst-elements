@@ -18,7 +18,7 @@
 #include "sst/core/event.h"
 #include "sst/elements/memHierarchy/memEvent.h"
 #include "sst/elements/carcosa/injectors/faultInjectorBase.h"
-#include "sst/elements/carcosa/PMDataRegistry.h"
+#include "sst/elements/carcosa/Components/PMDataRegistry.h"
 #include <map>
 #include <utility>
 #include <vector>
