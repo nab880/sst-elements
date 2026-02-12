@@ -9,6 +9,10 @@ AM_CPPFLAGS += \
 compdir = $(pkglibdir)
 comp_LTLIBRARIES = libcarcosa.la
 libcarcosa_la_SOURCES =                     \
+    Components/Hali.cc                      \
+    Components/Hali.h                       \
+    Components/FaultInjManager.cc           \
+    Components/FaultInjManager.h            \
     injectors/faultInjectorBase.cc          \
     injectors/faultInjectorBase.h           \
     injectors/stuckAtFaultInjector.cc       \
@@ -19,21 +23,24 @@ libcarcosa_la_SOURCES =                     \
     injectors/randomDropFaultInjector.h     \
     injectors/randomFlipFaultInjector.cc    \
     injectors/randomFlipFaultInjector.h     \
-    injectors/dropFlipFaultInjector.cc        \
-    injectors/dropFlipFaultInjector.h         \
+    injectors/dropFlipFaultInjector.cc      \
+    injectors/dropFlipFaultInjector.h       \
     faultlogic/faultBase.cc                 \
     faultlogic/faultBase.h                  \
-    faultlogic/stuckAtFault.cc              \
-    faultlogic/stuckAtFault.h               \
-    faultlogic/corruptMemFault.cc           \
-    faultlogic/corruptMemFault.h            \
-    faultlogic/randomDropFault.cc           \
-    faultlogic/randomDropFault.h            \
-    faultlogic/randomFlipFault.cc           \
+    faultlogic/stuckAtFault.cc               \
+    faultlogic/stuckAtFault.h                \
+    faultlogic/corruptMemFault.cc            \
+    faultlogic/corruptMemFault.h             \
+    faultlogic/randomDropFault.cc            \
+    faultlogic/randomDropFault.h             \
+    faultlogic/randomFlipFault.cc            \
     faultlogic/randomFlipFault.h
 
 EXTRA_DIST = \
-    tests/testCorruptMemBasic.py                  \
+    hyades.h                                      \
+    tests/pingpong.c                              \
+    tests/testCarcosaPingPong.py                   \
+    tests/testCorruptMemBasic.py                   \
     tests/testCorruptMemDouble.py                 \
     tests/testCorruptMemDoubleOverlap.py          \
     tests/testRandomDrop.py                       \
@@ -59,6 +66,8 @@ nobase_sst_HEADERS =                        \
 
 libcarcosa_la_LDFLAGS = -module -avoid-version
 libcarcosa_la_LIBADD =
+# SST core headers (output.h, sst_config.h) both define __STDC_FORMAT_MACROS; suppress redefinition warning
+libcarcosa_la_CXXFLAGS = $(AM_CXXFLAGS) -Wno-macro-redefined
 
 AM_CPPFLAGS += $(HMC_FLAG)
 install-exec-hook:
