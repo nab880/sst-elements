@@ -56,7 +56,6 @@ using namespace SST::MemHierarchy;
 /*************************** Memory Controller ********************/
 CarcosaMemCtrl::CarcosaMemCtrl(ComponentId_t id, Params &params) : Component(id), backing_(NULL) {
     requireLibrary("memHierarchy");
-    out.output("initializing vto controller\n");
     dlevel = params.find<int>("debug_level", 0);
 
     fixupParams( params, "backend", "backendConvertor.backend" );
@@ -258,22 +257,15 @@ CarcosaMemCtrl::CarcosaMemCtrl(ComponentId_t id, Params &params) : Component(id)
         }
     }
     numIFLs = params.find<uint64_t>("numIFLs");
-    out.output("number of IFLs %d\n", numIFLs);
     std::string linkprefix = "iflLinks_";
-    for(int i =0; i < numIFLs; i++)
-    {
-    	SST::Link* link;
-	std::string linkname = linkprefix + std::to_string(i);
-	if(isPortConnected(linkname))
-	{
-		link = configureLink(linkname, new Event::Handler2<CarcosaMemCtrl, &CarcosaMemCtrl::handleIFLEvent>(this));
-		iflLinks.push_back(link);
-	}
-
-	else {
-		out.output("shouldn't be here \n");
-	}
-
+    for (int i = 0; i < numIFLs; i++) {
+        std::string linkname = linkprefix + std::to_string(i);
+        if (isPortConnected(linkname)) {
+            SST::Link* link = configureLink(linkname, new Event::Handler2<CarcosaMemCtrl, &CarcosaMemCtrl::handleIFLEvent>(this));
+            iflLinks.push_back(link);
+        } else {
+            out.output("WARNING: IFL port %s not connected\n", linkname.c_str());
+        }
     }
     clockLink_ = link_->isClocked();
     link_->setRecvHandler( new Event::Handler2<CarcosaMemCtrl, &CarcosaMemCtrl::handleEvent>(this));
@@ -297,7 +289,7 @@ CarcosaMemCtrl::CarcosaMemCtrl(ComponentId_t id, Params &params) : Component(id)
     }
 
     if (backingType != "none" && backingType != "mmap" && backingType != "malloc" && backingType != "hybrid") {
-        out.fatal(CALL_INFO, -1, "%s, ERROR - Invalid parameter: 'backing'. Musttt be one of 'none', 'malloc', or 'mmap'. You specified: %s\n",
+        out.fatal(CALL_INFO, -1, "%s, ERROR - Invalid parameter: 'backing'. Must be one of 'none', 'malloc', or 'mmap'. You specified: %s\n",
                 getName().c_str(), backingType.c_str());
     }
 
@@ -373,7 +365,7 @@ CarcosaMemCtrl::CarcosaMemCtrl(ComponentId_t id, Params &params) : Component(id)
             fclose(fp);
         }
     } else if ( backingType == "hybrid" ) {
-	backing_ = new Backend::BackingHybrid(sizeBytes, initBacking);
+        backing_ = new Backend::BackingHybrid(sizeBytes, initBacking);
     } else {
         backing_outfile_ = "";
     }
@@ -402,7 +394,6 @@ void CarcosaMemCtrl::handleIFLEvent(SST::Event *ev)
             Addr start = cpuev->getStart();
             Addr end = cpuev->getEnd();
             std::string fname = cpuev->getFname();
-            out.output("handleIFLEvent: fname %s, start %llx, end %llu\n", fname.c_str(), (unsigned long long)start, (unsigned long long)end);
             backing->addBacking(fname, start, end);
         } else {
             out.output("%s: IFL CpuEvent ignored (backing is not BackingHybrid; use backing=hybrid for IFL)\n", getName().c_str());
@@ -566,7 +557,6 @@ Cycle_t CarcosaMemCtrl::turnClockOn() {
 }
 
 void CarcosaMemCtrl::modifyBacking() {
-	out.output("modifyBacking called\n");
 }
 void CarcosaMemCtrl::handleCustomEvent(MemEventBase * ev) {
     if (!customCommandHandler_)
@@ -707,30 +697,18 @@ void CarcosaMemCtrl::finish(void) {
 }
 
 void CarcosaMemCtrl::writeData(MemEvent* event) {
-    if (event->getCmd() == Command::PutM) { /* Write request to memory */
-        Addr addr = event->queryFlag(MemEvent::F_NONCACHEABLE) ? event->getAddr() : event->getBaseAddr();
-        if (is_debug_event(event)) {
-            Debug(_L8_, "S: Update backing. Addr = %" PRIx64 ", Size = %i\n", addr, event->getSize());
-            printDataValue(addr, &(event->getPayload()), true);
-        }
+    Command cmd = event->getCmd();
+    if (cmd != Command::PutM && cmd != Command::Write) return;
 
-        backing_->set(addr, event->getSize(), event->getPayload());
+    Addr addr = (cmd == Command::PutM && !event->queryFlag(MemEvent::F_NONCACHEABLE))
+        ? event->getBaseAddr() : event->getAddr();
 
-        return;
+    if (is_debug_event(event)) {
+        Debug(_L8_, "S: Update backing. Addr = %" PRIx64 ", Size = %i\n", addr, event->getSize());
+        printDataValue(addr, &(event->getPayload()), true);
     }
 
-    if (event->getCmd() == Command::Write) {
-        Addr addr = event->getAddr();
-        if (is_debug_event(event)) {
-            Debug(_L8_, "S: Update backing. Addr = %" PRIx64 ", Size = %i\n", addr, event->getSize());
-            printDataValue(addr, &(event->getPayload()), true);
-        }
-
-        backing_->set(addr, event->getSize(), event->getPayload());
-
-        return;
-    }
-
+    backing_->set(addr, event->getSize(), event->getPayload());
 }
 
 
@@ -757,15 +735,13 @@ void CarcosaMemCtrl::writeData(Addr addr, std::vector<uint8_t> * data) {
     for (size_t i = 0; i < data->size(); i++) {
         backing_->set(addr + i, data->at(i));
     }
-	out.output("data value write\n");
-        printDataValue(addr, data, true);
+    printDataValue(addr, data, true);
 }
 
 
 void CarcosaMemCtrl::readData(Addr addr, size_t bytes, std::vector<uint8_t> &data) {
     data.resize(bytes, 0);
 
-    out.output("data value read\n");
     if (!backing_) return;
 
     for (size_t i = 0; i < bytes; i++)

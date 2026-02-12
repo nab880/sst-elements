@@ -25,22 +25,38 @@ libcarcosa_la_SOURCES =                     \
     injectors/randomFlipFaultInjector.h     \
     injectors/dropFlipFaultInjector.cc      \
     injectors/dropFlipFaultInjector.h       \
+    injectors/faultInjectorMemH.cc          \
+    injectors/faultInjectorMemH.h           \
     faultlogic/faultBase.cc                 \
     faultlogic/faultBase.h                  \
-    faultlogic/stuckAtFault.cc               \
-    faultlogic/stuckAtFault.h                \
-    faultlogic/corruptMemFault.cc            \
-    faultlogic/corruptMemFault.h             \
-    faultlogic/randomDropFault.cc            \
-    faultlogic/randomDropFault.h             \
-    faultlogic/randomFlipFault.cc            \
-    faultlogic/randomFlipFault.h
+    faultlogic/stuckAtFault.cc              \
+    faultlogic/stuckAtFault.h               \
+    faultlogic/corruptMemFault.cc           \
+    faultlogic/corruptMemFault.h            \
+    faultlogic/randomDropFault.cc           \
+    faultlogic/randomDropFault.h            \
+    faultlogic/randomFlipFault.cc           \
+    faultlogic/randomFlipFault.h            \
+    Components/PMDataRegistry.h             \
+    Components/CarcosaCPU.cc                \
+    Components/CarcosaCPU.h                 \
+    Components/FaultInjCPU.cc               \
+    Components/FaultInjCPU.h                \
+    Components/CpuEvent.h                   \
+    Components/FaultInjEvent.h              \
+    Components/FaultInjManagerAPI.h         \
+    Components/CarcosaMemCtrl.cc            \
+    Components/CarcosaMemCtrl.h             \
+    Components/SensorComponent.cc           \
+    Components/SensorComponent.h           \
+    Components/SensorEvent.h                \
+    Components/HaliEvent.h
 
 EXTRA_DIST = \
     hyades.h                                      \
     tests/pingpong.c                              \
-    tests/testCarcosaPingPong.py                   \
-    tests/testCorruptMemBasic.py                   \
+    tests/testCarcosaPingPong.py                  \
+    tests/testCorruptMemBasic.py                  \
     tests/testCorruptMemDouble.py                 \
     tests/testCorruptMemDoubleOverlap.py          \
     tests/testRandomDrop.py                       \
@@ -48,7 +64,13 @@ EXTRA_DIST = \
     tests/testStuckAtBasic.py                     \
     tests/testStuckAtMultiple.py                  \
     tests/testStuckAtOverlap.py                   \
-    tests/testStuckAtSameByte.py
+    tests/testStuckAtSameByte.py                  \
+    tests/mhlib.py                                \
+    tests/testDynamicPM.py                        \
+    tests/testHaliBacking.py                      \
+    tests/testHaliMemH.py                         \
+    tests/testHaliPM.py                           \
+    tests/testManagerLogic.py
 
 sstdir = $(includedir)/sst/elements/carcosa
 nobase_sst_HEADERS =                        \
@@ -58,11 +80,14 @@ nobase_sst_HEADERS =                        \
     injectors/randomDropFaultInjector.h     \
     injectors/randomFlipFaultInjector.h     \
     injectors/dropFlipFaultInjector.h       \
+    injectors/faultInjectorMemH.h           \
     faultlogic/faultBase.h                  \
     faultlogic/stuckAtFault.h               \
     faultlogic/corruptMemFault.h            \
     faultlogic/randomDropFault.h            \
-    faultlogic/randomFlipFault.h
+    faultlogic/randomFlipFault.h            \
+    Components/PMDataRegistry.h             \
+    Components/FaultInjManagerAPI.h
 
 libcarcosa_la_LDFLAGS = -module -avoid-version
 libcarcosa_la_LIBADD =
