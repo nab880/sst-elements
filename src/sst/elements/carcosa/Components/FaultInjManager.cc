@@ -17,7 +17,7 @@
 // for ALL SST implementation files
 #include "sst_config.h"
 #include "sst/elements/carcosa/Components/FaultInjManager.h"
-#include "sst/elements/carcosa/PMDataRegistry.h"
+#include "sst/elements/carcosa/Components/PMDataRegistry.h"
 #include <limits>
 #include <sst/elements/memHierarchy/memEvent.h>
 

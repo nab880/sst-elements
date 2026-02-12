@@ -17,7 +17,7 @@
 #define CARCOSA_FAULTINJMANAGER_H
 
 #include "sst/elements/carcosa/Components/FaultInjManagerAPI.h"
-#include "sst/elements/carcosa/PMDataRegistry.h"
+#include "sst/elements/carcosa/Components/PMDataRegistry.h"
 #include <vector>
 #include <string>
 #include <set>

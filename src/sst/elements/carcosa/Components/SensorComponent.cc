@@ -45,8 +45,6 @@ SensorComponent::SensorComponent(ComponentId_t id, Params& params) : Component(i
     // - Output to STDOUT (Output::STDOUT)
     out = new Output("", 1, 0, Output::STDOUT);
 
-    out->output("SensorComponent: Construction, %s\n", getName().c_str());
-
     // Get parameter from the Python input
     bool found;
     eventsToSend = params.find<unsigned>("eventsToSend", 0, found);
@@ -88,8 +86,6 @@ SensorComponent::SensorComponent(ComponentId_t id, Params& params) : Component(i
  */
 void SensorComponent::init(unsigned phase)
 {
-    out->output("Phase: Init(%u), %s\n", phase, getName().c_str());
-
     // Only send our info on phase 0
     if (phase == 0) {
         SensorEvent* event = new SensorEvent(getName());
@@ -101,8 +97,8 @@ void SensorComponent::init(unsigned phase)
 
         SensorEvent* event = dynamic_cast<SensorEvent*>(ev);
         if (event) {
-                out->output("    %" PRIu64 " %s received %s\n", getCurrentSimCycle(), getName().c_str(), event->toString().c_str());
-		delete event;
+                if (verbose) out->output("    %" PRIu64 " %s received %s\n", getCurrentSimCycle(), getName().c_str(), event->toString().c_str());
+                delete event;
         } else {
             out->fatal(CALL_INFO, -1, "Error in %s: Received an event during init() but it is not the expected type\n", getName().c_str());
         }
@@ -118,37 +114,21 @@ void SensorComponent::init(unsigned phase)
  */
 void SensorComponent::setup()
 {
-    out->output("Phase: Setup, %s\n", getName().c_str());
-
-    // Use the average of each components' eventsToSend parameter to agree on eventsToSend
-    // Then, total events to send during simulation is our neighbors * events to each
-    eventsToSend = 10; // Plus one since I am not in the neighbor list
-
-    out->output("    %s will send %u events to IFL.\n", getName().c_str(), eventsToSend);
-
+    // Total events to send during simulation
+    eventsToSend = 10;
 
     // Sanity check
     if (iflLink == NULL) {
-        out->output("    My name is %s. It's very lonely here, I have no ifl link.\n", getName().c_str());
         primaryComponentOKToEndSim();
         return;
     } else if (eventsToSend == 0) {
-        out->output("    My name is %s. I have neighbors but none of us want to talk.\n", getName().c_str());
         primaryComponentOKToEndSim();
         return;
     }
 
-    // Since all the sets are ordered the same, stagger our starting neighbor to be the one after us
-
     // Send first event
     iflLink->send(new SensorEvent("hi"));
-
-    // Record that we sent this event
     eventsSent++;
-
-    // Update iter to prepare for next send
-
-    out->output("Phase: Run, %s\n", getName().c_str());
 }
 
 
@@ -177,8 +157,6 @@ void SensorComponent::handleSensorEvent(SST::Event *ev)
  */
 void SensorComponent::complete(unsigned phase)
 {
-    out->output("Phase: Complete(%u), %s\n", phase, getName().c_str());
-
     if (phase == 0) {
         std::string goodbye = "Goodbye from " + getName();
         iflLink->sendUntimedData( new SensorEvent(goodbye) );
@@ -204,12 +182,6 @@ void SensorComponent::complete(unsigned phase)
  */
 void SensorComponent::finish()
 {
-    out->output("Phase: Finish, %s\n", getName().c_str());
-
-    out->output("    My name is %s and I sent %u messages. I received %u messages and forwarded %u messages.\n"
-            "    My ifl neighbor said: %s\n",
-            getName().c_str(), eventsSent, eventsReceived, eventsForwarded,
-            iflMsg.c_str());
 }
 
 /*
@@ -219,8 +191,6 @@ void SensorComponent::finish()
  */
 SensorComponent::~SensorComponent()
 {
-    // Component info has been deleted by core already so getName() won't work
-    out->output("Phase: Destruction\n");
     delete out;
 }
 
@@ -242,19 +212,17 @@ void SensorComponent::printStatus(Output& sim_out) {
 }
 bool SensorComponent::mainTick( Cycle_t cycles)
 {
-  out->output("sensorComponent mainTick\n");
   //Send an event across iflLink to generate compute
-  iflLink->send(new SensorEvent("tick\n"));
+  iflLink->send(new SensorEvent("tick"));
   eventsSent++;
   //Check to see if all events have been sent, if so signal ready for complete
-  if(eventsSent >= eventsToSend)
-  {
-	SensorEvent *ev = new SensorEvent("end");
-	ev->setLast();
-	iflLink->send(ev);
-	primaryComponentOKToEndSim();
-	return true;
-  }  else {
-	return false;
+  if (eventsSent >= eventsToSend) {
+      SensorEvent *ev = new SensorEvent("end");
+      ev->setLast();
+      iflLink->send(ev);
+      primaryComponentOKToEndSim();
+      return true;
+  } else {
+      return false;
   }
 }
