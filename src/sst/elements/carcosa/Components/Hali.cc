@@ -45,11 +45,6 @@ Hali::Hali(ComponentId_t id, Params& params) : Component(id) {
     out_->output("Phase: Construction, %s\n\n", getName().c_str());
 
     // Read parameters
-    bool found;
-    eventsToSend_ = params.find<unsigned>("eventsToSend", 0, found);
-    if (!found) {
-        eventsToSend_ = 1;
-    }
     verbose_ = params.find<bool>("verbose", false);
 
     // Configure Hali ring links
@@ -163,7 +158,6 @@ void Hali::init(unsigned phase) {
             } else {
                 // Event from another component - record and forward
                 neighbors_.insert(event->getStr());
-                eventsToSend_ += 5;
                 leftHaliLink_->sendUntimedData(event);
             }
         } else {
@@ -197,10 +191,8 @@ void Hali::setup() {
         return;
     }
 
-    // Calculate events to send based on neighbor count
-    eventsToSend_ /= (neighbors_.size() + 1);
-    out_->output("    %s will send %u events to each other component.\n", getName().c_str(), eventsToSend_);
-    eventsToSend_ *= neighbors_.size();
+    eventsToSend_ = neighbors_.size();
+    out_->output("    %s will send 1 event to each other component.\n", getName().c_str());
 
     // Handle edge cases
     if (neighbors_.empty()) {
@@ -343,6 +335,7 @@ void Hali::lowlinkMemEvent(SST::Event* ev) {
     }
 }
 
+// Handles sensor-to-Hali communication; signals end-of-sim on final sensor event
 void Hali::handleSensorEvent(SST::Event* ev) {
     SensorEvent* event = dynamic_cast<SensorEvent*>(ev);
 
@@ -357,9 +350,6 @@ void Hali::handleSensorEvent(SST::Event* ev) {
 
         if (last) {
             primaryComponentOKToEndSim();
-        } else {
-            if (cpuLink_ && verbose_) out_->output("HaliSensorEvent: sending CPUEvent\n");
-            if (cpuLink_) cpuLink_->send(new CpuEvent("data"));
         }
     } else {
         out_->fatal(CALL_INFO, -1, "Error in %s: Unexpected event type in handleSensorEvent\n", getName().c_str());
