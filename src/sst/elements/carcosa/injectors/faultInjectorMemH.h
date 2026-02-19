@@ -13,32 +13,20 @@
 #define SST_ELEMENTS_CARCOSA_FAULTINJECTORMEMH_H
 
 #include <sst_config.h>
-#include <random>
-#include "sst/core/portModule.h"
 #include "sst/core/event.h"
 #include "sst/elements/memHierarchy/memEvent.h"
 #include "sst/elements/carcosa/injectors/faultInjectorBase.h"
 #include "sst/elements/carcosa/Components/PMDataRegistry.h"
-#include <map>
-#include <utility>
 #include <vector>
 
 namespace SST::Carcosa {
 
-// Enum to select basic fault injection logic or indicate a custom input
-enum injectorLogic {
-    StuckAt = 0,
-    RandomFlip,
-    RandomDrop,
-    CorruptMemRegion,
-    Custom
-};
-
 /**
  * PortModule for MemHierarchy fault injection with PMDataRegistry support.
- * Inherits from SST::PortModule directly; uses installDirection from FaultInjectorBase.
+ * Inherits from FaultInjectorBase; adds PM registry integration so events
+ * carrying PM data skip fault injection.
  */
-class FaultInjectorMemH : public SST::PortModule
+class FaultInjectorMemH : public FaultInjectorBase
 {
 public:
     SST_ELI_REGISTER_PORTMODULE(
@@ -46,17 +34,15 @@ public:
         "carcosa",
         "faultInjectorMemH",
         SST_ELI_ELEMENT_VERSION(0, 1, 0),
-        "Barebones PortModule used to connect fault injection logic to components"
+        "MemHierarchy fault injection PortModule with PMDataRegistry support"
     )
 
     SST_ELI_DOCUMENT_PARAMS(
-        {"installDirection", "Flag which direction the injector should read from on a port. Valid optins are \'Send\', \'Receive\', and \'Both\'. Default is \'Receive\'."},
-        {"injectionProbability", "The probability with which an injection should occur. Valid inputs range from 0 to 1. Default = 0.5."},
-        {"faultType", "The type of fault to be injected. Options are stuckAt, randomFlip, randomDrop, corruptMemRegion, and custom."},
-        {"stuckAtAddrs", "Map of addresses and bits that are stuck, along with the values of those stuck bits."},
         {"pmRegistryIds", "Comma-separated registry ids to listen to (e.g. 'default' or 'hali_0,hali_1'). Default 'default'."},
         {"pmId", "This PM's id for manager tracking. Optional."},
-        {"debugManagerLogic", "If true, print [ManagerLogic] and PM-read debug messages. Default 0."}
+        {"debugManagerLogic", "If true, print [ManagerLogic] and PM-read debug messages. Default 0."},
+        {"injection_probability", "Probability for fault injection to trigger. Default 0.5."},
+        {"faultType", "The type of fault to be injected. Options are stuckAt, randomFlip, randomDrop, corruptMemRegion, and custom."}
     )
 
     FaultInjectorMemH(Params& params);
@@ -64,48 +50,16 @@ public:
     FaultInjectorMemH() = default;
     ~FaultInjectorMemH() {}
 
-    void eventSent(uintptr_t key, Event*& ev) override;
-    void interceptHandler(uintptr_t key, Event*& data, bool& cancel) override;
-
     /** Call during init to push RegisterPM to all registries. Invoked by link if supported. */
     void init(unsigned phase);
 
-    bool installOnReceive() override
-    {
-        switch (installDirection_) {
-            case Send:
-                return false;
-            case Receive:
-            //case Both:
-            default:
-                return true;
-        }
-    }
-    bool installOnSend() override
-    {
-        switch (installDirection_) {
-            case Send:
-            //case Both:
-                return true;
-            case Receive:
-            default:
-                return false;
-        }
-    }
+protected:
+    double injection_probability_ = 0.5;
+
+    bool doInjection() override;
+    void executeFaults(Event*& ev) override;
 
 private:
-    void (SST::Carcosa::FaultInjectorMemH::* faultLogic)(Event*&);
-    std::random_device rd;
-    std::default_random_engine generator;
-    std::uniform_real_distribution<double> dist_fp;
-
-    MemHierarchy::Command cmd;
-    installDirection installDirection_ = installDirection::Receive;
-    double injectionProbability_ = 0.5;
-
-    // map of addr->{bit, value} for saving stuck bit values
-    std::map<SST::MemHierarchy::Addr, std::vector<std::pair<int, bool>>> stuckAtMap;
-
     std::vector<std::string> pmRegistryIds_;
     std::vector<PMDataRegistry*> registries_;
     std::string pmId_;
@@ -117,31 +71,15 @@ private:
 
     void serialize_order(SST::Core::Serialization::serializer& ser) override
     {
-        SST::PortModule::serialize_order(ser);
-        // serialize parameters like `SST_SER(<param_member>)`
-        SST_SER(installDirection_);
-        SST_SER(injectionProbability_);
-        SST_SER(stuckAtMap);
+        FaultInjectorBase::serialize_order(ser);
+        SST_SER(injection_probability_);
+        SST_SER(pmRegistryIds_);
+        /* registries_ not serialized; re-resolved from pmRegistryIds_ via ensureRegistriesResolved() */
+        SST_SER(pmId_);
+        SST_SER(registerPMSent_);
+        SST_SER(debugManagerLogic_);
     }
-    ImplementSerializable(SST::Carcosa::FaultInjectorMemH)
-
-    /**
-     * Read event payload and perform the following:
-     *  - If stuckAtMap.at(addr) exists, compare all listed bits with payload value
-     *  - If payload value does not match mapped value, add bit to flip mask
-     *  - Once all stored bit values have been compared, use flip mask to modify address data
-     */
-    void stuckAtFault(Event*& ev);
-
-    void stuckAtInit(SST::Params& params);
-
-    void randomFlipFault(Event*& ev);
-
-    void randomDropFault(Event*& ev);
-
-    void corruptMemRegionFault(Event*& ev);
-
-    void customFault(Event*& ev);
+    ImplementVirtualSerializable(SST::Carcosa::FaultInjectorMemH)
 };
 
 } // namespace SST::Carcosa
