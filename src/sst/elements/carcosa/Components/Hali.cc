@@ -23,8 +23,10 @@
 #include "sst/elements/carcosa/Components/HaliEvent.h"
 #include "sst/elements/carcosa/Components/CpuEvent.h"
 #include "sst/elements/carcosa/Components/FaultInjEvent.h"
+#include "sst/elements/carcosa/Components/InterceptionAgentAPI.h"
 #include "sst/elements/carcosa/Components/SensorEvent.h"
 #include <limits>
+#include <sstream>
 #include <typeinfo>
 #include <climits>
 #include <cstring>
@@ -89,19 +91,34 @@ Hali::Hali(ComponentId_t id, Params& params) : Component(id) {
         "Carcosa.FaultInjManager", "faultInjManager", 0,
         ComponentInfo::SHARE_NONE, faultInjParams);
 
-    // MMIO coordination params
-    controlAddrBase_ = params.find<uint64_t>("control_addr_base", 0);
-    controlAddrSize_ = params.find<uint64_t>("control_addr_size", 0);
-    mmioMode_ = (controlAddrSize_ > 0);
-    initialCommand_ = params.find<int>("initial_command", 0);
-    maxIterations_ = params.find<int>("max_iterations", 6);
-    currentIteration_ = 0;
-    nextCommand_ = INT_MIN;
-    partnerDone_ = false;
-    localDone_ = false;
-    pendingCommandRead_ = nullptr;
+    // Interception: parse intercept_ranges (semicolon-separated "base,size" pairs)
+    interceptionAgent_ = loadUserSubComponent<InterceptionAgentAPI>("interceptionAgent", ComponentInfo::SHARE_NONE);
+    std::string rangesStr = params.find<std::string>("intercept_ranges", "");
+    if (!rangesStr.empty()) {
+        std::istringstream iss(rangesStr);
+        std::string pair;
+        while (std::getline(iss, pair, ';')) {
+            size_t comma = pair.find(',');
+            if (comma != std::string::npos) {
+                uint64_t base = 0;
+                uint64_t size = 0;
+                std::istringstream(pair.substr(0, comma)) >> std::hex >> base;
+                std::istringstream(pair.substr(comma + 1)) >> std::dec >> size;
+                if (size > 0) {
+                    interceptRanges_.push_back({base, base + size});
+                }
+            }
+        }
+    }
+    if (interceptionAgent_) {
+        if (leftHaliLink_) interceptionAgent_->setRingLink(leftHaliLink_);
+        if (highlink_) interceptionAgent_->setHighlink(highlink_);
+        if (!interceptRanges_.empty()) {
+            interceptionAgent_->setInterceptBase(interceptRanges_[0].first);
+        }
+    }
 
-    if (!mmioMode_) {
+    if (!interceptionAgent_) {
         registerAsPrimaryComponent();
         primaryComponentDoNotEndSim();
     }
@@ -176,17 +193,8 @@ void Hali::setup() {
         faultInjManager_->processMessagesFromPMs();
     }
 
-    if (mmioMode_) {
-        nextCommand_ = initialCommand_;
-        if (verbose_) {
-            out_->output("    %s: MMIO mode, initial_command=%d, max_iterations=%d\n",
-                         getName().c_str(), initialCommand_, maxIterations_);
-        }
-        if (pendingCommandRead_) {
-            sendCommandResponse(pendingCommandRead_, nextCommand_);
-            pendingCommandRead_ = nullptr;
-            nextCommand_ = INT_MIN;
-        }
+    if (interceptionAgent_) {
+        interceptionAgent_->agentSetup();
         out_->output("Phase: Run, %s\n", getName().c_str());
         return;
     }
@@ -302,10 +310,8 @@ void Hali::handleCpuEvent(SST::Event* ev) {
 
 void Hali::highlinkMemEvent(SST::Event* ev) {
     MemEvent* mevent = dynamic_cast<MemEvent*>(ev);
-    if (mevent && mmioMode_ && controlAddrSize_ > 0) {
-        uint64_t addr = mevent->getAddr();
-        if (addr >= controlAddrBase_ && addr < controlAddrBase_ + controlAddrSize_) {
-            handleMMIOEvent(mevent);
+    if (mevent && interceptionAgent_ && isInterceptedAddress(mevent->getAddr())) {
+        if (interceptionAgent_->handleInterceptedEvent(mevent, highlink_)) {
             return;
         }
     }
@@ -360,14 +366,13 @@ void Hali::handleHaliEvent(SST::Event* ev) {
     HaliEvent* event = dynamic_cast<HaliEvent*>(ev);
 
     if (event) {
-        if (mmioMode_ && event->getStr() == "done") {
-            partnerDone_ = true;
+        if (interceptionAgent_ && event->getStr() == "done") {
             if (verbose_) {
                 out_->output("    %" PRIu64 " %s received done (iteration %u)\n",
                              getCurrentSimCycle(), getName().c_str(), event->getNum());
             }
+            interceptionAgent_->notifyPartnerDone(event->getNum());
             delete event;
-            checkBothDone();
             return;
         }
 
@@ -402,65 +407,13 @@ void Hali::handleHaliEvent(SST::Event* ev) {
     }
 }
 
-/*****************************************************************************
- * MMIO coordination (Vanadis ping-pong)
- *****************************************************************************/
-void Hali::handleMMIOEvent(MemEvent* ev) {
-    uint64_t offset = ev->getAddr() - controlAddrBase_;
-    using namespace SST::MemHierarchy;
-
-    if (offset == 0x0000 && ev->getCmd() == Command::GetS) {
-        if (nextCommand_ >= -1 && nextCommand_ != INT_MIN) {
-            sendCommandResponse(ev, nextCommand_);
-            nextCommand_ = INT_MIN;
-        } else {
-            pendingCommandRead_ = ev;
+bool Hali::isInterceptedAddress(uint64_t addr) const {
+    for (const auto& range : interceptRanges_) {
+        if (addr >= range.first && addr < range.second) {
+            return true;
         }
-    } else if (offset == 0x0004 && (ev->getCmd() == Command::Write || ev->getCmd() == Command::GetX)) {
-        sendWriteAck(ev);
-        localDone_ = true;
-        currentIteration_++;
-        if (leftHaliLink_) {
-            leftHaliLink_->send(new HaliEvent("done", static_cast<unsigned>(currentIteration_)));
-        }
-        checkBothDone();
-    } else {
-        delete ev;
     }
-}
-
-void Hali::checkBothDone() {
-    if (!localDone_ || !partnerDone_) return;
-
-    localDone_ = false;
-    partnerDone_ = false;
-
-    if (currentIteration_ >= maxIterations_) {
-        nextCommand_ = -1;
-    } else {
-        nextCommand_ = currentIteration_ % 2;
-    }
-
-    if (pendingCommandRead_) {
-        sendCommandResponse(pendingCommandRead_, nextCommand_);
-        pendingCommandRead_ = nullptr;
-        nextCommand_ = INT_MIN;
-    }
-}
-
-void Hali::sendCommandResponse(MemEvent* request, int value) {
-    MemEvent* resp = request->makeResponse();
-    std::vector<uint8_t> data(4);
-    std::memcpy(data.data(), &value, sizeof(int));
-    resp->setPayload(data);
-    if (highlink_) highlink_->send(resp);
-    delete request;
-}
-
-void Hali::sendWriteAck(MemEvent* ev) {
-    MemEvent* resp = ev->makeResponse();
-    if (highlink_) highlink_->send(resp);
-    delete ev;
+    return false;
 }
 
 /*****************************************************************************
