@@ -197,8 +197,11 @@ class CPU_Builder:
         # Hali in data path: CPU -> Hali -> dTLB -> L1D
         hali = sst.Component(prefix + ".hali", "Carcosa.Hali")
         hali.addParams({
-            "control_addr_base": "0xBEEF0000",
-            "control_addr_size": "4096",
+            "intercept_ranges": "0xBEEF0000,4096",
+            "verbose": "true",
+        })
+        agent = hali.setSubComponent("interceptionAgent", "Carcosa.PingPongAgent")
+        agent.addParams({
             "initial_command": "0",
             "max_iterations": "6",
             "verbose": "true",

@@ -44,6 +44,9 @@
 #include <sst/core/link.h>
 #include "sst/elements/carcosa/Components/CarcosaMemCtrl.h"
 #include "sst/elements/carcosa/Components/FaultInjManagerAPI.h"
+#include "sst/elements/carcosa/Components/InterceptionAgentAPI.h"
+#include <utility>
+#include <vector>
 
 namespace SST {
 namespace MemHierarchy {
@@ -68,10 +71,11 @@ public:
         {"Sensors", "Number of SensorComponents this interface receives from.", NULL},
         {"CPUs", "Number of Compute components the Hali sends to.", NULL},
         {"verbose", "Enable verbose output for debugging.", "false"},
-        {"control_addr_base", "Base VA for MMIO control registers (e.g. 0xBEEF0000). When set, Hali intercepts these addresses.", "0"},
-        {"control_addr_size", "Size of MMIO control region in bytes.", "0"},
-        {"initial_command", "First command index to send to core (MMIO mode).", "0"},
-        {"max_iterations", "Max iterations before sending exit (-1) in MMIO mode.", "6"}
+        {"intercept_ranges", "Semicolon-separated base,size pairs (e.g. '0xBEEF0000,4096') for addresses to hand to InterceptionAgent.", ""}
+    )
+
+    SST_ELI_DOCUMENT_SUBCOMPONENT_SLOTS(
+        {"interceptionAgent", "Optional agent for intercepted memory accesses (e.g. Carcosa.PingPongAgent). If unset, no interception.", "SST::Carcosa::InterceptionAgentAPI"}
     )
 
     SST_ELI_DOCUMENT_PORTS(
@@ -104,14 +108,8 @@ public:
     void lowlinkMemEvent(SST::Event* ev);
     void highlinkMemEvent(SST::Event* ev);
 
-    /** MMIO mode: handle read/write to control registers, respond or hold request */
-    void handleMMIOEvent(SST::MemHierarchy::MemEvent* ev);
-    /** When both local and partner have reported done, compute next command and respond to pending read if any */
-    void checkBothDone();
-    /** Send command value as response to a held read request */
-    void sendCommandResponse(SST::MemHierarchy::MemEvent* request, int value);
-    /** Send write acknowledgment for status register write */
-    void sendWriteAck(SST::MemHierarchy::MemEvent* ev);
+    /** Returns true if addr falls within any registered intercept range. */
+    bool isInterceptedAddress(uint64_t addr) const;
 
 private:
     // Configuration
@@ -146,18 +144,10 @@ private:
 
     // Subcomponents
     FaultInjManagerAPI* faultInjManager_;
+    InterceptionAgentAPI* interceptionAgent_;
 
-    // MMIO coordination state (when control_addr_size > 0)
-    uint64_t controlAddrBase_;
-    uint64_t controlAddrSize_;
-    int initialCommand_;
-    int maxIterations_;
-    int currentIteration_;
-    int nextCommand_;
-    bool partnerDone_;
-    bool localDone_;
-    SST::MemHierarchy::MemEvent* pendingCommandRead_;
-    bool mmioMode_;
+    // Interception: address ranges passed to agent when present
+    std::vector<std::pair<uint64_t, uint64_t>> interceptRanges_;
 };
 
 } // namespace Carcosa

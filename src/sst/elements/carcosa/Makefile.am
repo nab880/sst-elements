@@ -45,6 +45,9 @@ libcarcosa_la_SOURCES =                     \
     Components/CpuEvent.h                   \
     Components/FaultInjEvent.h              \
     Components/FaultInjManagerAPI.h         \
+    Components/InterceptionAgentAPI.h       \
+    Components/PingPongAgent.cc             \
+    Components/PingPongAgent.h              \
     Components/CarcosaMemCtrl.cc            \
     Components/CarcosaMemCtrl.h             \
     Components/SensorComponent.cc           \
@@ -87,7 +90,9 @@ nobase_sst_HEADERS =                        \
     faultlogic/randomDropFault.h            \
     faultlogic/randomFlipFault.h            \
     Components/PMDataRegistry.h             \
-    Components/FaultInjManagerAPI.h
+    Components/FaultInjManagerAPI.h        \
+    Components/InterceptionAgentAPI.h      \
+    Components/PingPongAgent.h
 
 libcarcosa_la_LDFLAGS = -module -avoid-version
 libcarcosa_la_LIBADD =
