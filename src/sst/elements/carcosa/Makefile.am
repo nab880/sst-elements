@@ -48,6 +48,8 @@ libcarcosa_la_SOURCES =                     \
     Components/InterceptionAgentAPI.h       \
     Components/PingPongAgent.cc             \
     Components/PingPongAgent.h              \
+    Components/VLAAgent.cc                  \
+    Components/VLAAgent.h                   \
     Components/CarcosaMemCtrl.cc            \
     Components/CarcosaMemCtrl.h             \
     Components/SensorComponent.cc           \
@@ -59,6 +61,8 @@ EXTRA_DIST = \
     hyades.h                                      \
     tests/pingpong.c                              \
     tests/testCarcosaPingPong.py                  \
+    tests/vla.c                                   \
+    tests/testCarcosaVLA.py                       \
     tests/testCorruptMemBasic.py                  \
     tests/testCorruptMemDouble.py                 \
     tests/testCorruptMemDoubleOverlap.py          \
@@ -92,7 +96,8 @@ nobase_sst_HEADERS =                        \
     Components/PMDataRegistry.h             \
     Components/FaultInjManagerAPI.h        \
     Components/InterceptionAgentAPI.h      \
-    Components/PingPongAgent.h
+    Components/PingPongAgent.h              \
+    Components/VLAAgent.h
 
 libcarcosa_la_LDFLAGS = -module -avoid-version
 libcarcosa_la_LIBADD =

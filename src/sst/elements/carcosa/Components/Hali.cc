@@ -154,31 +154,30 @@ void Hali::init(unsigned phase) {
         }
     }
 
-    // Hali ring discovery - only send on phase 0
-    if (phase == 0) {
-        HaliEvent* event = new HaliEvent(getName());
-        leftHaliLink_->sendUntimedData(event);
-    }
+    // Hali ring discovery - only when both ring links are connected (e.g. multi-core PingPong)
+    if (leftHaliLink_ && rightHaliLink_) {
+        if (phase == 0) {
+            HaliEvent* event = new HaliEvent(getName());
+            leftHaliLink_->sendUntimedData(event);
+        }
 
-    // Process ring discovery events
-    while (SST::Event* ev = rightHaliLink_->recvUntimedData()) {
-        HaliEvent* event = dynamic_cast<HaliEvent*>(ev);
-        if (event) {
-            if (verbose_) {
-                out_->output("    %" PRIu64 " %s received %s\n",
-                             getCurrentSimCycle(), getName().c_str(), event->toString().c_str());
-            }
+        while (SST::Event* ev = rightHaliLink_->recvUntimedData()) {
+            HaliEvent* event = dynamic_cast<HaliEvent*>(ev);
+            if (event) {
+                if (verbose_) {
+                    out_->output("    %" PRIu64 " %s received %s\n",
+                                 getCurrentSimCycle(), getName().c_str(), event->toString().c_str());
+                }
 
-            if (event->getStr() == getName()) {
-                // Event made it around the ring
-                delete event;
+                if (event->getStr() == getName()) {
+                    delete event;
+                } else {
+                    neighbors_.insert(event->getStr());
+                    leftHaliLink_->sendUntimedData(event);
+                }
             } else {
-                // Event from another component - record and forward
-                neighbors_.insert(event->getStr());
-                leftHaliLink_->sendUntimedData(event);
+                out_->fatal(CALL_INFO, -1, "Error in %s: Unexpected event type during init()\n", getName().c_str());
             }
-        } else {
-            out_->fatal(CALL_INFO, -1, "Error in %s: Unexpected event type during init()\n", getName().c_str());
         }
     }
 }
@@ -433,40 +432,40 @@ void Hali::complete(unsigned phase) {
         }
     }
 
-    if (phase == 0) {
-        std::string goodbye = "Goodbye from " + getName();
-        std::string farewell = "Farewell from " + getName();
-        leftHaliLink_->sendUntimedData(new HaliEvent(goodbye));
-        rightHaliLink_->sendUntimedData(new HaliEvent(farewell));
-    }
-
-    // Process farewell messages from left link
-    while (SST::Event* ev = leftHaliLink_->recvUntimedData()) {
-        HaliEvent* event = dynamic_cast<HaliEvent*>(ev);
-        if (event) {
-            if (verbose_) {
-                out_->output("    %" PRIu64 " %s received %s\n",
-                             getCurrentSimCycle(), getName().c_str(), event->toString().c_str());
-            }
-            leftHaliMsg_ = event->getStr();
-            delete event;
-        } else {
-            out_->fatal(CALL_INFO, -1, "Error in %s: Unexpected event type during complete()\n", getName().c_str());
+    if (leftHaliLink_ && rightHaliLink_) {
+        if (phase == 0) {
+            std::string goodbye = "Goodbye from " + getName();
+            std::string farewell = "Farewell from " + getName();
+            leftHaliLink_->sendUntimedData(new HaliEvent(goodbye));
+            rightHaliLink_->sendUntimedData(new HaliEvent(farewell));
         }
-    }
 
-    // Process farewell messages from right link
-    while (SST::Event* ev = rightHaliLink_->recvUntimedData()) {
-        HaliEvent* event = dynamic_cast<HaliEvent*>(ev);
-        if (event) {
-            if (verbose_) {
-                out_->output("    %" PRIu64 " %s received %s\n",
-                             getCurrentSimCycle(), getName().c_str(), event->toString().c_str());
+        while (SST::Event* ev = leftHaliLink_->recvUntimedData()) {
+            HaliEvent* event = dynamic_cast<HaliEvent*>(ev);
+            if (event) {
+                if (verbose_) {
+                    out_->output("    %" PRIu64 " %s received %s\n",
+                                 getCurrentSimCycle(), getName().c_str(), event->toString().c_str());
+                }
+                leftHaliMsg_ = event->getStr();
+                delete event;
+            } else {
+                out_->fatal(CALL_INFO, -1, "Error in %s: Unexpected event type during complete()\n", getName().c_str());
             }
-            rightHaliMsg_ = event->getStr();
-            delete event;
-        } else {
-            out_->fatal(CALL_INFO, -1, "Error in %s: Unexpected event type during complete()\n", getName().c_str());
+        }
+
+        while (SST::Event* ev = rightHaliLink_->recvUntimedData()) {
+            HaliEvent* event = dynamic_cast<HaliEvent*>(ev);
+            if (event) {
+                if (verbose_) {
+                    out_->output("    %" PRIu64 " %s received %s\n",
+                                 getCurrentSimCycle(), getName().c_str(), event->toString().c_str());
+                }
+                rightHaliMsg_ = event->getStr();
+                delete event;
+            } else {
+                out_->fatal(CALL_INFO, -1, "Error in %s: Unexpected event type during complete()\n", getName().c_str());
+            }
         }
     }
 }
