@@ -107,7 +107,7 @@ FaultInjCPU::FaultInjCPU(ComponentId_t id, Params& params) :
     if (maxReqsPerIssue < 1) {
         out.fatal(CALL_INFO, -1, "%s, Error: StandardCPU cannot issue less than one request at a time...fix your input deck\n", getName().c_str());
     }
-    HaliLink = configureLink("haliToCPU", new Event::Handler2<FaultInjCPU, &FaultInjCPU::handleCpuEvent>(this));
+    HaliLink = configureLink("haliToCPU", new Event::Handler<FaultInjCPU, &FaultInjCPU::handleCpuEvent>(this));
     if (!HaliLink) {
         out.fatal(CALL_INFO, -1, "%s, Error: 'haliToCPU' port is not connected\n", getName().c_str());
     }
@@ -117,11 +117,11 @@ FaultInjCPU::FaultInjCPU(ComponentId_t id, Params& params) :
 
     //set our clock
     std::string clockFreq = params.find<std::string>("clock", "1GHz");
-    clockHandler = new Clock::Handler2<FaultInjCPU, &FaultInjCPU::clockTic>(this);
+    clockHandler = new Clock::Handler<FaultInjCPU, &FaultInjCPU::clockTic>(this);
     clockTC = registerClock( clockFreq, clockHandler );
 
     /* Find the interface the user provided in the Python and load it*/
-    memory = loadUserSubComponent<StandardMem>("memory", ComponentInfo::SHARE_NONE, clockTC, new StandardMem::Handler2<FaultInjCPU, &FaultInjCPU::handleEvent>(this));
+    memory = loadUserSubComponent<StandardMem>("memory", ComponentInfo::SHARE_NONE, clockTC, new StandardMem::Handler<FaultInjCPU, &FaultInjCPU::handleEvent>(this));
 
     if (!memory) {
         out.fatal(CALL_INFO, -1, "Unable to load memHierarchy.standardInterface subcomponent; check that 'memory' slot is filled in input.\n");

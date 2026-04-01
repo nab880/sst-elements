@@ -50,17 +50,17 @@ Hali::Hali(ComponentId_t id, Params& params) : Component(id) {
     verbose_ = params.find<bool>("verbose", false);
 
     // Configure Hali ring links
-    leftHaliLink_ = configureLink("left", new Event::Handler2<Hali, &Hali::handleHaliEvent>(this));
-    rightHaliLink_ = configureLink("right", new Event::Handler2<Hali, &Hali::handleHaliEvent>(this));
+    leftHaliLink_ = configureLink("left", new Event::Handler<Hali, &Hali::handleHaliEvent>(this));
+    rightHaliLink_ = configureLink("right", new Event::Handler<Hali, &Hali::handleHaliEvent>(this));
 
     // Configure CPU link (optional - not used in MMIO / Vanadis data-path mode)
-    cpuLink_ = configureLink("cpu", new Event::Handler2<Hali, &Hali::handleCpuEvent>(this));
+    cpuLink_ = configureLink("cpu", new Event::Handler<Hali, &Hali::handleCpuEvent>(this));
 
     // Configure optional links
-    memCtrlLink_ = configureLink("memCtrl", new Event::Handler2<Hali, &Hali::handleMemCtrlEvent>(this));
+    memCtrlLink_ = configureLink("memCtrl", new Event::Handler<Hali, &Hali::handleMemCtrlEvent>(this));
 
     if (isPortConnected("sensor")) {
-        sensorLink_ = configureLink("sensor", new Event::Handler2<Hali, &Hali::handleSensorEvent>(this));
+        sensorLink_ = configureLink("sensor", new Event::Handler<Hali, &Hali::handleSensorEvent>(this));
         if (verbose_) out_->output("%s: sensor port connected\n", getName().c_str());
     } else {
         sensorLink_ = nullptr;
@@ -68,7 +68,7 @@ Hali::Hali(ComponentId_t id, Params& params) : Component(id) {
 
     // Configure memory hierarchy links (optional - for MemHierarchy integration)
     if (isPortConnected("highlink")) {
-        highlink_ = configureLink("highlink", new Event::Handler2<Hali, &Hali::highlinkMemEvent>(this));
+        highlink_ = configureLink("highlink", new Event::Handler<Hali, &Hali::highlinkMemEvent>(this));
         if (verbose_) out_->output("%s: highlink port connected\n", getName().c_str());
     } else {
         highlink_ = nullptr;
@@ -76,7 +76,7 @@ Hali::Hali(ComponentId_t id, Params& params) : Component(id) {
     }
 
     if (isPortConnected("lowlink")) {
-        lowlink_ = configureLink("lowlink", new Event::Handler2<Hali, &Hali::lowlinkMemEvent>(this));
+        lowlink_ = configureLink("lowlink", new Event::Handler<Hali, &Hali::lowlinkMemEvent>(this));
         if (verbose_) out_->output("%s: lowlink port connected\n", getName().c_str());
     } else {
         lowlink_ = nullptr;

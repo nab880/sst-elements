@@ -165,8 +165,8 @@ protected:
     Addr translateToLocal(Addr addr);
     Addr translateToGlobal(Addr addr);
 
-    Clock::Handler2<CarcosaMemCtrl, &CarcosaMemCtrl::clock>* clockHandler_;
-    TimeConverter* clockTimeBase_;
+    Clock::Handler<CarcosaMemCtrl, &CarcosaMemCtrl::clock>* clockHandler_;
+    TimeConverter clockTimeBase_;
 
     CustomCmdMemHandler * customCommandHandler_;
 

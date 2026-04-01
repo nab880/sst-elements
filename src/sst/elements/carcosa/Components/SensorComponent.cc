@@ -60,9 +60,9 @@ SensorComponent::SensorComponent(ComponentId_t id, Params& params) : Component(i
     verbose = params.find<bool>("verbose", false);
 
     // configure our links with a callback function that will be called whenever an event arrives
-    iflLink = configureLink("ifl", new Event::Handler2<SensorComponent, &SensorComponent::handleSensorEvent>(this));
+    iflLink = configureLink("ifl", new Event::Handler<SensorComponent, &SensorComponent::handleSensorEvent>(this));
 
-    registerClock("1Hz", new Clock::Handler2<SensorComponent, &SensorComponent::mainTick>(this));
+    registerClock("1Hz", new Clock::Handler<SensorComponent, &SensorComponent::mainTick>(this));
     // Make sure we successfully configured the links
     // Failure usually means the user didn't connect the port in the input file
     sst_assert(iflLink, CALL_INFO, -1, "Error in %s: IFL link configuration failed\n", getName().c_str());

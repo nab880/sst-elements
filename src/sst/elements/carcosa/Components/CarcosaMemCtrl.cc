@@ -104,7 +104,7 @@ CarcosaMemCtrl::CarcosaMemCtrl(ComponentId_t id, Params &params) : Component(id)
     if (!(clock_ua.hasUnits("Hz") || clock_ua.hasUnits("s")) || clock_ua.getRoundedValue() <= 0) {
         out.fatal(CALL_INFO, -1, "%s, ERROR - Invalid parameter: 'clock'. Must have units of Hz or s and be > 0. (SI prefixes ok). You specified '%s'\n", getName().c_str(), clockfreq.c_str());
     }
-    clockHandler_ = new Clock::Handler2<CarcosaMemCtrl, &CarcosaMemCtrl::clock>(this);
+    clockHandler_ = new Clock::Handler<CarcosaMemCtrl, &CarcosaMemCtrl::clock>(this);
     clockTimeBase_ = registerClock(clockfreq, clockHandler_);
     clockOn_ = true;
 
@@ -261,14 +261,14 @@ CarcosaMemCtrl::CarcosaMemCtrl(ComponentId_t id, Params &params) : Component(id)
     for (int i = 0; i < numIFLs; i++) {
         std::string linkname = linkprefix + std::to_string(i);
         if (isPortConnected(linkname)) {
-            SST::Link* link = configureLink(linkname, new Event::Handler2<CarcosaMemCtrl, &CarcosaMemCtrl::handleIFLEvent>(this));
+            SST::Link* link = configureLink(linkname, new Event::Handler<CarcosaMemCtrl, &CarcosaMemCtrl::handleIFLEvent>(this));
             iflLinks.push_back(link);
         } else {
             out.output("WARNING: IFL port %s not connected\n", linkname.c_str());
         }
     }
     clockLink_ = link_->isClocked();
-    link_->setRecvHandler( new Event::Handler2<CarcosaMemCtrl, &CarcosaMemCtrl::handleEvent>(this));
+    link_->setRecvHandler( new Event::Handler<CarcosaMemCtrl, &CarcosaMemCtrl::handleEvent>(this));
 
     link_->setRegion(region_);
 
@@ -550,7 +550,7 @@ bool CarcosaMemCtrl::clock(Cycle_t cycle) {
 }
 
 Cycle_t CarcosaMemCtrl::turnClockOn() {
-    Cycle_t cycle = reregisterClock(*clockTimeBase_, clockHandler_);
+    Cycle_t cycle = reregisterClock(clockTimeBase_, clockHandler_);
     cycle--;
     clockOn_ = true;
     return cycle;
@@ -680,7 +680,7 @@ void CarcosaMemCtrl::complete(unsigned int phase) {
 }
 
 void CarcosaMemCtrl::finish(void) {
-    Cycle_t cycle = getNextClockCycle(*clockTimeBase_); // Get finish time
+    Cycle_t cycle = getNextClockCycle(clockTimeBase_); // Get finish time
     cycle--;
     memBackendConvertor_->finish(cycle);
     link_->finish();
@@ -887,6 +887,6 @@ void CarcosaMemCtrl::printDataValue(Addr addr, std::vector<uint8_t>* data, bool 
     }
 
     dbg.debug(_L11_, "V: %-20" PRIu64 " %-20" PRIu64 " %-20s %-13s 0x%-16" PRIx64 " B: %-3zu %s\n",
-            getCurrentSimCycle(), getNextClockCycle(*clockTimeBase_) - 1, getName().c_str(), action.c_str(),
+            getCurrentSimCycle(), getNextClockCycle(clockTimeBase_) - 1, getName().c_str(), action.c_str(),
             addr, data->size(), value.str().c_str());
 }
