@@ -158,6 +158,7 @@ struct sumi_mem_handle_t {
 
 #define SUMI_MAX_MSG_SIZE (1<<31)
 #define SUMI_CACHELINE_SIZE (64)
+// Increased size for testing purposes, needs to be reverted and tested at some point.
 #define SUMI_INJECT_SIZE 16384
 #define SUMI_MAX_INJECT_SIZE 16384
 
@@ -437,9 +438,9 @@ struct sumi_fid_srx {
 #define ADDR_CQ(addr)    (((addr) >> 16) & 0xFFFF)
 #define ADDR_RANK(addr)  (((addr) >> 32) & 0xFFFFFFFF)
 #define ADDR_QUEUE(addr) ((addr) & 0xFFFF)
-#define ADDR_RANK_BITS(rank)    (rank << 32)
+#define ADDR_RANK_BITS(rank)    ((rank) << 32)
 #define ADDR_QUEUE_BITS(queue)  (queue)
-#define ADDR_CQ_BITS(cq)        (cq << 16)
+#define ADDR_CQ_BITS(cq)        ((cq) << 16)
 
 extern const char sumi_fab_name[];
 extern const char sumi_dom_name[];

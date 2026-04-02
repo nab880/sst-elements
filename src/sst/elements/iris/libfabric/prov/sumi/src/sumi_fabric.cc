@@ -392,6 +392,8 @@ static int sumi_ep_getinfo(enum fi_ep_type ep_type, uint32_t version,
         return -FI_ENODATA;
       }
 
+      // Requests ordering needed for mv2. I don't think we actually enforce
+      // the ordering yet though TODO
       info->tx_attr->comp_order = hints->tx_attr->comp_order;
       info->tx_attr->msg_order  = hints->tx_attr->msg_order;
 
@@ -411,10 +413,13 @@ static int sumi_ep_getinfo(enum fi_ep_type ep_type, uint32_t version,
     }
 
     if (hints->rx_attr){
+      // Was this a copy-paste error?  I think this is a correct change?
       if ((hints->rx_attr->op_flags & SUMI_EP_OP_FLAGS) != hints->rx_attr->op_flags){
         return -FI_ENODATA;
       }
 
+      // Requests ordering needed for mv2. I don't think we actually enforce
+      // the ordering yet though TODO
       info->rx_attr->comp_order = hints->rx_attr->comp_order;
       info->rx_attr->msg_order  = hints->rx_attr->msg_order;
     }

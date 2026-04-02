@@ -140,6 +140,7 @@ static ssize_t sstmaci_cq_read(bool blocking,
     SST::Iris::sumi::Message* msg = rq->progress.front(blocking, timeout_s);
     if (!msg){
       if (!blocking) {
+        // 1ns blocking poll to avoid spin loops. timeout may need to be adjusted
         auto* os = SST::Hg::OperatingSystem::currentOs();
         os->blockTimeout(SST::Hg::TimeDelta(1e-9));
       }
@@ -149,7 +150,7 @@ static ssize_t sstmaci_cq_read(bool blocking,
       src_addr[done] = msg->sender();
     }
     buf = sstmaci_fill_cq_entry(cq_impl->format, buf, static_cast<FabricMessage*>(msg));
-    rq->progress.pop();
+    rq->progress.pop();  // memleak fix
     delete msg;
     done++;
   }
@@ -264,6 +265,7 @@ void RecvQueue::finishMatch(void* buf, uint32_t size, FabricMessage *msg)
 }
 
 void RecvQueue::matchTaggedRecv(FabricMessage* msg){
+  // no increment in loop header — body does it++ to avoid double iteration
   for (auto it = tagged_recvs.begin(); it != tagged_recvs.end(); ){
     auto tmp = it++;
     TaggedRecv& r = *tmp;
@@ -281,6 +283,7 @@ void RecvQueue::postRecv(uint32_t size, void* buf, uint64_t tag, uint64_t tag_ig
     if (unexp_tagged_recvs.empty()){
       tagged_recvs.emplace_back(size, buf, tag, tag_ignore);
     } else {
+      // no increment in loop header — body does it++ to avoid double iteration
       for (auto it = unexp_tagged_recvs.begin(); it != unexp_tagged_recvs.end(); ){
         auto tmp = it++;
         FabricMessage* msg = *tmp;
