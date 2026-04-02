@@ -320,6 +320,8 @@ static int sumi_ep_getinfo(enum fi_ep_type ep_type, uint32_t version,
       info->addr_format = FI_ADDR_STR;
     } else if (hints->addr_format == FI_ADDR_SSTMAC){
       info->addr_format = FI_ADDR_SSTMAC;
+    } else if (hints->addr_format == FI_FORMAT_UNSPEC){
+      info->addr_format = FI_ADDR_SSTMAC;
     } else {
       return -FI_ENODATA;
     }
@@ -390,14 +392,8 @@ static int sumi_ep_getinfo(enum fi_ep_type ep_type, uint32_t version,
         return -FI_ENODATA;
       }
 
-      //we current do not support any ordering relationships
-      //if the app requires ordering, we can't help it
-      if (hints->tx_attr->comp_order && hints->tx_attr->comp_order != FI_ORDER_NONE){
-        return -FI_ENODATA;
-      }
-      if (hints->tx_attr->msg_order && hints->tx_attr->msg_order != FI_ORDER_NONE){
-        return -FI_ENODATA;
-      }
+      info->tx_attr->comp_order = hints->tx_attr->comp_order;
+      info->tx_attr->msg_order  = hints->tx_attr->msg_order;
 
       if (hints->tx_attr->caps){
         if (hints->caps){
@@ -415,19 +411,12 @@ static int sumi_ep_getinfo(enum fi_ep_type ep_type, uint32_t version,
     }
 
     if (hints->rx_attr){
-      if ((hints->rx_attr->op_flags & SUMI_EP_OP_FLAGS) != hints->tx_attr->op_flags){
-        //the app is requesting operations I don't support
+      if ((hints->rx_attr->op_flags & SUMI_EP_OP_FLAGS) != hints->rx_attr->op_flags){
         return -FI_ENODATA;
       }
 
-      //we current do not support any ordering relationships
-      //if the app requires ordering, we can't help it
-      if (hints->rx_attr->comp_order && hints->rx_attr->comp_order != FI_ORDER_NONE){
-        return -FI_ENODATA;
-      }
-      if (hints->rx_attr->msg_order && hints->rx_attr->msg_order != FI_ORDER_NONE){
-        return -FI_ENODATA;
-      }
+      info->rx_attr->comp_order = hints->rx_attr->comp_order;
+      info->rx_attr->msg_order  = hints->rx_attr->msg_order;
     }
 
     if (hints->domain_attr) {
@@ -533,13 +522,8 @@ struct fi_provider sumi_prov = {
 	.cleanup = sumi_fini
 };
 
-__attribute__((visibility ("default"),EXTERNALLY_VISIBLE)) \
+extern "C" __attribute__((visibility ("default"),EXTERNALLY_VISIBLE))
 struct fi_provider* fi_prov_ini(void)
 {
-	struct fi_provider *provider = NULL;
-	sumi_return_t status;
-  //sumi_version_info_t lib_version;
-	int num_devices;
-	int ret;
-	return (provider);
+	return &sumi_prov;
 }
