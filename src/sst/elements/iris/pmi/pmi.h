@@ -67,6 +67,19 @@ int PMI_Spawn_multiple(int count,
                        const PMI_keyval_t preput_keyval_vector[],
                        int errors[]);
 
+int PMI_Get_nidlist_ptr(void **nidlist);
+int PMI_Get_numpes_on_smp(int *num);
+
+/* PMI-2 */
+int PMI2_Init(int *spawned, int *size, int *rank, int *appnum);
+int PMI2_Finalize(void);
+int PMI2_Abort(void);
+int PMI2_Job_GetId(char jobid[], int jobid_size);
+int PMI2_KVS_Put(const char key[], const char value[]);
+int PMI2_KVS_Get(const char *jobid, int src_pmi_id, const char key[],
+                 char value[], int maxvalue, int *vallen);
+int PMI2_KVS_Fence(void);
+
 #ifdef __cplusplus
 }
 #endif

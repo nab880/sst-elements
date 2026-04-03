@@ -31,6 +31,8 @@ extern "C" int PMI_Get_size(int* ret)
   return PMI_SUCCESS;
 }
 
+// Right now all simulated ranks share the same state, may need to be per-app
+// in more complex runs
 static SST::Hg::thread_lock kvs_lock;
 static std::unordered_map<std::string,
             std::unordered_map<std::string, std::string>> kvs;
@@ -66,6 +68,10 @@ PMI2_KVS_Put(const char key[], const char value[])
   return PMI_SUCCESS;
 }
 
+// TODO: This should look up `key` in the KVS (scoped by jobid/src_pmi_id),
+// copy the value into `value` (up to maxvalue bytes), and set *vallen to
+// the actual length.  Right now it is a no-op that returns SUCCESS, which
+// will silently return uninitialized data to the caller.
 extern "C" int
 PMI2_KVS_Get(const char *jobid, int src_pmi_id, const char key[], char value [], int maxvalue, int *vallen)
 {
@@ -116,7 +122,6 @@ extern "C" int PMI_Abort(int rc, const char error_msg[])
 
 bool pmi_finalized = false;
 
-typedef int PMI_BOOL;
 extern "C" int PMI_Initialized( PMI_BOOL *initialized )
 {
   *initialized = pmi_initialized ? 1 : 0;
@@ -183,6 +188,28 @@ extern "C" int PMI_Barrier()
   api->engine()->barrier(init_tag, SST::Iris::sumi::Message::default_cq, nullptr);
   auto* msg = api->engine()->blockUntilNext(SST::Iris::sumi::Message::default_cq);
   if (msg) delete msg;
+  return PMI_SUCCESS;
+}
+
+static bool ibarrier_pending = false;
+
+extern "C" int PMI_Ibarrier()
+{
+  auto api = sstmac_pmi();
+  int init_tag = api->engine()->allocateGlobalCollectiveTag();
+  api->engine()->barrier(init_tag, SST::Iris::sumi::Message::default_cq, nullptr);
+  ibarrier_pending = true;
+  return PMI_SUCCESS;
+}
+
+extern "C" int PMI_Wait()
+{
+  if (!ibarrier_pending)
+    return PMI_SUCCESS;
+  auto api = sstmac_pmi();
+  auto* msg = api->engine()->blockUntilNext(SST::Iris::sumi::Message::default_cq);
+  if (msg) delete msg;
+  ibarrier_pending = false;
   return PMI_SUCCESS;
 }
 
