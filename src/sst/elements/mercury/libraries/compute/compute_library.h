@@ -50,15 +50,15 @@ class ComputeLibrary : public ComputeAPI, public Library
 
   void copy(uint64_t bytes) override;
 
-  private:
+  void computeDetailed(uint64_t flops, uint64_t nintops, uint64_t bytes,
+                       int nthread);
+
+ private:
 
   void doAccess(uint64_t bytes);
 
   void computeLoop(uint64_t num_loops, uint32_t flops_per_loop,
                    uint32_t nintops_per_loop, uint32_t bytes_per_loop);
-
-  void computeDetailed(uint64_t flops, uint64_t nintops, uint64_t bytes,
-                       int nthread);
 
   void computeInst(ComputeEvent* cmsg, int nthr);
 

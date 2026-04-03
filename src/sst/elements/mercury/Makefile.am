@@ -27,6 +27,8 @@ libhg_la_SOURCES = \
   common/connection.cc \
   common/skeleton.cc \
   common/hgcc_wrappers.cc \
+  common/compute_pragmas.cc \
+  common/external_model.cc \
   components/compute_library/node_cl.cc \
   components/compute_library/operating_system_cl.cc \
   components/compute_library/operating_system_cl_api.cc \

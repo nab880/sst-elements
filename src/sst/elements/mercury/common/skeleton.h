@@ -37,6 +37,8 @@
 typedef int (*main_fxn)(int,char**);
 typedef int (*empty_main_fxn)();
 
+#include <stdint.h>
+
 #ifndef __cplusplus
 #include <stdbool.h>
 #else
@@ -92,6 +94,15 @@ void sst_hg_advance_time(const char* param_name);
 void sst_hg_blocking_call(int condition, double timeout, const char* api);
 /* Alias for hgcc-generated pragma: ssthg_blocking_call -> sst_hg_blocking_call */
 #define ssthg_blocking_call sst_hg_blocking_call
+
+void sst_hg_compute_detailed(uint64_t flops, uint64_t intops, uint64_t bytes);
+void sst_hg_compute_detailed_nthr(uint64_t flops, uint64_t intops,
+                                  uint64_t bytes, int nthread);
+void sst_hg_compute_detailed_rw(uint64_t flops, uint64_t intops,
+                                uint64_t readBytes, uint64_t writeBytes,
+                                int nthread);
+void sst_hg_compute_model(const char* model_name);
+void sst_hg_external_model_invoke(const char* model_name, int nargs, const double* args);
 #ifdef __cplusplus
 }
 #endif
