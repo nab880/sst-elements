@@ -158,7 +158,7 @@ struct sumi_mem_handle_t {
 
 #define SUMI_MAX_MSG_SIZE (1<<31)
 #define SUMI_CACHELINE_SIZE (64)
-// Increased size for testing purposes, needs to be reverted and tested at some point.
+// TODO: revert to 64
 #define SUMI_INJECT_SIZE 16384
 #define SUMI_MAX_INJECT_SIZE 16384
 

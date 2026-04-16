@@ -383,6 +383,16 @@ static int sumi_ep_getinfo(enum fi_ep_type ep_type, uint32_t version,
     }
 
 
+    auto warn_unenforced_ordering = [](const char* which, uint64_t order){
+      static bool warned = false;
+      if (!warned && order && order != FI_ORDER_NONE){
+        fprintf(stderr,
+                "WARNING: sumi provider accepted %s 0x%lx but does not enforce it (TODO)\n",
+                which, (unsigned long)order);
+        warned = true;
+      }
+    };
+
     if (hints->tx_attr){
       if ((hints->tx_attr->op_flags & SUMI_EP_OP_FLAGS) != hints->tx_attr->op_flags){
         //the app is requesting operations I don't support
@@ -392,10 +402,11 @@ static int sumi_ep_getinfo(enum fi_ep_type ep_type, uint32_t version,
         return -FI_ENODATA;
       }
 
-      // Requests ordering needed for mv2. I don't think we actually enforce
-      // the ordering yet though TODO
+      // TODO: enforce or reject these; warned once below.
       info->tx_attr->comp_order = hints->tx_attr->comp_order;
       info->tx_attr->msg_order  = hints->tx_attr->msg_order;
+      warn_unenforced_ordering("tx_attr->msg_order",  info->tx_attr->msg_order);
+      warn_unenforced_ordering("tx_attr->comp_order", info->tx_attr->comp_order);
 
       if (hints->tx_attr->caps){
         if (hints->caps){
@@ -413,15 +424,15 @@ static int sumi_ep_getinfo(enum fi_ep_type ep_type, uint32_t version,
     }
 
     if (hints->rx_attr){
-      // Was this a copy-paste error?  I think this is a correct change?
       if ((hints->rx_attr->op_flags & SUMI_EP_OP_FLAGS) != hints->rx_attr->op_flags){
         return -FI_ENODATA;
       }
 
-      // Requests ordering needed for mv2. I don't think we actually enforce
-      // the ordering yet though TODO
+      // TODO: enforce or reject these; warned once below.
       info->rx_attr->comp_order = hints->rx_attr->comp_order;
       info->rx_attr->msg_order  = hints->rx_attr->msg_order;
+      warn_unenforced_ordering("rx_attr->msg_order",  info->rx_attr->msg_order);
+      warn_unenforced_ordering("rx_attr->comp_order", info->rx_attr->comp_order);
     }
 
     if (hints->domain_attr) {

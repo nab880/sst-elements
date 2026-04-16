@@ -31,11 +31,39 @@ extern "C" int PMI_Get_size(int* ret)
   return PMI_SUCCESS;
 }
 
-// Right now all simulated ranks share the same state, may need to be per-app
-// in more complex runs
 static SST::Hg::thread_lock kvs_lock;
 static std::unordered_map<std::string,
             std::unordered_map<std::string, std::string>> kvs;
+
+// Per-thread (per-simulated-rank) flags; shared across ranks in one OS process.
+static std::unordered_map<SST::Hg::Thread*, bool> pmi_initialized_map;
+static std::unordered_map<SST::Hg::Thread*, bool> pmi_finalized_map;
+static std::unordered_map<SST::Hg::Thread*, bool> ibarrier_pending_map;
+
+static bool pmi_flag_get(std::unordered_map<SST::Hg::Thread*, bool>& m)
+{
+  auto* t = SST::Hg::OperatingSystem::currentThread();
+  kvs_lock.lock();
+  bool v = m[t];
+  kvs_lock.unlock();
+  return v;
+}
+
+static void pmi_flag_set(std::unordered_map<SST::Hg::Thread*, bool>& m, bool v)
+{
+  auto* t = SST::Hg::OperatingSystem::currentThread();
+  kvs_lock.lock();
+  m[t] = v;
+  kvs_lock.unlock();
+}
+
+static std::string current_jobid_str()
+{
+  auto* api = sstmac_pmi();
+  char buf[64];
+  snprintf(buf, sizeof(buf), "app%d", api->sid().app_);
+  return std::string(buf);
+}
 
 extern "C" int
 PMI_KVS_Put(const char kvsname[], const char key[], const char value[])
@@ -50,31 +78,63 @@ extern "C" int
 PMI_KVS_Get( const char kvsname[], const char key[], char value[], int length)
 {
   kvs_lock.lock();
-  auto& str = kvs[kvsname][key];
+  auto outer = kvs.find(kvsname);
+  if (outer == kvs.end()){
+    kvs_lock.unlock();
+    return PMI_ERR_INVALID_KEY;
+  }
+  auto inner = outer->second.find(key);
+  if (inner == outer->second.end()){
+    kvs_lock.unlock();
+    return PMI_ERR_INVALID_KEY;
+  }
+  const std::string& str = inner->second;
   if (length < (int)(str.length() + 1)){
     kvs_lock.unlock();
     return PMI_ERR_INVALID_LENGTH;
-  } else {
-    ::strcpy(value, str.c_str());
-    kvs_lock.unlock();
-    return PMI_SUCCESS;
   }
+  ::strcpy(value, str.c_str());
+  kvs_lock.unlock();
+  return PMI_SUCCESS;
 }
 
 extern "C" int
 PMI2_KVS_Put(const char key[], const char value[])
 {
-  SST::Hg::abort("unimplemented error: PMI2_KVS_Put");
+  std::string kvsname = current_jobid_str();
+  kvs_lock.lock();
+  kvs[kvsname][key] = value;
+  kvs_lock.unlock();
   return PMI_SUCCESS;
 }
 
-// TODO: This should look up `key` in the KVS (scoped by jobid/src_pmi_id),
-// copy the value into `value` (up to maxvalue bytes), and set *vallen to
-// the actual length.  Right now it is a no-op that returns SUCCESS, which
-// will silently return uninitialized data to the caller.
 extern "C" int
-PMI2_KVS_Get(const char *jobid, int src_pmi_id, const char key[], char value [], int maxvalue, int *vallen)
+PMI2_KVS_Get(const char *jobid, int /*src_pmi_id*/, const char key[],
+             char value[], int maxvalue, int *vallen)
 {
+  std::string kvsname = (jobid && jobid[0]) ? std::string(jobid)
+                                            : current_jobid_str();
+  kvs_lock.lock();
+  auto outer = kvs.find(kvsname);
+  if (outer == kvs.end()){
+    kvs_lock.unlock();
+    if (vallen) *vallen = 0;
+    return PMI_ERR_INVALID_KEY;
+  }
+  auto inner = outer->second.find(key);
+  if (inner == outer->second.end()){
+    kvs_lock.unlock();
+    if (vallen) *vallen = 0;
+    return PMI_ERR_INVALID_KEY;
+  }
+  const std::string& s = inner->second;
+  if ((int)(s.size() + 1) > maxvalue){
+    kvs_lock.unlock();
+    return PMI_ERR_INVALID_LENGTH;
+  }
+  std::memcpy(value, s.c_str(), s.size() + 1);
+  if (vallen) *vallen = (int)s.size();
+  kvs_lock.unlock();
   return PMI_SUCCESS;
 }
 
@@ -91,8 +151,6 @@ PMI2_Abort(void)
   return PMI_SUCCESS;
 }
 
-static bool pmi_initialized = false;
-
 extern "C" int
 PMI2_Job_GetId(char jobid[], int jobid_size)
 {
@@ -106,7 +164,7 @@ PMI2_Init(int *spawned, int *size, int *rank, int *appnum)
 {
   auto api = sstmac_pmi();
   api->init();
-  pmi_initialized = true;
+  pmi_flag_set(pmi_initialized_map, true);
   *size = api->nproc();
   *rank = api->rank();
   *appnum = 0;
@@ -120,19 +178,17 @@ extern "C" int PMI_Abort(int rc, const char error_msg[])
   return PMI_SUCCESS;
 }
 
-bool pmi_finalized = false;
-
 extern "C" int PMI_Initialized( PMI_BOOL *initialized )
 {
-  *initialized = pmi_initialized ? 1 : 0;
+  *initialized = pmi_flag_get(pmi_initialized_map) ? 1 : 0;
   return PMI_SUCCESS;
 }
 
 extern "C" int
 PMI2_Finalize()
 {
-  pmi_finalized = true;
-  pmi_initialized = false;
+  pmi_flag_set(pmi_finalized_map, true);
+  pmi_flag_set(pmi_initialized_map, false);
   auto api = sstmac_pmi();
   api->finish();
   return PMI_SUCCESS;
@@ -149,7 +205,7 @@ extern "C" int PMI_Init(int* spawned)
 {
   auto* tport = sstmac_pmi();
   tport->init();
-  pmi_initialized = true;
+  pmi_flag_set(pmi_initialized_map, true);
   *spawned = 0;
 
   int nproc = tport->nproc();
@@ -167,7 +223,8 @@ extern "C" int PMI_Init(int* spawned)
 extern "C" int PMI_Finalize()
 {
   sstmac_pmi()->finish();
-  pmi_initialized = false;
+  pmi_flag_set(pmi_initialized_map, false);
+  pmi_flag_set(pmi_finalized_map, true);
   return PMI_SUCCESS;
 }
 
@@ -191,25 +248,23 @@ extern "C" int PMI_Barrier()
   return PMI_SUCCESS;
 }
 
-static bool ibarrier_pending = false;
-
 extern "C" int PMI_Ibarrier()
 {
   auto api = sstmac_pmi();
   int init_tag = api->engine()->allocateGlobalCollectiveTag();
   api->engine()->barrier(init_tag, SST::Iris::sumi::Message::default_cq, nullptr);
-  ibarrier_pending = true;
+  pmi_flag_set(ibarrier_pending_map, true);
   return PMI_SUCCESS;
 }
 
 extern "C" int PMI_Wait()
 {
-  if (!ibarrier_pending)
+  if (!pmi_flag_get(ibarrier_pending_map))
     return PMI_SUCCESS;
   auto api = sstmac_pmi();
   auto* msg = api->engine()->blockUntilNext(SST::Iris::sumi::Message::default_cq);
   if (msg) delete msg;
-  ibarrier_pending = false;
+  pmi_flag_set(ibarrier_pending_map, false);
   return PMI_SUCCESS;
 }
 
