@@ -20,6 +20,7 @@
 #include "sumi_wait.h"
 
 #include <sumi_fabric.hpp>
+#include <mercury/components/operating_system.h>
 
 static int sumi_cq_close(fid_t fid);
 static int sumi_cq_control(struct fid *cq, int command, void *arg);
@@ -125,17 +126,32 @@ static ssize_t sstmaci_cq_read(bool blocking,
   FabricTransport* tport = (FabricTransport*) cq_impl->domain->fabric->tport;
   RecvQueue* rq = (RecvQueue*) cq_impl->queue;
 
+  double pragma_timeout = -1;
+  tport->configureNextPoll(blocking, pragma_timeout);
+
   size_t done = 0;
   while (done < count){
-    double timeout_s = (blocking && timeout > 0) ? timeout*1e-3 : -1;
+    double timeout_s = -1;
+    if (blocking && timeout > 0) {
+      timeout_s = timeout * 1e-3;
+    } else if (blocking && pragma_timeout > 0) {
+      timeout_s = pragma_timeout;
+    }
     SST::Iris::sumi::Message* msg = rq->progress.front(blocking, timeout_s);
     if (!msg){
+      if (!blocking) {
+        // idle 1ns to avoid simulator spin-loop (TODO)
+        auto* os = SST::Hg::OperatingSystem::currentOs();
+        os->blockTimeout(SST::Hg::TimeDelta(1e-9));
+      }
       break;
     }
     if (src_addr){
       src_addr[done] = msg->sender();
     }
     buf = sstmaci_fill_cq_entry(cq_impl->format, buf, static_cast<FabricMessage*>(msg));
+    rq->progress.pop();
+    delete msg;
     done++;
   }
   return done ? done : -FI_EAGAIN;
@@ -203,9 +219,13 @@ extern "C" DIRECT_FN  int sumi_cq_open(struct fid_domain *domain, struct fi_cq_a
 			   struct fid_cq **cq, void *context)
 {
   sumi_fid_domain* domain_impl = (sumi_fid_domain*) domain;
-  FabricTransport* tport = (FabricTransport*) domain_impl;
+  FabricTransport* tport = (FabricTransport*) domain_impl->fabric->tport;
   int id = tport->allocateCqId();
   sumi_fid_cq* cq_impl = (sumi_fid_cq*) calloc(1, sizeof(sumi_fid_cq));
+  cq_impl->cq_fid.fid.fclass = FI_CLASS_CQ;
+  cq_impl->cq_fid.fid.context = context;
+  cq_impl->cq_fid.fid.ops = const_cast<fi_ops*>(&sumi_cq_fi_ops);
+  cq_impl->cq_fid.ops = const_cast<fi_ops_cq*>(&sumi_cq_ops);
   cq_impl->domain = domain_impl;
   cq_impl->id = id;
   cq_impl->format = attr->format;
@@ -245,7 +265,8 @@ void RecvQueue::finishMatch(void* buf, uint32_t size, FabricMessage *msg)
 }
 
 void RecvQueue::matchTaggedRecv(FabricMessage* msg){
-  for (auto it = tagged_recvs.begin(); it != tagged_recvs.end(); ++it){
+  // it++ in body so we can erase tmp
+  for (auto it = tagged_recvs.begin(); it != tagged_recvs.end(); ){
     auto tmp = it++;
     TaggedRecv& r = *tmp;
     if (matches(msg, r.tag, r.tag_ignore)){
@@ -262,11 +283,13 @@ void RecvQueue::postRecv(uint32_t size, void* buf, uint64_t tag, uint64_t tag_ig
     if (unexp_tagged_recvs.empty()){
       tagged_recvs.emplace_back(size, buf, tag, tag_ignore);
     } else {
-      for (auto it = unexp_tagged_recvs.begin(); it != unexp_tagged_recvs.end(); ++it){
+      // it++ in body so we can erase tmp
+      for (auto it = unexp_tagged_recvs.begin(); it != unexp_tagged_recvs.end(); ){
         auto tmp = it++;
         FabricMessage* msg = *tmp;
         if (matches(msg, tag, tag_ignore)){
           finishMatch(buf, size, msg);
+          unexp_tagged_recvs.erase(tmp);
           return;
         }
       }

@@ -223,6 +223,10 @@ extern "C" DIRECT_FN  int sumi_av_open(struct fid_domain *domain, struct fi_av_a
 {
   sumi_fid_av* av_impl = (sumi_fid_av*) calloc(1, sizeof(sumi_fid_av));
   av_impl->av_fid.fid.fclass = FI_CLASS_AV;
+  av_impl->av_fid.fid.context = context;
+  av_impl->av_fid.fid.ops = const_cast<fi_ops*>(&sumi_fi_av_ops);
+  av_impl->av_fid.ops = const_cast<fi_ops_av*>(&sumi_av_ops);
+  av_impl->domain = (sumi_fid_domain*) domain;
   *av = (fid_av*) av_impl;
   return FI_SUCCESS;
 }
