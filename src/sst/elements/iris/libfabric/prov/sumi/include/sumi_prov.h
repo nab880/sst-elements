@@ -158,9 +158,16 @@ struct sumi_mem_handle_t {
 
 #define SUMI_MAX_MSG_SIZE (1<<31)
 #define SUMI_CACHELINE_SIZE (64)
-// TODO: revert to 64
-#define SUMI_INJECT_SIZE 16384
+#define SUMI_INJECT_SIZE 64
 #define SUMI_MAX_INJECT_SIZE 16384
+
+// Ordering the sumi provider can honor. Point-to-point messages are delivered
+// in-order per (src, dst) pair by the underlying transport, so we can safely
+// advertise send/recv-after-send/recv/write orderings. Completion ordering
+// across op types is not enforced.
+#define SUMI_MSG_ORDER_SUPPORTED                                              \
+  (FI_ORDER_SAS | FI_ORDER_RAR | FI_ORDER_RAW | FI_ORDER_WAR | FI_ORDER_WAW)
+#define SUMI_COMP_ORDER_SUPPORTED FI_ORDER_NONE
 
 #define SUMI_FAB_MODES	0
 
@@ -530,11 +537,14 @@ struct ErrorDeallocate {
 
 struct RecvQueue {
 
+  static constexpr uint32_t ANY_SRC = ~uint32_t(0);
+
   struct Recv {
     uint32_t size;
     void* buf;
-    Recv(uint32_t s, void* b) :
-      size(s), buf(b)
+    uint32_t src_rank;
+    Recv(uint32_t s, void* b, uint32_t src) :
+      size(s), buf(b), src_rank(src)
     {
     }
   };
@@ -544,8 +554,9 @@ struct RecvQueue {
     void* buf;
     uint64_t tag;
     uint64_t tag_ignore;
-    TaggedRecv(uint32_t s, void* b, uint64_t t, uint64_t ti) :
-      size(s), buf(b), tag(t), tag_ignore(ti)
+    uint32_t src_rank;
+    TaggedRecv(uint32_t s, void* b, uint64_t t, uint64_t ti, uint32_t src) :
+      size(s), buf(b), tag(t), tag_ignore(ti), src_rank(src)
     {
     }
   };
@@ -559,6 +570,10 @@ struct RecvQueue {
     return (msg->tag() & ~ignore) == (tag & ~ignore);
   }
 
+  static bool srcMatches(uint32_t want, FabricMessage* msg){
+    return want == ANY_SRC || want == (uint32_t)msg->sender();
+  }
+
   std::list<Recv> recvs;
   std::list<TaggedRecv> tagged_recvs;
   std::list<FabricMessage*> unexp_recvs;
@@ -570,7 +585,8 @@ struct RecvQueue {
 
   void matchTaggedRecv(FabricMessage* msg);
 
-  void postRecv(uint32_t size, void* buf, uint64_t tag, uint64_t tag_ignore, bool tagged);
+  void postRecv(uint32_t size, void* buf, uint64_t tag, uint64_t tag_ignore,
+                bool tagged, uint32_t src_rank);
 
   void incoming(SST::Iris::sumi::Message* msg);
 
