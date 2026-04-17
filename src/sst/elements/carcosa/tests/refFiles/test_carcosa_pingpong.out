@@ -1,0 +1,204 @@
+Warning: node0.cpu0.dtlb, The port 'cpu_if' has been renamed to 'highlink' to match other memory system components. Update your input file to eliminate this warning.
+Warning: node0.cpu0.dtlb, The port 'cache_if' has been renamed to 'lowlink' to match other memory system components. Update your input file to eliminate this warning.
+Warning: node0.cpu0.itlb, The port 'cpu_if' has been renamed to 'highlink' to match other memory system components. Update your input file to eliminate this warning.
+Warning: node0.cpu0.itlb, The port 'cache_if' has been renamed to 'lowlink' to match other memory system components. Update your input file to eliminate this warning.
+Phase: Construction, node0.cpu0.hali
+
+node0.cpu0.hali: highlink port connected
+node0.cpu0.hali: lowlink port connected
+Warning: node0.cpu1.dtlb, The port 'cpu_if' has been renamed to 'highlink' to match other memory system components. Update your input file to eliminate this warning.
+Warning: node0.cpu1.dtlb, The port 'cache_if' has been renamed to 'lowlink' to match other memory system components. Update your input file to eliminate this warning.
+Warning: node0.cpu1.itlb, The port 'cpu_if' has been renamed to 'highlink' to match other memory system components. Update your input file to eliminate this warning.
+Warning: node0.cpu1.itlb, The port 'cache_if' has been renamed to 'lowlink' to match other memory system components. Update your input file to eliminate this warning.
+Phase: Construction, node0.cpu1.hali
+
+node0.cpu1.hali: highlink port connected
+node0.cpu1.hali: lowlink port connected
+Phase: Init(0), node0.cpu1.hali
+    node0.cpu1.hali: highlink_=0x120f22d40, lowlink_=0x120f22e00
+Phase: Init(0), node0.cpu0.hali
+    node0.cpu0.hali: highlink_=0x120f21e40, lowlink_=0x120f21f00
+Phase: Init(1), node0.cpu1.hali
+    node0.cpu1.hali: highlink_=0x120f22d40, lowlink_=0x120f22e00
+    node0.cpu1.hali: forwarding event from highlink to lowlink
+    node0.cpu1.hali: forwarding event from highlink to lowlink
+    0 node0.cpu1.hali received HaliEvent. String='node0.cpu0.hali' Number='0'
+Phase: Init(1), node0.cpu0.hali
+    node0.cpu0.hali: highlink_=0x120f21e40, lowlink_=0x120f21f00
+    node0.cpu0.hali: forwarding event from highlink to lowlink
+    node0.cpu0.hali: forwarding event from highlink to lowlink
+    0 node0.cpu0.hali received HaliEvent. String='node0.cpu1.hali' Number='0'
+Phase: Init(2), node0.cpu1.hali
+    node0.cpu1.hali: highlink_=0x120f22d40, lowlink_=0x120f22e00
+    node0.cpu1.hali: forwarding event from lowlink to highlink
+    node0.cpu1.hali: forwarding event from lowlink to highlink
+    0 node0.cpu1.hali received HaliEvent. String='node0.cpu1.hali' Number='0'
+Phase: Init(2), node0.cpu0.hali
+    node0.cpu0.hali: highlink_=0x120f21e40, lowlink_=0x120f21f00
+    node0.cpu0.hali: forwarding event from lowlink to highlink
+    node0.cpu0.hali: forwarding event from lowlink to highlink
+    0 node0.cpu0.hali received HaliEvent. String='node0.cpu0.hali' Number='0'
+Phase: Init(3), node0.cpu1.hali
+    node0.cpu1.hali: highlink_=0x120f22d40, lowlink_=0x120f22e00
+Phase: Init(3), node0.cpu0.hali
+    node0.cpu0.hali: highlink_=0x120f21e40, lowlink_=0x120f21f00
+Phase: Init(4), node0.cpu1.hali
+    node0.cpu1.hali: highlink_=0x120f22d40, lowlink_=0x120f22e00
+Phase: Init(4), node0.cpu0.hali
+    node0.cpu0.hali: highlink_=0x120f21e40, lowlink_=0x120f21f00
+Phase: Init(5), node0.cpu1.hali
+    node0.cpu1.hali: highlink_=0x120f22d40, lowlink_=0x120f22e00
+Phase: Init(5), node0.cpu0.hali
+    node0.cpu0.hali: highlink_=0x120f21e40, lowlink_=0x120f21f00
+Phase: Init(6), node0.cpu1.hali
+    node0.cpu1.hali: highlink_=0x120f22d40, lowlink_=0x120f22e00
+Phase: Init(6), node0.cpu0.hali
+    node0.cpu0.hali: highlink_=0x120f21e40, lowlink_=0x120f21f00
+Phase: Init(7), node0.cpu1.hali
+    node0.cpu1.hali: highlink_=0x120f22d40, lowlink_=0x120f22e00
+Phase: Init(7), node0.cpu0.hali
+    node0.cpu0.hali: highlink_=0x120f21e40, lowlink_=0x120f21f00
+Phase: Init(8), node0.cpu1.hali
+    node0.cpu1.hali: highlink_=0x120f22d40, lowlink_=0x120f22e00
+Phase: Init(8), node0.cpu0.hali
+    node0.cpu0.hali: highlink_=0x120f21e40, lowlink_=0x120f21f00
+Phase: Init(9), node0.cpu1.hali
+    node0.cpu1.hali: highlink_=0x120f22d40, lowlink_=0x120f22e00
+    node0.cpu1.hali: forwarding event from lowlink to highlink
+Phase: Init(9), node0.cpu0.hali
+    node0.cpu0.hali: highlink_=0x120f21e40, lowlink_=0x120f21f00
+    node0.cpu0.hali: forwarding event from lowlink to highlink
+Phase: Init(10), node0.cpu1.hali
+    node0.cpu1.hali: highlink_=0x120f22d40, lowlink_=0x120f22e00
+Phase: Init(10), node0.cpu0.hali
+    node0.cpu0.hali: highlink_=0x120f21e40, lowlink_=0x120f21f00
+Phase: Setup, node0.cpu1.hali
+PingPongAgent: setup initial_command=0, max_iterations=6
+Phase: Run, node0.cpu1.hali
+Phase: Setup, node0.cpu0.hali
+PingPongAgent: setup initial_command=0, max_iterations=6
+Phase: Run, node0.cpu0.hali
+PingPongAgent: sent done iteration 1
+PingPongAgent: sent done iteration 1
+    627689250 node0.cpu0.hali received done (iteration 1)
+PingPongAgent: partner done
+    627689685 node0.cpu1.hali received done (iteration 1)
+PingPongAgent: partner done
+PingPongAgent: sent done iteration 2
+PingPongAgent: sent done iteration 2
+    627885000 node0.cpu0.hali received done (iteration 2)
+PingPongAgent: partner done
+    627885435 node0.cpu1.hali received done (iteration 2)
+PingPongAgent: partner done
+PingPongAgent: sent done iteration 3
+PingPongAgent: sent done iteration 3
+    628072485 node0.cpu0.hali received done (iteration 3)
+PingPongAgent: partner done
+    628072920 node0.cpu1.hali received done (iteration 3)
+PingPongAgent: partner done
+PingPongAgent: sent done iteration 4
+PingPongAgent: sent done iteration 4
+    628259970 node0.cpu0.hali received done (iteration 4)
+PingPongAgent: partner done
+    628260405 node0.cpu1.hali received done (iteration 4)
+PingPongAgent: partner done
+PingPongAgent: sent done iteration 5
+PingPongAgent: sent done iteration 5
+    628447455 node0.cpu0.hali received done (iteration 5)
+PingPongAgent: partner done
+    628447890 node0.cpu1.hali received done (iteration 5)
+PingPongAgent: partner done
+PingPongAgent: sent done iteration 6
+PingPongAgent: sent done iteration 6
+    628634940 node0.cpu0.hali received done (iteration 6)
+PingPongAgent: partner done
+    628635375 node0.cpu1.hali received done (iteration 6)
+PingPongAgent: partner done
+pid=100 tid=100 has exited
+pid=101 tid=101 has exited
+all processes have exited
+Phase: Complete(0), node0.cpu1.hali
+Phase: Complete(0), node0.cpu0.hali
+Phase: Complete(1), node0.cpu1.hali
+    689271200 node0.cpu1.hali received HaliEvent. String='Farewell from node0.cpu0.hali' Number='0'
+    689271200 node0.cpu1.hali received HaliEvent. String='Goodbye from node0.cpu0.hali' Number='0'
+Phase: Complete(1), node0.cpu0.hali
+    689271200 node0.cpu0.hali received HaliEvent. String='Farewell from node0.cpu1.hali' Number='0'
+    689271200 node0.cpu0.hali received HaliEvent. String='Goodbye from node0.cpu1.hali' Number='0'
+Phase: Finish, node0.cpu1.hali
+    node0.cpu1.hali: sent 0 messages, received 0, forwarded 0.
+Phase: Finish, node0.cpu0.hali
+    node0.cpu0.hali: sent 0 messages, received 0, forwarded 0.
+ node0.cpu0:decoder:branch_unit.branch_cache_hit.1 : Accumulator : Sum.u64 = 3057; SumSQ.u64 = 3057; Count.u64 = 3057; Min.u64 = 1; Max.u64 = 1; 
+ node0.cpu0:decoder:branch_unit.branch_cache_miss.1 : Accumulator : Sum.u64 = 3464; SumSQ.u64 = 3464; Count.u64 = 3464; Min.u64 = 1; Max.u64 = 1; 
+ node0.cpu0:decoder:branch_unit.branch_cache_castout.1 : Accumulator : Sum.u64 = 741; SumSQ.u64 = 741; Count.u64 = 741; Min.u64 = 1; Max.u64 = 1; 
+ node0.cpu0:decoder.uop_cache_hit.1 : Accumulator : Sum.u64 = 721946; SumSQ.u64 = 721946; Count.u64 = 721946; Min.u64 = 1; Max.u64 = 1; 
+ node0.cpu0:decoder.predecode_cache_hit.1 : Accumulator : Sum.u64 = 6261; SumSQ.u64 = 6261; Count.u64 = 6261; Min.u64 = 1; Max.u64 = 1; 
+ node0.cpu0:decoder.predecode_cache_miss.1 : Accumulator : Sum.u64 = 370070; SumSQ.u64 = 370070; Count.u64 = 370070; Min.u64 = 1; Max.u64 = 1; 
+ node0.cpu0:decoder.uops_generated.1 : Accumulator : Sum.u64 = 0; SumSQ.u64 = 0; Count.u64 = 0; Min.u64 = 0; Max.u64 = 0; 
+ node0.cpu0:decoder.decode_faults.1 : Accumulator : Sum.u64 = 0; SumSQ.u64 = 0; Count.u64 = 0; Min.u64 = 0; Max.u64 = 0; 
+ node0.cpu0:decoder.ins_bytes_loaded.1 : Accumulator : Sum.u64 = 1480280; SumSQ.u64 = 5921120; Count.u64 = 370070; Min.u64 = 4; Max.u64 = 4; 
+ node0.cpu0:decoder.uop_delayed_rob_full.1 : Accumulator : Sum.u64 = 692809; SumSQ.u64 = 692809; Count.u64 = 692809; Min.u64 = 1; Max.u64 = 1; 
+ node0.cpu0:lsq.loads_issued.1 : Accumulator : Sum.u64 = 1697; SumSQ.u64 = 1697; Count.u64 = 1697; Min.u64 = 1; Max.u64 = 1; 
+ node0.cpu0:lsq.stores_issued.1 : Accumulator : Sum.u64 = 1267; SumSQ.u64 = 1267; Count.u64 = 1267; Min.u64 = 1; Max.u64 = 1; 
+ node0.cpu0:lsq.fences_issued.1 : Accumulator : Sum.u64 = 53; SumSQ.u64 = 53; Count.u64 = 53; Min.u64 = 1; Max.u64 = 1; 
+ node0.cpu0:lsq.loads_executed.1 : Accumulator : Sum.u64 = 1374; SumSQ.u64 = 1374; Count.u64 = 1374; Min.u64 = 1; Max.u64 = 1; 
+ node0.cpu0:lsq.stores_executed.1 : Accumulator : Sum.u64 = 1171; SumSQ.u64 = 1171; Count.u64 = 1171; Min.u64 = 1; Max.u64 = 1; 
+ node0.cpu0:lsq.fences_executed.1 : Accumulator : Sum.u64 = 46; SumSQ.u64 = 46; Count.u64 = 46; Min.u64 = 1; Max.u64 = 1; 
+ node0.cpu0:lsq.bytes_read.1 : Accumulator : Sum.u64 = 10245; SumSQ.u64 = 76009; Count.u64 = 1630; Min.u64 = 1; Max.u64 = 8; 
+ node0.cpu0:lsq.bytes_stored.1 : Accumulator : Sum.u64 = 9060; SumSQ.u64 = 71154; Count.u64 = 1194; Min.u64 = 1; Max.u64 = 8; 
+ node0.cpu0:lsq.store_buffer_entries.1 : Accumulator : Sum.u64 = 312216; SumSQ.u64 = 2170362; Count.u64 = 1584531; Min.u64 = 0; Max.u64 = 8; 
+ node0.cpu0:lsq.stores_in_flight.1 : Accumulator : Sum.u64 = 2686275; SumSQ.u64 = 286212633; Count.u64 = 1584531; Min.u64 = 0; Max.u64 = 251; 
+ node0.cpu0:lsq.loads_in_flight.1 : Accumulator : Sum.u64 = 902278; SumSQ.u64 = 2017776; Count.u64 = 1584531; Min.u64 = 0; Max.u64 = 15; 
+ node0.cpu0:lsq.operations_pending : Accumulator : Sum.u64 = 258166; SumSQ.u64 = 757194; Count.u64 = 1584531; Min.u64 = 0; Max.u64 = 8; 
+ node0.cpu0.instructions_retired.1 : Accumulator : Sum.u64 = 6987; SumSQ.u64 = 12221; Count.u64 = 1584531; Min.u64 = 0; Max.u64 = 4; 
+ node0.cpu0.instructions_decoded.1 : Accumulator : Sum.u64 = 29557; SumSQ.u64 = 99981; Count.u64 = 1584531; Min.u64 = 0; Max.u64 = 14; 
+ node0.cpu0.instructions_issued.1 : Accumulator : Sum.u64 = 10003; SumSQ.u64 = 19287; Count.u64 = 1584531; Min.u64 = 0; Max.u64 = 4; 
+ node0.cpu0.loads_issued.1 : Accumulator : Sum.u64 = 1697; SumSQ.u64 = 1697; Count.u64 = 1697; Min.u64 = 1; Max.u64 = 1; 
+ node0.cpu0.stores_issued.1 : Accumulator : Sum.u64 = 1267; SumSQ.u64 = 1267; Count.u64 = 1267; Min.u64 = 1; Max.u64 = 1; 
+ node0.cpu0.branch_mispredicts.1 : Accumulator : Sum.u64 = 587; SumSQ.u64 = 587; Count.u64 = 587; Min.u64 = 1; Max.u64 = 1; 
+ node0.cpu0.branches.1 : Accumulator : Sum.u64 = 1442; SumSQ.u64 = 1442; Count.u64 = 1442; Min.u64 = 1; Max.u64 = 1; 
+ node0.cpu0.cycles.1 : Accumulator : Sum.u64 = 1584531; SumSQ.u64 = 1584531; Count.u64 = 1584531; Min.u64 = 1; Max.u64 = 1; 
+ node0.cpu0.rob_slots_in_use.1 : Accumulator : Sum.u64 = 47108861; SumSQ.u64 = 2880088163; Count.u64 = 1584531; Min.u64 = 0; Max.u64 = 63; 
+ node0.cpu0.rob_cleared_entries.1 : Accumulator : Sum.u64 = 22565; SumSQ.u64 = 1175267; Count.u64 = 587; Min.u64 = 0; Max.u64 = 62; 
+ node0.cpu0.syscall-cycles.1 : Accumulator : Sum.u64 = 416790; SumSQ.u64 = 416790; Count.u64 = 416790; Min.u64 = 1; Max.u64 = 1; 
+ node0.cpu0.phys_int_reg_in_use.1 : Accumulator : Sum.u64 = 59614666; SumSQ.u64 = 2263205194; Count.u64 = 1584531; Min.u64 = 35; Max.u64 = 53; 
+ node0.cpu0.phys_fp_reg_in_use.1 : Accumulator : Sum.u64 = 50704992; SumSQ.u64 = 1622559744; Count.u64 = 1584531; Min.u64 = 32; Max.u64 = 32; 
+ node0.cpu1:decoder:branch_unit.branch_cache_hit.1 : Accumulator : Sum.u64 = 3068; SumSQ.u64 = 3068; Count.u64 = 3068; Min.u64 = 1; Max.u64 = 1; 
+ node0.cpu1:decoder:branch_unit.branch_cache_miss.1 : Accumulator : Sum.u64 = 3433; SumSQ.u64 = 3433; Count.u64 = 3433; Min.u64 = 1; Max.u64 = 1; 
+ node0.cpu1:decoder:branch_unit.branch_cache_castout.1 : Accumulator : Sum.u64 = 742; SumSQ.u64 = 742; Count.u64 = 742; Min.u64 = 1; Max.u64 = 1; 
+ node0.cpu1:decoder.uop_cache_hit.1 : Accumulator : Sum.u64 = 737438; SumSQ.u64 = 737438; Count.u64 = 737438; Min.u64 = 1; Max.u64 = 1; 
+ node0.cpu1:decoder.predecode_cache_hit.1 : Accumulator : Sum.u64 = 6211; SumSQ.u64 = 6211; Count.u64 = 6211; Min.u64 = 1; Max.u64 = 1; 
+ node0.cpu1:decoder.predecode_cache_miss.1 : Accumulator : Sum.u64 = 412550; SumSQ.u64 = 412550; Count.u64 = 412550; Min.u64 = 1; Max.u64 = 1; 
+ node0.cpu1:decoder.uops_generated.1 : Accumulator : Sum.u64 = 0; SumSQ.u64 = 0; Count.u64 = 0; Min.u64 = 0; Max.u64 = 0; 
+ node0.cpu1:decoder.decode_faults.1 : Accumulator : Sum.u64 = 0; SumSQ.u64 = 0; Count.u64 = 0; Min.u64 = 0; Max.u64 = 0; 
+ node0.cpu1:decoder.ins_bytes_loaded.1 : Accumulator : Sum.u64 = 1650200; SumSQ.u64 = 6600800; Count.u64 = 412550; Min.u64 = 4; Max.u64 = 4; 
+ node0.cpu1:decoder.uop_delayed_rob_full.1 : Accumulator : Sum.u64 = 708392; SumSQ.u64 = 708392; Count.u64 = 708392; Min.u64 = 1; Max.u64 = 1; 
+ node0.cpu1:lsq.loads_issued.1 : Accumulator : Sum.u64 = 1698; SumSQ.u64 = 1698; Count.u64 = 1698; Min.u64 = 1; Max.u64 = 1; 
+ node0.cpu1:lsq.stores_issued.1 : Accumulator : Sum.u64 = 1267; SumSQ.u64 = 1267; Count.u64 = 1267; Min.u64 = 1; Max.u64 = 1; 
+ node0.cpu1:lsq.fences_issued.1 : Accumulator : Sum.u64 = 54; SumSQ.u64 = 54; Count.u64 = 54; Min.u64 = 1; Max.u64 = 1; 
+ node0.cpu1:lsq.loads_executed.1 : Accumulator : Sum.u64 = 1372; SumSQ.u64 = 1372; Count.u64 = 1372; Min.u64 = 1; Max.u64 = 1; 
+ node0.cpu1:lsq.stores_executed.1 : Accumulator : Sum.u64 = 1171; SumSQ.u64 = 1171; Count.u64 = 1171; Min.u64 = 1; Max.u64 = 1; 
+ node0.cpu1:lsq.fences_executed.1 : Accumulator : Sum.u64 = 47; SumSQ.u64 = 47; Count.u64 = 47; Min.u64 = 1; Max.u64 = 1; 
+ node0.cpu1:lsq.bytes_read.1 : Accumulator : Sum.u64 = 10263; SumSQ.u64 = 76141; Count.u64 = 1633; Min.u64 = 1; Max.u64 = 8; 
+ node0.cpu1:lsq.bytes_stored.1 : Accumulator : Sum.u64 = 9060; SumSQ.u64 = 71154; Count.u64 = 1194; Min.u64 = 1; Max.u64 = 8; 
+ node0.cpu1:lsq.store_buffer_entries.1 : Accumulator : Sum.u64 = 299469; SumSQ.u64 = 2032493; Count.u64 = 1584531; Min.u64 = 0; Max.u64 = 8; 
+ node0.cpu1:lsq.stores_in_flight.1 : Accumulator : Sum.u64 = 2771018; SumSQ.u64 = 285931450; Count.u64 = 1584531; Min.u64 = 0; Max.u64 = 251; 
+ node0.cpu1:lsq.loads_in_flight.1 : Accumulator : Sum.u64 = 1173795; SumSQ.u64 = 5632363; Count.u64 = 1584531; Min.u64 = 0; Max.u64 = 15; 
+ node0.cpu1:lsq.operations_pending : Accumulator : Sum.u64 = 266942; SumSQ.u64 = 779894; Count.u64 = 1584531; Min.u64 = 0; Max.u64 = 8; 
+ node0.cpu1.instructions_retired.1 : Accumulator : Sum.u64 = 6989; SumSQ.u64 = 12207; Count.u64 = 1584531; Min.u64 = 0; Max.u64 = 4; 
+ node0.cpu1.instructions_decoded.1 : Accumulator : Sum.u64 = 29459; SumSQ.u64 = 99649; Count.u64 = 1584531; Min.u64 = 0; Max.u64 = 14; 
+ node0.cpu1.instructions_issued.1 : Accumulator : Sum.u64 = 10006; SumSQ.u64 = 19272; Count.u64 = 1584531; Min.u64 = 0; Max.u64 = 4; 
+ node0.cpu1.loads_issued.1 : Accumulator : Sum.u64 = 1698; SumSQ.u64 = 1698; Count.u64 = 1698; Min.u64 = 1; Max.u64 = 1; 
+ node0.cpu1.stores_issued.1 : Accumulator : Sum.u64 = 1267; SumSQ.u64 = 1267; Count.u64 = 1267; Min.u64 = 1; Max.u64 = 1; 
+ node0.cpu1.branch_mispredicts.1 : Accumulator : Sum.u64 = 588; SumSQ.u64 = 588; Count.u64 = 588; Min.u64 = 1; Max.u64 = 1; 
+ node0.cpu1.branches.1 : Accumulator : Sum.u64 = 1443; SumSQ.u64 = 1443; Count.u64 = 1443; Min.u64 = 1; Max.u64 = 1; 
+ node0.cpu1.cycles.1 : Accumulator : Sum.u64 = 1584531; SumSQ.u64 = 1584531; Count.u64 = 1584531; Min.u64 = 1; Max.u64 = 1; 
+ node0.cpu1.rob_slots_in_use.1 : Accumulator : Sum.u64 = 48350473; SumSQ.u64 = 2955130617; Count.u64 = 1584531; Min.u64 = 0; Max.u64 = 63; 
+ node0.cpu1.rob_cleared_entries.1 : Accumulator : Sum.u64 = 22441; SumSQ.u64 = 1171293; Count.u64 = 588; Min.u64 = 0; Max.u64 = 62; 
+ node0.cpu1.syscall-cycles.1 : Accumulator : Sum.u64 = 336018; SumSQ.u64 = 336018; Count.u64 = 336018; Min.u64 = 1; Max.u64 = 1; 
+ node0.cpu1.phys_int_reg_in_use.1 : Accumulator : Sum.u64 = 60073156; SumSQ.u64 = 2300894708; Count.u64 = 1584531; Min.u64 = 35; Max.u64 = 52; 
+ node0.cpu1.phys_fp_reg_in_use.1 : Accumulator : Sum.u64 = 50704992; SumSQ.u64 = 1622559744; Count.u64 = 1584531; Min.u64 = 32; Max.u64 = 32; 
+Phase: Destruction
+Phase: Destruction
+Simulation is complete, simulated time: 689.271 us

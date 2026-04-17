@@ -60,24 +60,35 @@ libcarcosa_la_SOURCES =                     \
     Components/HaliEvent.h
 
 EXTRA_DIST = \
-    hyades.h                                      \
-    tests/pingpong.c                              \
-    tests/testCarcosaPingPong.py                  \
-    tests/testCorruptMemBasic.py                  \
-    tests/testCorruptMemDouble.py                 \
-    tests/testCorruptMemDoubleOverlap.py          \
-    tests/testRandomDrop.py                       \
-    tests/testRandomFlip.py                       \
-    tests/testStuckAtBasic.py                     \
-    tests/testStuckAtMultiple.py                  \
-    tests/testStuckAtOverlap.py                   \
-    tests/testStuckAtSameByte.py                  \
-    tests/mhlib.py                                \
-    tests/testDynamicPM.py                        \
-    tests/testHaliBacking.py                      \
-    tests/testHaliMemH.py                         \
-    tests/testHaliPM.py                           \
-    tests/testManagerLogic.py
+    hyades.h                                                  \
+    tests/pingpong.c                                          \
+    tests/testCarcosaPingPong.py                              \
+    tests/testCorruptMemBasic.py                              \
+    tests/testCorruptMemDouble.py                             \
+    tests/testCorruptMemDoubleOverlap.py                      \
+    tests/testRandomDrop.py                                   \
+    tests/testRandomFlip.py                                   \
+    tests/testStuckAtBasic.py                                 \
+    tests/testStuckAtMultiple.py                              \
+    tests/testStuckAtOverlap.py                               \
+    tests/testStuckAtSameByte.py                              \
+    tests/mhlib.py                                            \
+    tests/testDynamicPM.py                                    \
+    tests/testHaliBacking.py                                  \
+    tests/testHaliMemH.py                                     \
+    tests/testHaliPM.py                                       \
+    tests/testManagerLogic.py                                 \
+    tests/testsuite_default_carcosa.py                        \
+    tests/run_carcosa_tests.sh                                \
+    tests/refFiles/test_carcosa_corruptmem_basic.out          \
+    tests/refFiles/test_carcosa_corruptmem_double.out         \
+    tests/refFiles/test_carcosa_corruptmem_double_overlap.out \
+    tests/refFiles/test_carcosa_hali_memh.out                 \
+    tests/refFiles/test_carcosa_hali_backing.out              \
+    tests/refFiles/test_carcosa_hali_pm.out                   \
+    tests/refFiles/test_carcosa_manager_logic.out             \
+    tests/refFiles/test_carcosa_dynamic_pm.out                \
+    tests/refFiles/test_carcosa_pingpong.out
 
 sstdir = $(includedir)/sst/elements/carcosa
 nobase_sst_HEADERS =                        \
