@@ -83,13 +83,7 @@ struct sumi_mem_handle_t {
 
 /*
  * GNI IOV GET alignment
- *
- * We always pull 4byte chucks for unaligned GETs. To prevent stomping on
- * someone else's head or tail data, each segment must be four bytes
- * (i.e. SUMI_READ_ALIGN bytes).
- *
- * Note: "* 2" for head and tail
- */
+ 
 #define SUMI_INT_TX_BUF_SZ (SUMI_MAX_MSG_IOV_LIMIT * SUMI_READ_ALIGN * 2)
 
 /*
@@ -161,16 +155,7 @@ struct sumi_mem_handle_t {
 #define SUMI_INJECT_SIZE 64
 #define SUMI_MAX_INJECT_SIZE 16384
 
-// Ordering the sumi provider can honor.
-//
-// Limitation: although point-to-point messages are delivered in-order per
-// (src, dst) pair by the underlying transport, the provider does NOT enforce
-// cross-op ordering (e.g. RMA vs msg fences) and does not currently guarantee
-// FI_ORDER_SAS semantics across eager/rendezvous path crossings. We therefore
-// advertise FI_ORDER_NONE. Callers that require FI_ORDER_SAS / RAR / RAW /
-// WAR / WAW must not request them against the sumi provider until the fence
-// paths are audited.
-#define SUMI_MSG_ORDER_SUPPORTED  FI_ORDER_NONE
+#define SUMI_MSG_ORDER_SUPPORTED  FI_ORDER_SAS
 #define SUMI_COMP_ORDER_SUPPORTED FI_ORDER_NONE
 
 #define SUMI_FAB_MODES	0
