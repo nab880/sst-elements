@@ -122,9 +122,10 @@ EXTERN_C DIRECT_FN STATIC  int sumi_getname(fid_t fid, void *addr, size_t *addrl
   }
 
   if (ep->domain->addr_format == FI_ADDR_STR){
+    // "<rank>.<cq>" zero-padded fixed width; round-trips through sumi_av_insert.
     char buf[32];
-    int n = snprintf(buf, sizeof(buf), "%" PRIu32, rank);
-    size_t need = n + 1;
+    int n = snprintf(buf, sizeof(buf), "%010" PRIu32 ".%05" PRIu16, rank, cq_id);
+    size_t need = (size_t)n + 1;
     if (*addrlen < need){
       *addrlen = need;
       return -FI_ETOOSMALL;

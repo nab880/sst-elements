@@ -14,6 +14,7 @@
 // distribution.
 
 #include <string.h>
+#include <stdlib.h>
 #include <assert.h>
 
 #include "sumi_prov.h"
@@ -21,6 +22,26 @@
 
 #include <sumi_fabric.hpp>
 #include <mercury/components/operating_system.h>
+
+// Simulated idle (in ns) applied to non-blocking CQ reads that find no
+// completion. Default 1 ns prevents the simulator from burning unbounded
+// simulated cycles in a pure spin (the native OFI behavior). Override with
+// SUMI_CQ_NONBLOCK_YIELD_NS; set to 0 to disable the yield. Resolved once.
+static uint64_t sumi_cq_nonblock_yield_ns()
+{
+  static uint64_t cached = [](){
+    uint64_t v = 1;
+    if (const char* env = getenv("SUMI_CQ_NONBLOCK_YIELD_NS")){
+      char* end = nullptr;
+      long long parsed = strtoll(env, &end, 0);
+      if (end != env && parsed >= 0){
+        v = (uint64_t)parsed;
+      }
+    }
+    return v;
+  }();
+  return cached;
+}
 
 static int sumi_cq_close(fid_t fid);
 static int sumi_cq_control(struct fid *cq, int command, void *arg);
@@ -140,9 +161,11 @@ static ssize_t sstmaci_cq_read(bool blocking,
     SST::Iris::sumi::Message* msg = rq->progress.front(blocking, timeout_s);
     if (!msg){
       if (!blocking) {
-        // idle 1ns to avoid simulator spin-loop (TODO)
-        auto* os = SST::Hg::OperatingSystem::currentOs();
-        os->blockTimeout(SST::Hg::TimeDelta(1e-9));
+        uint64_t ns = sumi_cq_nonblock_yield_ns();
+        if (ns){
+          auto* os = SST::Hg::OperatingSystem::currentOs();
+          os->blockTimeout(SST::Hg::TimeDelta(ns * 1e-9));
+        }
       }
       break;
     }
@@ -269,7 +292,7 @@ void RecvQueue::matchTaggedRecv(FabricMessage* msg){
   for (auto it = tagged_recvs.begin(); it != tagged_recvs.end(); ){
     auto tmp = it++;
     TaggedRecv& r = *tmp;
-    if (matches(msg, r.tag, r.tag_ignore)){
+    if (srcMatches(r.src_rank, msg) && matches(msg, r.tag, r.tag_ignore)){
       finishMatch(r.buf, r.size, msg);
       tagged_recvs.erase(tmp);
       return;
@@ -278,32 +301,33 @@ void RecvQueue::matchTaggedRecv(FabricMessage* msg){
   unexp_tagged_recvs.push_back(msg);
 }
 
-void RecvQueue::postRecv(uint32_t size, void* buf, uint64_t tag, uint64_t tag_ignore, bool tagged){
+void RecvQueue::postRecv(uint32_t size, void* buf, uint64_t tag,
+                         uint64_t tag_ignore, bool tagged, uint32_t src_rank){
   if (tagged){
-    if (unexp_tagged_recvs.empty()){
-      tagged_recvs.emplace_back(size, buf, tag, tag_ignore);
-    } else {
-      // it++ in body so we can erase tmp
-      for (auto it = unexp_tagged_recvs.begin(); it != unexp_tagged_recvs.end(); ){
-        auto tmp = it++;
-        FabricMessage* msg = *tmp;
-        if (matches(msg, tag, tag_ignore)){
-          finishMatch(buf, size, msg);
-          unexp_tagged_recvs.erase(tmp);
-          return;
-        }
+    // it++ in body so we can erase tmp
+    for (auto it = unexp_tagged_recvs.begin(); it != unexp_tagged_recvs.end(); ){
+      auto tmp = it++;
+      FabricMessage* msg = *tmp;
+      if (srcMatches(src_rank, msg) && matches(msg, tag, tag_ignore)){
+        finishMatch(buf, size, msg);
+        unexp_tagged_recvs.erase(tmp);
+        return;
       }
     }
     //nothing matched
-    tagged_recvs.emplace_back(size, buf, tag, tag_ignore);
+    tagged_recvs.emplace_back(size, buf, tag, tag_ignore, src_rank);
   } else {
-    if (unexp_recvs.empty()){
-      recvs.emplace_back(size, buf);
-    } else {
-      FabricMessage* msg = unexp_recvs.front();
-      unexp_recvs.pop_front();;
-      finishMatch(buf, size, msg);
+    // it++ in body so we can erase tmp
+    for (auto it = unexp_recvs.begin(); it != unexp_recvs.end(); ){
+      auto tmp = it++;
+      FabricMessage* msg = *tmp;
+      if (srcMatches(src_rank, msg)){
+        finishMatch(buf, size, msg);
+        unexp_recvs.erase(tmp);
+        return;
+      }
     }
+    recvs.emplace_back(size, buf, src_rank);
   }
 }
 
@@ -313,13 +337,17 @@ void RecvQueue::incoming(SST::Iris::sumi::Message* msg){
     if (fmsg->flags() & FI_TAGGED){
       matchTaggedRecv(fmsg);
     } else {
-      if (recvs.empty()){
-        unexp_recvs.push_back(fmsg);
-      } else {
-        Recv& r = recvs.front();
-        finishMatch(r.buf, r.size, fmsg);
-        recvs.pop_front();
+      // it++ in body so we can erase tmp
+      for (auto it = recvs.begin(); it != recvs.end(); ){
+        auto tmp = it++;
+        Recv& r = *tmp;
+        if (srcMatches(r.src_rank, fmsg)){
+          finishMatch(r.buf, r.size, fmsg);
+          recvs.erase(tmp);
+          return;
+        }
       }
+      unexp_recvs.push_back(fmsg);
     }
   } else {
     //all other messages go right through
