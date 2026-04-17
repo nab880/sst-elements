@@ -75,25 +75,29 @@ extern "C" int
 PMI_KVS_Get( const char kvsname[], const char key[], char value[], int length)
 {
   kvs_lock.lock();
-  auto& str = kvs[kvsname][key];
+  auto outer = kvs.find(kvsname);
+  if (outer == kvs.end()){
+    kvs_lock.unlock();
+    return PMI_ERR_INVALID_KEY;
+  }
+  auto inner = outer->second.find(key);
+  if (inner == outer->second.end()){
+    kvs_lock.unlock();
+    return PMI_ERR_INVALID_KEY;
+  }
+  const std::string& str = inner->second;
   if (length < (int)(str.length() + 1)){
     kvs_lock.unlock();
     return PMI_ERR_INVALID_LENGTH;
-  } else {
-    ::strcpy(value, str.c_str());
-    kvs_lock.unlock();
-    return PMI_SUCCESS;
   }
+  ::strcpy(value, str.c_str());
+  kvs_lock.unlock();
+  return PMI_SUCCESS;
 }
 
 extern "C" int
 PMI2_KVS_Put(const char key[], const char value[])
 {
-  // BUG: jobid-prefix mismatch with PMI2_Job_GetId.
-  //   PMI2_Job_GetId writes "%d" (e.g. "1")
-  //   current_jobid_str() / PMI_KVS_Get_my_name write "app%d" (e.g. "app1")
-  // A caller that does PMI2_Job_GetId() then PMI2_KVS_Get(jobid=that) will
-  // miss the kvs entry stored here under "app%d". TODO: unify kvsname format.
   std::string kvsname = current_jobid_str();
   kvs_lock.lock();
   kvs[kvsname][key] = value;
@@ -147,8 +151,8 @@ PMI2_Abort(void)
 extern "C" int
 PMI2_Job_GetId(char jobid[], int jobid_size)
 {
-  auto thr = SST::Hg::OperatingSystem::currentThread();
-  ::sprintf(jobid, "%d", thr->aid());
+  auto* api = sstmac_pmi();
+  ::snprintf(jobid, jobid_size, "app%d", api->sid().app_);
   return PMI_SUCCESS;
 }
 
@@ -202,6 +206,10 @@ extern "C" int PMI_Init(int* spawned)
   *spawned = 0;
 
   int nproc = tport->nproc();
+  // TODO: multi-node topology. The mapping "(vector,(0,nproc,1))" assumes a
+  // single node with all ranks contiguous starting at node 0. Revisit when
+  // multi-node runs are exercised so that apps consuming PMI_process_mapping
+  // see a PPN/node layout that matches the simulated platform.
   char mapping[64];
   snprintf(mapping, sizeof(mapping), "(vector,(%d,%d,%d))", 0, nproc, 1);
   char kvsname[256];

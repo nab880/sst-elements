@@ -827,6 +827,12 @@ extern "C" DIRECT_FN  int sumi_ep_bind(fid_t fid, struct fid *bfid, uint64_t fla
         }
       }
 
+      // NOTE: this provider is not configured / tested for the case where
+      // multiple endpoints share a single CQ. We reuse the existing RecvQueue
+      // if one is already attached, but a second ep binding the same CQ would
+      // also need to register its own allocateCq() callback path. If support
+      // for 2-EP-1-CQ is ever required, revisit RecvQueue allocation and the
+      // tport->allocateCq() callback registration below.
       if (!cq->queue) {
         RecvQueue* rq = new RecvQueue(SST::Hg::OperatingSystem::currentOs());
         cq->queue = (sumi_progress_queue*) rq;

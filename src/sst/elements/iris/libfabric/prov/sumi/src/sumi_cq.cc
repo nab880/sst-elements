@@ -134,8 +134,14 @@ static int sumi_cq_close(fid_t fid)
   sumi_fid_cq* cq_impl = (sumi_fid_cq*) fid;
   FabricTransport* tport = (FabricTransport*) cq_impl->domain->fabric->tport;
   tport->deallocateCq(cq_impl->id);
+  // Delete the RecvQueue after deallocating the CQ so any in-flight
+  // transport callback cannot reach a freed RecvQueue.
+  if (cq_impl->queue) {
+    delete (RecvQueue*) cq_impl->queue;
+    cq_impl->queue = nullptr;
+  }
   free(cq_impl);
-	return FI_SUCCESS;
+  return FI_SUCCESS;
 }
 
 static ssize_t sstmaci_cq_read(bool blocking,
@@ -164,6 +170,11 @@ static ssize_t sstmaci_cq_read(bool blocking,
         uint64_t ns = sumi_cq_nonblock_yield_ns();
         if (ns){
           auto* os = SST::Hg::OperatingSystem::currentOs();
+          // Caveat: blockTimeout yields the simulated thread. If a caller
+          // holds a pthread mutex across fi_cq_read, another thread that needs
+          // that mutex to make progress can deadlock. MV2's progress engine
+          // does not hold mutexes here, but future callers should avoid that
+          // pattern. Set SUMI_CQ_NONBLOCK_YIELD_NS=0 to disable the yield.
           os->blockTimeout(SST::Hg::TimeDelta(ns * 1e-9));
         }
       }

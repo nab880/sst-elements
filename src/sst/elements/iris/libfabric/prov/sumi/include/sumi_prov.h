@@ -161,12 +161,16 @@ struct sumi_mem_handle_t {
 #define SUMI_INJECT_SIZE 64
 #define SUMI_MAX_INJECT_SIZE 16384
 
-// Ordering the sumi provider can honor. Point-to-point messages are delivered
-// in-order per (src, dst) pair by the underlying transport, so we can safely
-// advertise send/recv-after-send/recv/write orderings. Completion ordering
-// across op types is not enforced.
-#define SUMI_MSG_ORDER_SUPPORTED                                              \
-  (FI_ORDER_SAS | FI_ORDER_RAR | FI_ORDER_RAW | FI_ORDER_WAR | FI_ORDER_WAW)
+// Ordering the sumi provider can honor.
+//
+// Limitation: although point-to-point messages are delivered in-order per
+// (src, dst) pair by the underlying transport, the provider does NOT enforce
+// cross-op ordering (e.g. RMA vs msg fences) and does not currently guarantee
+// FI_ORDER_SAS semantics across eager/rendezvous path crossings. We therefore
+// advertise FI_ORDER_NONE. Callers that require FI_ORDER_SAS / RAR / RAW /
+// WAR / WAW must not request them against the sumi provider until the fence
+// paths are audited.
+#define SUMI_MSG_ORDER_SUPPORTED  FI_ORDER_NONE
 #define SUMI_COMP_ORDER_SUPPORTED FI_ORDER_NONE
 
 #define SUMI_FAB_MODES	0
@@ -443,10 +447,9 @@ struct sumi_fid_srx {
 };
 
 #define ADDR_CQ(addr)    (((addr) >> 16) & 0xFFFF)
-#define ADDR_RANK(addr)  (((addr) >> 32) & 0xFFFFFFFF)
+#define ADDR_RANK(addr)  ((uint32_t)(((addr) >> 32) & 0xFFFFFFFFu))
 #define ADDR_QUEUE(addr) ((addr) & 0xFFFF)
 #define ADDR_RANK_BITS(rank)    ((rank) << 32)
-#define ADDR_QUEUE_BITS(queue)  (queue)
 #define ADDR_CQ_BITS(cq)        ((cq) << 16)
 
 extern const char sumi_fab_name[];
@@ -537,6 +540,9 @@ struct ErrorDeallocate {
 
 struct RecvQueue {
 
+  // Sentinel for "match any source rank" on posted recvs.
+  // Note: this collides with a hypothetical rank 0xFFFFFFFF, but the simulator
+  // never issues a rank that large today, so the collision is only theoretical.
   static constexpr uint32_t ANY_SRC = ~uint32_t(0);
 
   struct Recv {

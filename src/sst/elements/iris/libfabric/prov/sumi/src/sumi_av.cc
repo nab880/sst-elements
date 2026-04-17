@@ -148,14 +148,24 @@ EXTERN_C DIRECT_FN STATIC  int sumi_av_insert(struct fid_av *av, const void *add
 {
   sumi_fid_av* av_impl = (sumi_fid_av*) av;
   if (av_impl->domain->addr_format == FI_ADDR_STR){
+    static bool warned_legacy_addr = false;
     char* addr_str = (char*) addr;
     for (int i=0; i < count; ++i){
+      // Each slot must be NUL-terminated inside SUMI_MAX_ADDR_LEN bytes.
+      if (strnlen(addr_str, SUMI_MAX_ADDR_LEN) == (size_t)SUMI_MAX_ADDR_LEN){
+        return -FI_EINVAL;
+      }
       // Parse "<rank>.<cq>"; accept legacy "<rank>" by defaulting cq to 0.
       char* end = nullptr;
       uint32_t rank = (uint32_t) std::strtoul(addr_str, &end, 10);
       uint16_t cq = 0;
       if (end && *end == '.'){
         cq = (uint16_t) std::strtoul(end + 1, nullptr, 10);
+      } else if (!warned_legacy_addr){
+        fprintf(stderr,
+                "WARNING: sumi av_insert accepted legacy \"<rank>\" "
+                "FI_ADDR_STR form; expected \"<rank10>.<cq5>\" (cq=0)\n");
+        warned_legacy_addr = true;
       }
       fi_addr[i] = ADDR_RANK_BITS((uint64_t)rank) | ADDR_CQ_BITS((uint64_t)cq);
       addr_str += SUMI_MAX_ADDR_LEN;

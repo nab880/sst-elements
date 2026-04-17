@@ -103,11 +103,12 @@ install-exec-hook:
 	$(SST_REGISTER_TOOL) SST_ELEMENT_SOURCE     iris=$(abs_srcdir)
 
 install-data-hook:
-	@$(MKDIR_P) $(DESTDIR)$(includedir)
-	$(INSTALL_DATA) $(srcdir)/pmi/pmi.h $(DESTDIR)$(includedir)/pmi.h
+	@$(MKDIR_P) $(DESTDIR)$(includedir)/iris
+	$(INSTALL_DATA) $(srcdir)/pmi/pmi.h $(DESTDIR)$(includedir)/iris/pmi.h
 
 uninstall-hook:
-	rm -f $(DESTDIR)$(includedir)/pmi.h
+	rm -f $(DESTDIR)$(includedir)/iris/pmi.h
+	-rmdir $(DESTDIR)$(includedir)/iris 2>/dev/null || true
 
 # This sed script converts 'od' output to a comma-separated list of byte-
 # values, suitable for #include'ing into an array definition.
