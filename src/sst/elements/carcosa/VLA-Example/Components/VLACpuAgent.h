@@ -17,6 +17,7 @@
 #include <sst/core/link.h>
 #include <sst/core/output.h>
 #include <sst/core/rng/marsaglia.h>
+#include <sst/elements/carcosa/Components/HaliEvent.h>
 #include <sst/elements/carcosa/Components/InterceptionAgentAPI.h>
 #include <sst/elements/carcosa/VLA-Example/Components/VLAAgent.h>
 #include <sst/elements/memHierarchy/memEvent.h>
@@ -56,7 +57,7 @@ public:
     ~VLACpuAgent();
 
     bool handleInterceptedEvent(SST::MemHierarchy::MemEvent* ev, SST::Link* highlink) override;
-    void handleRingEvent(HaliEvent* ev) override;
+    void handleRingEvent(HaliEvent* ev);
     void agentSetup() override;
     void setRingLink(SST::Link* leftLink) override;
     void setInterceptBase(uint64_t base) override;
@@ -74,20 +75,7 @@ private:
     SST::Link* leftHaliLink_ = nullptr;
     uint64_t controlAddrBase_ = 0;
 
-    VLAState currentState_ = IDLE;
-    int vitLayer_ = 0;
-    int prefillLayer_ = 0;
-    int decodeLayer_ = 0;
-    int currentSeqLen_ = 0;
-    int actionTokenCount_ = 0;
-    int numViTLayers_ = 24;
-    int numLLMLayers_ = 32;
-    int maxCycles_ = 1;
-    int initialSeqLen_ = 228;
-    int maxSeqLen_ = 64;
-    int numActionTokens_ = 1;
-    int pipelineCycles_ = 0;
-    bool exitAfterThisRead_ = false;
+    VlaFsm fsm_;
     SST::RNG::MarsagliaRNG* rng_ = nullptr;
 
     int nextCommand_ = INT_MIN;

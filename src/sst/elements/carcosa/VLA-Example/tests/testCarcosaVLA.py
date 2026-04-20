@@ -169,7 +169,7 @@ class CPU_Builder:
         hali = sst.Component(prefix + ".hali", "Carcosa.Hali")
         hali.addParams({
             "intercept_ranges": "0xBEEF0000,4096",
-            "verbose": "false",
+            "verbose": "true",
         })
         agent = hali.setSubComponent("interceptionAgent", "Carcosa.VLAAgent")
         agent.addParams({

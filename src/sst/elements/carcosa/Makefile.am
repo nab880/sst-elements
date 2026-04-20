@@ -52,6 +52,8 @@ libcarcosa_la_SOURCES =                     \
     Components/InterceptionAgentAPI.h       \
     Components/PingPongAgent.cc             \
     Components/PingPongAgent.h              \
+    VLA-Example/Components/vla-fsm.cc       \
+    VLA-Example/Components/vla-fsm.h        \
     VLA-Example/Components/VLAAgent.cc      \
     VLA-Example/Components/VLAAgent.h       \
     VLA-Example/Components/VLAKernelComplexity.h \
@@ -120,6 +122,7 @@ nobase_sst_HEADERS =                        \
     Components/FaultInjManagerAPI.h        \
     Components/InterceptionAgentAPI.h      \
     Components/PingPongAgent.h              \
+    VLA-Example/Components/vla-fsm.h        \
     VLA-Example/Components/VLAAgent.h       \
     VLA-Example/Components/VLAKernelComplexity.h \
     VLA-Example/Components/VLACpuAgent.h    \

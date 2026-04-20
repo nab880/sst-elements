@@ -13,13 +13,16 @@ VLAAgent::VLAAgent(ComponentId_t id, Params& params)
     : InterceptionAgentAPI(id, params)
 {
     out_ = new Output("", 1, 0, Output::STDOUT);
-    numViTLayers_ = params.find<int>("num_vit_layers", 24);
-    numLLMLayers_ = params.find<int>("num_llm_layers", 32);
-    maxCycles_ = params.find<int>("max_cycles", 1);
-    initialSeqLen_ = params.find<int>("initial_seq_len", 228);
-    maxSeqLen_ = params.find<int>("max_seq_len", 64);
-    numActionTokens_ = params.find<int>("num_action_tokens", 1);
-    if (numActionTokens_ < 1) numActionTokens_ = 1;
+    VlaFsm::Config cfg;
+    cfg.numViTLayers    = params.find<int>("num_vit_layers", 24);
+    cfg.numLLMLayers    = params.find<int>("num_llm_layers", 32);
+    cfg.maxCycles       = params.find<int>("max_cycles", 1);
+    cfg.initialSeqLen   = params.find<int>("initial_seq_len", 228);
+    cfg.maxSeqLen       = params.find<int>("max_seq_len", 64);
+    cfg.numActionTokens = params.find<int>("num_action_tokens", 1);
+    if (cfg.numActionTokens < 1) cfg.numActionTokens = 1;
+    fsm_.setConfig(cfg);
+
     hyadesRole_ = params.find<int>("hyades_role", 0);
     verbose_ = params.find<bool>("verbose", false);
     unsigned int seed = params.find<uint32_t>("rng_seed", 12345u);
@@ -38,17 +41,17 @@ bool VLAAgent::handleInterceptedEvent(MemEvent* ev, Link* highlink)
     uint64_t offset = ev->getAddr() - controlAddrBase_;
 
     if (offset == 0x0000 && ev->getCmd() == Command::GetS) {
-        if (exitAfterThisRead_) {
-            exitAfterThisRead_ = false;
+        if (fsm_.exitAfterThisRead()) {
+            fsm_.clearExitFlag();
             sendCommandResponse(ev, -1);
             return true;
         }
-        int cmd = static_cast<int>(currentState_);
+        int cmd = static_cast<int>(fsm_.state());
         sendCommandResponse(ev, cmd);
         return true;
     }
     if (offset == 0x0008 && ev->getCmd() == Command::GetS) {
-        sendCommandResponse(ev, currentSeqLen_);
+        sendCommandResponse(ev, fsm_.currentSeqLen());
         return true;
     }
     if (offset == 0x0010 && ev->getCmd() == Command::GetS) {
@@ -65,25 +68,13 @@ bool VLAAgent::handleInterceptedEvent(MemEvent* ev, Link* highlink)
 
 void VLAAgent::agentSetup()
 {
-    currentState_ = IDLE;
-    vitLayer_ = 0;
-    prefillLayer_ = 0;
-    decodeLayer_ = 0;
-    actionTokenCount_ = 0;
-    currentSeqLen_ = 0;
-
-    int peakSeqLen = initialSeqLen_ + (numActionTokens_ - 1);
-    if (peakSeqLen > maxSeqLen_) {
-        out_->fatal(CALL_INFO, -1,
-            "VLAAgent: peak sequence length %d (initial_seq_len=%d + num_action_tokens-1=%d) "
-            "exceeds max_seq_len=%d. The binary's KV cache (MAX_SEQ_LEN) would overflow. "
-            "Lower initial_seq_len/num_action_tokens or rebuild the binary with a matching MAX_SEQ_LEN.\n",
-            peakSeqLen, initialSeqLen_, numActionTokens_ - 1, maxSeqLen_);
-    }
+    fsm_.reset();
+    fsm_.validatePeakSeqLen(out_, "VLAAgent");
 
     if (verbose_) {
+        const auto& cfg = fsm_.config();
         out_->output("VLAAgent: setup num_vit_layers=%d num_llm_layers=%d max_cycles=%d initial_seq_len=%d max_seq_len=%d hyades_role=%d\n",
-                    numViTLayers_, numLLMLayers_, maxCycles_, initialSeqLen_, maxSeqLen_, hyadesRole_);
+                    cfg.numViTLayers, cfg.numLLMLayers, cfg.maxCycles, cfg.initialSeqLen, cfg.maxSeqLen, hyadesRole_);
     }
 }
 
@@ -99,110 +90,12 @@ void VLAAgent::setHighlink(Link* highlink)
 
 void VLAAgent::advanceFSM()
 {
-    VLAState next = currentState_;
-
-    switch (currentState_) {
-    case IDLE:
-        next = VISION_INGESTION;
-        break;
-    case VISION_INGESTION:
-        next = PATCHIFICATION_EMBED;
-        break;
-    case PATCHIFICATION_EMBED:
-        next = VIS_ATTN_PROJ;
-        break;
-    case VIS_ATTN_PROJ:
-        next = GLOBAL_SPATIAL_ATTN;
-        break;
-    case GLOBAL_SPATIAL_ATTN:
-        next = VIS_FFN;
-        break;
-    case VIS_FFN:
-        vitLayer_++;
-        if (vitLayer_ < numViTLayers_)
-            next = VIS_ATTN_PROJ;
-        else
-            next = MLP_PROJECTOR;
-        break;
-    case MLP_PROJECTOR:
-        next = SEQ_CONCAT;
-        break;
-    case SEQ_CONCAT:
-        next = PREFILL_ATTN_PROJ;
-        currentSeqLen_ = initialSeqLen_;
-        break;
-    case PREFILL_ATTN_PROJ:
-        next = PREFILL_CAUSAL_ATTN;
-        break;
-    case PREFILL_CAUSAL_ATTN:
-        next = PREFILL_FFN;
-        break;
-    case PREFILL_FFN:
-        prefillLayer_++;
-        if (prefillLayer_ < numLLMLayers_)
-            next = PREFILL_ATTN_PROJ;
-        else
-            next = GEMV_PROJECT;
-        break;
-    case GEMV_PROJECT:
-        next = KV_CACHE_ATTN;
-        break;
-    case KV_CACHE_ATTN:
-        next = DECODE_FFN;
-        break;
-    case DECODE_FFN:
-        decodeLayer_++;
-        if (decodeLayer_ < numLLMLayers_)
-            next = GEMV_PROJECT;
-        else {
-            next = LM_HEAD;
-            decodeLayer_ = 0;
-        }
-        break;
-    case LM_HEAD: {
-        actionTokenCount_++;
-        if (actionTokenCount_ < numActionTokens_) {
-            if (currentSeqLen_ + 1 > maxSeqLen_) {
-                out_->fatal(CALL_INFO, -1,
-                    "VLAAgent: currentSeqLen_ would become %d and exceed max_seq_len=%d; "
-                    "binary KV-cache overflow would occur. Check initial_seq_len/num_action_tokens vs binary MAX_SEQ_LEN.\n",
-                    currentSeqLen_ + 1, maxSeqLen_);
-            }
-            currentSeqLen_++;
-            decodeLayer_ = 0;
-            next = GEMV_PROJECT;
-        } else {
-            actionTokenCount_ = 0;
-            next = DETOK_DEQUANT;
-        }
-        break;
-    }
-    case DETOK_DEQUANT:
-        next = FAST_IDCT;
-        break;
-    case FAST_IDCT:
-        next = ACTUATE;
-        break;
-    case ACTUATE:
-        next = IDLE;
-        vitLayer_ = 0;
-        prefillLayer_ = 0;
-        decodeLayer_ = 0;
-        actionTokenCount_ = 0;
-        pipelineCycles_++;
-        if (maxCycles_ > 0 && pipelineCycles_ >= maxCycles_)
-            exitAfterThisRead_ = true;
-        break;
-    default:
-        break;
-    }
-
+    VLAState prev = fsm_.advance(out_, "VLAAgent");
     if (verbose_) {
         out_->output("VLAAgent: %d -> %d (vit=%d prefill=%d decode=%d seqLen=%d)\n",
-                    static_cast<int>(currentState_), static_cast<int>(next),
-                    vitLayer_, prefillLayer_, decodeLayer_, currentSeqLen_);
+                    static_cast<int>(prev), static_cast<int>(fsm_.state()),
+                    fsm_.vitLayer(), fsm_.prefillLayer(), fsm_.decodeLayer(), fsm_.currentSeqLen());
     }
-    currentState_ = next;
 }
 
 void VLAAgent::sendCommandResponse(MemEvent* request, int value)

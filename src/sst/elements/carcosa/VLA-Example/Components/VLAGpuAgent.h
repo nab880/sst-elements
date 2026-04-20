@@ -16,6 +16,7 @@
 
 #include <sst/core/link.h>
 #include <sst/core/output.h>
+#include <sst/elements/carcosa/Components/HaliEvent.h>
 #include <sst/elements/carcosa/Components/InterceptionAgentAPI.h>
 #include <sst/elements/memHierarchy/memEvent.h>
 #include <climits>
@@ -35,13 +36,13 @@ public:
         "Carcosa",
         "VLAGpuAgent",
         SST_ELI_ELEMENT_VERSION(1, 0, 0),
-        "VLA GPU follower (ring from CPU)",
+        "GPU-side VLA follower agent; receives commands from VLACpuAgent via Hali ring",
         SST::Carcosa::InterceptionAgentAPI
     )
 
     SST_ELI_DOCUMENT_PARAMS(
-        {"max_seq_len", "Binary KV cap; match MAX_SEQ_LEN. Fatal if ring seqlen exceeds.", "64"},
-        {"verbose",     "Verbose logging.", "false"}
+        {"max_seq_len", "KV-cache capacity in the RISC-V binary (must match MAX_SEQ_LEN). Fatal if the CPU agent ever announces a seqlen > max_seq_len on the ring.", "64"},
+        {"verbose",     "Enable verbose output.", "false"}
     )
 
     VLAGpuAgent(ComponentId_t id, Params& params);
@@ -49,7 +50,7 @@ public:
     ~VLAGpuAgent();
 
     bool handleInterceptedEvent(SST::MemHierarchy::MemEvent* ev, SST::Link* highlink) override;
-    void handleRingEvent(HaliEvent* ev) override;
+    void handleRingEvent(HaliEvent* ev);
     void agentSetup() override;
     void setRingLink(SST::Link* leftLink) override;
     void setInterceptBase(uint64_t base) override;

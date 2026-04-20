@@ -17,6 +17,7 @@
 #include <sst/core/event.h>
 #include <sst/core/link.h>
 #include <sst/core/output.h>
+#include <sst/elements/carcosa/Components/HaliEvent.h>
 #include <sst/elements/carcosa/Components/InterceptionAgentAPI.h>
 #include <sst/elements/carcosa/VLA-Example/Components/VLAAgent.h>
 #include <sst/elements/memHierarchy/memEvent.h>
@@ -54,7 +55,7 @@ public:
     ~VLAGpuDelayAgent();
 
     bool handleInterceptedEvent(SST::MemHierarchy::MemEvent* ev, SST::Link* highlink) override;
-    void handleRingEvent(HaliEvent* ev) override;
+    void handleRingEvent(HaliEvent* ev);
     void agentSetup() override;
     void setRingLink(SST::Link* leftLink) override;
     void setInterceptBase(uint64_t base) override;

@@ -5,46 +5,13 @@
 #include <sst/core/output.h>
 #include <sst/core/rng/marsaglia.h>
 #include <sst/elements/carcosa/Components/InterceptionAgentAPI.h>
+#include <sst/elements/carcosa/VLA-Example/Components/vla-fsm.h>
 #include <sst/elements/memHierarchy/memEvent.h>
 #include <climits>
 #include <cstdint>
 
 namespace SST {
 namespace Carcosa {
-
-enum VLAState {
-    IDLE,
-    VISION_INGESTION,
-    PATCHIFICATION_EMBED,
-    VIS_ATTN_PROJ,
-    GLOBAL_SPATIAL_ATTN,
-    VIS_FFN,
-    MLP_PROJECTOR,
-    SEQ_CONCAT,
-    PREFILL_ATTN_PROJ,
-    PREFILL_CAUSAL_ATTN,
-    PREFILL_FFN,
-    GEMV_PROJECT,
-    KV_CACHE_ATTN,
-    DECODE_FFN,
-    LM_HEAD,
-    DETOK_DEQUANT,
-    FAST_IDCT,
-    ACTUATE,
-    NUM_STATES
-};
-
-inline const char* vlaStateName(int id) {
-    static const char* names[NUM_STATES] = {
-        "IDLE", "VISION_INGESTION", "PATCHIFICATION_EMBED",
-        "VIS_ATTN_PROJ", "GLOBAL_SPATIAL_ATTN", "VIS_FFN",
-        "MLP_PROJECTOR", "SEQ_CONCAT", "PREFILL_ATTN_PROJ",
-        "PREFILL_CAUSAL_ATTN", "PREFILL_FFN", "GEMV_PROJECT",
-        "KV_CACHE_ATTN", "DECODE_FFN", "LM_HEAD",
-        "DETOK_DEQUANT", "FAST_IDCT", "ACTUATE"
-    };
-    return (id >= 0 && id < NUM_STATES) ? names[id] : "UNKNOWN";
-}
 
 class VLAAgent : public InterceptionAgentAPI
 {
@@ -86,21 +53,8 @@ private:
     SST::Output* out_;
     SST::Link* highlink_ = nullptr;
     uint64_t controlAddrBase_ = 0;
-    VLAState currentState_ = IDLE;
-    int vitLayer_ = 0;
-    int prefillLayer_ = 0;
-    int decodeLayer_ = 0;
-    int currentSeqLen_ = 0;
-    int actionTokenCount_ = 0;
-    int numViTLayers_ = 24;
-    int numLLMLayers_ = 32;
-    int maxCycles_ = 1;
-    int initialSeqLen_ = 228;
-    int maxSeqLen_ = 64;
-    int numActionTokens_ = 1;
+    VlaFsm fsm_;
     int hyadesRole_ = 0;
-    int pipelineCycles_ = 0;
-    bool exitAfterThisRead_ = false;
     SST::RNG::MarsagliaRNG* rng_ = nullptr;
     bool verbose_ = false;
 };
