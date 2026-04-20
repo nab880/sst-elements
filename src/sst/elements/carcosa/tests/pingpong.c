@@ -3,10 +3,10 @@
  * Uses hyades.h for all Vanadis control logic (MMIO and run loop).
  *
  * Build from tests/ with -I.. so hyades.h (in parent carcosa/) is found.
- * Example (from carcosa/tests): run from tests/ with parent mounted:
- *   docker run --rm -v "$(pwd)/..:/src" -w /src/tests ubuntu:22.04 bash -c \
- *     'apt-get update -qq && apt-get install -y -qq gcc-riscv64-linux-gnu && \
- *      riscv64-linux-gnu-gcc -static -I.. -o pingpong pingpong.c'
+ * The checked-in binary is a ~10KB static-PIE riscv64-linux-musl build:
+ *   docker run --rm --platform linux/amd64 --entrypoint sh \
+ *     -v "$(pwd)/..:/src" -w /src/tests muslcc/x86_64:riscv64-linux-musl \
+ *     -c '/bin/gcc -static -Os -I.. -o pingpong pingpong.c && /bin/strip pingpong'
  */
 #include "hyades.h"
 #include <unistd.h>

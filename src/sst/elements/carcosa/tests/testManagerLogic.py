@@ -35,10 +35,10 @@ halitoCPULink3 = sst.Link("CpuLink3")
 
 # Each Hali has its own PM registry; its FaultInjManager will only see PMs that register with that id.
 # debugManagerLogic=True enables [ManagerLogic] and PM-read debug prints.
-hali_0.addParams({"verbose": True, "pmRegistryId": "hali_0", "debugManagerLogic": True})
-hali_1.addParams({"verbose": True, "pmRegistryId": "hali_1", "debugManagerLogic": True})
-hali_2.addParams({"verbose": True, "pmRegistryId": "hali_2", "debugManagerLogic": True})
-hali_3.addParams({"verbose": True, "pmRegistryId": "hali_3", "debugManagerLogic": True})
+hali_0.addParams({"verbose": False, "pmRegistryId": "hali_0", "debugManagerLogic": False})
+hali_1.addParams({"verbose": False, "pmRegistryId": "hali_1", "debugManagerLogic": False})
+hali_2.addParams({"verbose": False, "pmRegistryId": "hali_2", "debugManagerLogic": False})
+hali_3.addParams({"verbose": False, "pmRegistryId": "hali_3", "debugManagerLogic": False})
 
 hali_0.addLink(haliCtrl0, "memCtrl", "10ns")
 hali_1.addLink(haliCtrl1, "memCtrl", "10ns")
@@ -350,7 +350,7 @@ c0_l1cache.addPortModule("lowlink", "carcosa.faultInjectorMemH", {
         "faultType": "randomFlip",
         "injectionProbability": 0.5,
         "installDirection": "Send",
-        "debugManagerLogic": True
+        "debugManagerLogic": False
 })
 c1_l1cache.addPortModule("lowlink", "carcosa.faultInjectorMemH", {
         "pmId": "l1_1",
@@ -358,7 +358,7 @@ c1_l1cache.addPortModule("lowlink", "carcosa.faultInjectorMemH", {
         "faultType": "randomFlip",
         "injectionProbability": 0.5,
         "installDirection": "Send",
-        "debugManagerLogic": True
+        "debugManagerLogic": False
 })
 c2_l1cache.addPortModule("lowlink", "carcosa.faultInjectorMemH", {
         "pmId": "l1_2",
@@ -366,7 +366,7 @@ c2_l1cache.addPortModule("lowlink", "carcosa.faultInjectorMemH", {
         "faultType": "randomFlip",
         "injectionProbability": 0.5,
         "installDirection": "Send",
-        "debugManagerLogic": True
+        "debugManagerLogic": False
 })
 c3_l1cache.addPortModule("lowlink", "carcosa.faultInjectorMemH", {
         "pmId": "l1_3",
@@ -374,7 +374,7 @@ c3_l1cache.addPortModule("lowlink", "carcosa.faultInjectorMemH", {
         "faultType": "randomFlip",
         "injectionProbability": 0.5,
         "installDirection": "Send",
-        "debugManagerLogic": True
+        "debugManagerLogic": False
 })
 
 link_dir_net_0.connect( (network, "port0", "150ps"), (dirNIC, "port", "150ps") )

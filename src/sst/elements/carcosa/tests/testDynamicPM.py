@@ -30,7 +30,7 @@ halitoCPULink3 = sst.Link("CpuLink3")
 
 # Debug: set verbose=True on Hali to see Hali event/cpu/fault messages
 for h in (hali_0, hali_1, hali_2, hali_3):
-    h.addParams({"verbose": True})
+    h.addParams({"verbose": False})
 hali_0.addLink(haliCtrl0, "memCtrl", "10ns")
 hali_1.addLink(haliCtrl1, "memCtrl", "10ns")
 hali_2.addLink(haliCtrl2, "memCtrl", "10ns")

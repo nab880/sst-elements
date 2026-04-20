@@ -62,6 +62,7 @@ libcarcosa_la_SOURCES =                     \
 EXTRA_DIST = \
     hyades.h                                                  \
     tests/pingpong.c                                          \
+    tests/pingpong                                            \
     tests/testCarcosaPingPong.py                              \
     tests/testCorruptMemBasic.py                              \
     tests/testCorruptMemDouble.py                             \
@@ -79,7 +80,6 @@ EXTRA_DIST = \
     tests/testHaliPM.py                                       \
     tests/testManagerLogic.py                                 \
     tests/testsuite_default_carcosa.py                        \
-    tests/run_carcosa_tests.sh                                \
     tests/refFiles/test_carcosa_corruptmem_basic.out          \
     tests/refFiles/test_carcosa_corruptmem_double.out         \
     tests/refFiles/test_carcosa_corruptmem_double_overlap.out \
