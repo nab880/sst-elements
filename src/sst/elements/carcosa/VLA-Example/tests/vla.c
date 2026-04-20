@@ -43,6 +43,15 @@ static float* g_token_dict;
 static float* g_freq_matrix;
 static float* g_idct_weights;
 static float* g_continuous_action;
+
+/* Per-kernel scratch as static BSS (matches vla_gpu.c) so Phase-1 baselines
+ * don't absorb malloc/free on every kernel entry. */
+static float g_scratch_scores[MAX_SEQ_LEN];
+static float g_scratch_vis_ffn_inter[NUM_PATCHES * (4 * VIS_DIM)];
+static float g_scratch_mlp_inter[NUM_PATCHES * PROJ_HIDDEN];
+static float g_scratch_prefill_inter[(NUM_PATCHES + NUM_TEXT_TOKENS) * LLM_INTERMEDIATE];
+static float g_scratch_decode_inter[LLM_INTERMEDIATE];
+
 static int g_current_seq_len;
 
 static void idle_stub(void) { (void)0; }
@@ -94,60 +103,55 @@ static void global_spatial_attention(void)
 {
     int np = NUM_PATCHES, d_k = VIS_DIM;
     float scale = 1.0f / sqrtf((float)d_k);
-    float* scores = (float*)malloc((size_t)np * sizeof(float));
     for (int i = 0; i < np; ++i) {
         float max_score = -1e30f;
         for (int j = 0; j < np; ++j) {
             float dot = 0.0f;
             for (int d = 0; d < d_k; ++d)
                 dot += g_vis_Q[i * d_k + d] * g_vis_K[j * d_k + d];
-            scores[j] = dot * scale;
-            if (scores[j] > max_score) max_score = scores[j];
+            g_scratch_scores[j] = dot * scale;
+            if (g_scratch_scores[j] > max_score) max_score = g_scratch_scores[j];
         }
         float sum_exp = 0.0f;
         for (int j = 0; j < np; ++j) {
-            scores[j] = expf(scores[j] - max_score);
-            sum_exp += scores[j];
+            g_scratch_scores[j] = expf(g_scratch_scores[j] - max_score);
+            sum_exp += g_scratch_scores[j];
         }
-        for (int j = 0; j < np; ++j) scores[j] /= sum_exp;
+        for (int j = 0; j < np; ++j) g_scratch_scores[j] /= sum_exp;
         for (int d = 0; d < d_k; ++d) {
             float out_val = 0.0f;
             for (int j = 0; j < np; ++j)
-                out_val += scores[j] * g_vis_V[j * d_k + d];
+                out_val += g_scratch_scores[j] * g_vis_V[j * d_k + d];
             g_vis_attn_out[i * d_k + d] = out_val;
         }
     }
-    free(scores);
 }
 
 static void vis_ffn(void)
 {
     int np = NUM_PATCHES, D = VIS_DIM, tile = TILE_SIZE;
-    float* inter = (float*)malloc((size_t)np * (4 * D) * sizeof(float));
-    memset(inter, 0, (size_t)np * (4 * D) * sizeof(float));
-    tiled_gemm(g_vis_attn_out, g_vis_ffn_w1, inter, np, 4 * D, D, tile);
-    for (int i = 0; i < np * (4 * D); ++i) inter[i] = inter[i] > 0.0f ? inter[i] : 0.0f;
+    memset(g_scratch_vis_ffn_inter, 0, (size_t)np * (4 * D) * sizeof(float));
+    tiled_gemm(g_vis_attn_out, g_vis_ffn_w1, g_scratch_vis_ffn_inter, np, 4 * D, D, tile);
+    for (int i = 0; i < np * (4 * D); ++i)
+        g_scratch_vis_ffn_inter[i] = g_scratch_vis_ffn_inter[i] > 0.0f ? g_scratch_vis_ffn_inter[i] : 0.0f;
     memset(g_vis_attn_out, 0, (size_t)np * D * sizeof(float));
-    tiled_gemm(inter, g_vis_ffn_w2, g_vis_attn_out, np, D, 4 * D, tile);
-    free(inter);
+    tiled_gemm(g_scratch_vis_ffn_inter, g_vis_ffn_w2, g_vis_attn_out, np, D, 4 * D, tile);
 }
 
 static void mlp_projector(void)
 {
     int np = NUM_PATCHES, vis_dim = VIS_DIM, hidden = PROJ_HIDDEN, llm = LLM_DIM, tile = TILE_SIZE;
-    float* inter = (float*)malloc((size_t)np * hidden * sizeof(float));
-    memset(inter, 0, (size_t)np * hidden * sizeof(float));
-    tiled_gemm(g_vis_attn_out, g_proj_w1, inter, np, hidden, vis_dim, tile);
+    memset(g_scratch_mlp_inter, 0, (size_t)np * hidden * sizeof(float));
+    tiled_gemm(g_vis_attn_out, g_proj_w1, g_scratch_mlp_inter, np, hidden, vis_dim, tile);
     {
         const float sqrt2_over_pi = 0.7978845608f;
         for (int i = 0; i < np * hidden; ++i) {
-            float x = inter[i];
-            inter[i] = 0.5f * x * (1.0f + tanhf(sqrt2_over_pi * (x + 0.044715f * x * x * x)));
+            float x = g_scratch_mlp_inter[i];
+            g_scratch_mlp_inter[i] = 0.5f * x * (1.0f + tanhf(sqrt2_over_pi * (x + 0.044715f * x * x * x)));
         }
     }
     memset(g_projected_tokens, 0, (size_t)np * llm * sizeof(float));
-    tiled_gemm(inter, g_proj_w2, g_projected_tokens, np, llm, hidden, tile);
-    free(inter);
+    tiled_gemm(g_scratch_mlp_inter, g_proj_w2, g_projected_tokens, np, llm, hidden, tile);
 }
 
 static void concat_modalities(void)
@@ -175,46 +179,42 @@ static void prefill_causal_attn(void)
     memcpy(g_prefill_Q, g_llm_qkv_out, (size_t)seq_len * d_k * sizeof(float));
     memcpy(g_prefill_K, g_llm_qkv_out + seq_len * d_k, (size_t)seq_len * d_k * sizeof(float));
     memcpy(g_prefill_V, g_llm_qkv_out + 2 * seq_len * d_k, (size_t)seq_len * d_k * sizeof(float));
-    float* scores = (float*)malloc((size_t)seq_len * sizeof(float));
     for (int i = 0; i < seq_len; ++i) {
         float max_score = -1e30f;
         for (int j = 0; j <= i; ++j) {
             float dot = 0.0f;
             for (int d = 0; d < d_k; ++d)
                 dot += g_prefill_Q[i * d_k + d] * g_prefill_K[j * d_k + d];
-            scores[j] = dot * scale;
-            if (scores[j] > max_score) max_score = scores[j];
+            g_scratch_scores[j] = dot * scale;
+            if (g_scratch_scores[j] > max_score) max_score = g_scratch_scores[j];
         }
-        for (int j = i + 1; j < seq_len; ++j) scores[j] = -1e30f;
+        for (int j = i + 1; j < seq_len; ++j) g_scratch_scores[j] = -1e30f;
         float sum_exp = 0.0f;
         for (int j = 0; j <= i; ++j) {
-            scores[j] = expf(scores[j] - max_score);
-            sum_exp += scores[j];
+            g_scratch_scores[j] = expf(g_scratch_scores[j] - max_score);
+            sum_exp += g_scratch_scores[j];
         }
-        for (int j = 0; j <= i; ++j) scores[j] /= sum_exp;
+        for (int j = 0; j <= i; ++j) g_scratch_scores[j] /= sum_exp;
         for (int d = 0; d < d_k; ++d) {
             float out_val = 0.0f;
             for (int j = 0; j <= i; ++j)
-                out_val += scores[j] * g_prefill_V[j * d_k + d];
+                out_val += g_scratch_scores[j] * g_prefill_V[j * d_k + d];
             g_prefill_attn_out[i * d_k + d] = out_val;
         }
     }
-    free(scores);
 }
 
 static void prefill_ffn(void)
 {
     int seq = NUM_PATCHES + NUM_TEXT_TOKENS, D = LLM_DIM, mid = LLM_INTERMEDIATE, tile = TILE_SIZE;
-    float* inter = (float*)malloc((size_t)seq * mid * sizeof(float));
-    memset(inter, 0, (size_t)seq * mid * sizeof(float));
-    tiled_gemm(g_prefill_attn_out, g_prefill_ffn_w1, inter, seq, mid, D, tile);
+    memset(g_scratch_prefill_inter, 0, (size_t)seq * mid * sizeof(float));
+    tiled_gemm(g_prefill_attn_out, g_prefill_ffn_w1, g_scratch_prefill_inter, seq, mid, D, tile);
     for (int i = 0; i < seq * mid; ++i) {
-        float x = inter[i];
-        inter[i] = x / (1.0f + expf(-x));
+        float x = g_scratch_prefill_inter[i];
+        g_scratch_prefill_inter[i] = x / (1.0f + expf(-x));
     }
     memset(g_prefill_attn_out, 0, (size_t)seq * D * sizeof(float));
-    tiled_gemm(inter, g_prefill_ffn_w2, g_prefill_attn_out, seq, D, mid, tile);
-    free(inter);
+    tiled_gemm(g_scratch_prefill_inter, g_prefill_ffn_w2, g_prefill_attn_out, seq, D, mid, tile);
 }
 
 static void gemv_project(void)
@@ -234,41 +234,37 @@ static void kv_cache_attn(void)
         g_k_cache[(seq_len - 1) * d_k + d] = g_k_vec[d];
         g_v_cache[(seq_len - 1) * d_k + d] = g_v_vec[d];
     }
-    float* scores = (float*)malloc((size_t)seq_len * sizeof(float));
     float max_score = -1e30f;
     for (int j = 0; j < seq_len; ++j) {
         float dot = 0.0f;
         for (int d = 0; d < d_k; ++d)
             dot += g_q_vec[d] * g_k_cache[j * d_k + d];
-        scores[j] = dot / sqrtf((float)d_k);
-        if (scores[j] > max_score) max_score = scores[j];
+        g_scratch_scores[j] = dot / sqrtf((float)d_k);
+        if (g_scratch_scores[j] > max_score) max_score = g_scratch_scores[j];
     }
     float sum_exp = 0.0f;
     for (int j = 0; j < seq_len; ++j) {
-        scores[j] = expf(scores[j] - max_score);
-        sum_exp += scores[j];
+        g_scratch_scores[j] = expf(g_scratch_scores[j] - max_score);
+        sum_exp += g_scratch_scores[j];
     }
-    for (int j = 0; j < seq_len; ++j) scores[j] /= sum_exp;
+    for (int j = 0; j < seq_len; ++j) g_scratch_scores[j] /= sum_exp;
     for (int d = 0; d < d_k; ++d) {
         float out_val = 0.0f;
         for (int j = 0; j < seq_len; ++j)
-            out_val += scores[j] * g_v_cache[j * d_k + d];
+            out_val += g_scratch_scores[j] * g_v_cache[j * d_k + d];
         g_decode_attn_out[d] = out_val;
     }
-    free(scores);
 }
 
 static void decode_ffn(void)
 {
     int D = LLM_DIM, mid = LLM_INTERMEDIATE;
-    float* inter = (float*)malloc((size_t)mid * sizeof(float));
-    decode_gemv_kernel(g_decode_attn_out, g_decode_ffn_w1, inter, D, mid);
+    decode_gemv_kernel(g_decode_attn_out, g_decode_ffn_w1, g_scratch_decode_inter, D, mid);
     for (int i = 0; i < mid; ++i) {
-        float x = inter[i];
-        inter[i] = x / (1.0f + expf(-x));
+        float x = g_scratch_decode_inter[i];
+        g_scratch_decode_inter[i] = x / (1.0f + expf(-x));
     }
-    decode_gemv_kernel(inter, g_decode_ffn_w2, g_token_vec, mid, D);
-    free(inter);
+    decode_gemv_kernel(g_scratch_decode_inter, g_decode_ffn_w2, g_token_vec, mid, D);
 }
 
 static void lm_head(void)

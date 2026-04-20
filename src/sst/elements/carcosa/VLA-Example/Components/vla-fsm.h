@@ -55,8 +55,7 @@ inline const char* vlaStateName(int id) {
     return (id >= 0 && id < NUM_STATES) ? names[id] : "UNKNOWN";
 }
 
- // Shared VLA pipeline FSM used by VLAAgent, VLACpuAgent, and VLACpuDelayAgent.
- 
+// Shared VLA pipeline FSM used by VLAAgent, VLACpuAgent, and VLACpuDelayAgent.
 class VlaFsm {
 public:
     struct Config {
