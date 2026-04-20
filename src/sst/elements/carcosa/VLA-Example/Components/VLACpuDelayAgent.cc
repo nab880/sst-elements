@@ -35,8 +35,24 @@ VLACpuDelayAgent::VLACpuDelayAgent(ComponentId_t id, Params& params)
             cfg.decodeEarlyExitProb);
     }
 
-    verbose_       = params.find<bool>("verbose", false);
-    scaleFactor_   = params.find<double>("scale_factor", 1.0);
+    verbose_        = params.find<bool>("verbose", false);
+    scaleFactor_    = params.find<double>("scale_factor", 1.0);
+    scaleSeq_       = params.find<double>("scale_seq",    1.0);
+    scaleDim_       = params.find<double>("scale_dim",    1.0);
+    scaleVocab_     = params.find<double>("scale_vocab",  1.0);
+    baselineSeqLen_ = params.find<int>("baseline_seq_len", 0);
+    if (baselineSeqLen_ <= 0) baselineSeqLen_ = cfg.initialSeqLen;
+
+    // Legacy single-factor path is used only when the user migrated no per-dim
+    // scale and set scale_factor to something non-trivial. Defaults (everything
+    // 1.0) go through the new path and produce factor=1.0 -> bit-identical.
+    // Legacy path only when no per-dim scale was set but scale_factor != 1.0.
+    bool anyPerDim = (scaleSeq_ != 1.0) || (scaleDim_ != 1.0) || (scaleVocab_ != 1.0);
+    legacyScaling_ = !anyPerDim && (scaleFactor_ != 1.0);
+    if (anyPerDim && scaleFactor_ != 1.0) {
+        out_->output("VLACpuDelayAgent: scale_factor=%.3f ignored because scale_seq/scale_dim/scale_vocab were set; using per-dimension scaling.\n",
+                     scaleFactor_);
+    }
 
     std::string csv = params.find<std::string>("baseline_ps", "");
     if (csv.empty()) {
@@ -148,8 +164,15 @@ void VLACpuDelayAgent::agentSetup()
 
     if (verbose_) {
         const auto& cfg = fsm_.config();
-        out_->output("VLACpuDelayAgent: setup vit=%d llm=%d scale=%.2f max_seq=%d\n",
-                     cfg.numViTLayers, cfg.numLLMLayers, scaleFactor_, cfg.maxSeqLen);
+        if (legacyScaling_) {
+            out_->output("VLACpuDelayAgent: setup vit=%d llm=%d scale_factor=%.2f (legacy) max_seq=%d\n",
+                         cfg.numViTLayers, cfg.numLLMLayers, scaleFactor_, cfg.maxSeqLen);
+        } else {
+            out_->output("VLACpuDelayAgent: setup vit=%d llm=%d scale_seq=%.2f scale_dim=%.2f scale_vocab=%.2f baseline_seq_len=%d max_seq=%d\n",
+                         cfg.numViTLayers, cfg.numLLMLayers,
+                         scaleSeq_, scaleDim_, scaleVocab_,
+                         baselineSeqLen_, cfg.maxSeqLen);
+        }
     }
 
     if (pendingCommandRead_) {
@@ -215,12 +238,20 @@ uint64_t VLACpuDelayAgent::computeScaledDelay(int kernelId)
     uint64_t base = baselinePs_[kernelId];
     if (base == 0) return 0;
 
-    int order = complexityOrder(kernelId);
-    double scaled = static_cast<double>(base);
-    for (int i = 0; i < order; ++i)
-        scaled *= scaleFactor_;
+    if (legacyScaling_)
+        return computeLegacyScaledDelayPs(base, kernelId, scaleFactor_);
 
-    return static_cast<uint64_t>(scaled);
+    int currentLayer = pickCurrentLayer(kernelId,
+                                        fsm_.vitLayer(),
+                                        fsm_.prefillLayer(),
+                                        fsm_.decodeLayer());
+
+    return computeScaledDelayPs(base, kernelId,
+                                scaleSeq_, scaleDim_, scaleVocab_,
+                                fsm_.currentSeqLen(),
+                                baselineSeqLen_,
+                                fsm_.actionTokenCount(),
+                                currentLayer);
 }
 
 void VLACpuDelayAgent::sendCommandResponse(MemEvent* request, int value)

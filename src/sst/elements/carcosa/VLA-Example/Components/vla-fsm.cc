@@ -28,8 +28,7 @@ void VlaFsm::reset()
     pipelineCycles_    = 0;
     exitAfterThisRead_ = false;
 
-    // Match the original agents' (z=11, w=rngSeed) seeding so runs with
-    // decode_exit_prob=0 stay bit-identical to the pre-refactor code.
+
     rng_.restart(11u, cfg_.rngSeed);
 }
 
@@ -84,13 +83,7 @@ VLAState VlaFsm::advance(SST::Output* out, const char* agentName)
     case LM_HEAD: {
         actionTokenCount_++;
         bool capHit    = (actionTokenCount_ >= cfg_.numActionTokens);
-        // LLM decoder generates action tokens autoregressively and stops when
-        // the model emits an end-of-sequence token -- not when it hits a fixed
-        // step count. The number of decode iterations is therefore
-        // data-dependent and varies per inference. Model that stochastically
-        // here with a Bernoulli trial; skip the RNG entirely when disabled
-        // (prob==0) to keep the default path deterministic and allocation-free
-        // on the hot side.
+        // LLM decoder stops on EOS, not a fixed step count; Bernoulli-model that. Short-circuit when disabled to keep the default path deterministic.
         bool earlyExit = !capHit
                       && cfg_.decodeEarlyExitProb > 0.0
                       && rng_.nextUniform() < cfg_.decodeEarlyExitProb;

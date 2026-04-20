@@ -54,6 +54,111 @@ inline int complexityOrder(int kernelId)
     }
 }
 
+/* Per-kernel cost-driver exponents: delay = base * effSeq^seq * scaleDim^dim * scaleVocab^vocab,
+ * where effSeq = scaleSeq * (runtimeSeq ? currentSeqLen/baselineSeqLen : 1). */
+struct KernelExponents {
+    int  seq        = 0;
+    int  dim        = 0;
+    int  vocab      = 0;
+    bool runtimeSeq = false;
+};
+
+inline KernelExponents kernelExponents(int kernelId)
+{
+    switch (kernelId) {
+    case PATCHIFICATION_EMBED:   return {0, 2, 0, false};
+    case VIS_ATTN_PROJ:          return {0, 2, 0, false};
+    case GLOBAL_SPATIAL_ATTN:    return {0, 1, 0, false};
+    case VIS_FFN:                return {0, 2, 0, false};
+    case MLP_PROJECTOR:          return {0, 2, 0, false};
+    case SEQ_CONCAT:             return {1, 0, 0, false};
+    case PREFILL_ATTN_PROJ:      return {1, 2, 0, false};
+    case PREFILL_CAUSAL_ATTN:    return {2, 1, 0, true};
+    case PREFILL_FFN:            return {1, 2, 0, false};
+    case GEMV_PROJECT:           return {0, 2, 0, false};
+    case KV_CACHE_ATTN:          return {1, 1, 0, true};
+    case DECODE_FFN:             return {0, 2, 0, false};
+    case LM_HEAD:                return {0, 1, 1, false};
+    case DETOK_DEQUANT:          return {0, 0, 1, false};
+    case IDLE:
+    case VISION_INGESTION:
+    case FAST_IDCT:
+    case ACTUATE:
+    default:                     return {0, 0, 0, false};
+    }
+}
+
+/* actionTokenCount/currentLayer are reserved for future per-step/per-layer heterogeneity. */
+inline uint64_t computeScaledDelayPs(uint64_t basePs,
+                                     int      kernelId,
+                                     double   scaleSeq,
+                                     double   scaleDim,
+                                     double   scaleVocab,
+                                     int      currentSeqLen,
+                                     int      baselineSeqLen,
+                                     int      /*actionTokenCount*/,
+                                     int      /*currentLayer*/)
+{
+    if (kernelId < 0 || kernelId >= NUM_STATES) return 0;
+    if (basePs == 0)                             return 0;
+
+    KernelExponents e = kernelExponents(kernelId);
+
+    double effSeq = scaleSeq;
+    if (e.runtimeSeq && baselineSeqLen > 0 && currentSeqLen > 0) {
+        effSeq *= static_cast<double>(currentSeqLen)
+                / static_cast<double>(baselineSeqLen);
+    }
+
+    double factor = 1.0;
+    for (int i = 0; i < e.seq;   ++i) factor *= effSeq;
+    for (int i = 0; i < e.dim;   ++i) factor *= scaleDim;
+    for (int i = 0; i < e.vocab; ++i) factor *= scaleVocab;
+
+    return static_cast<uint64_t>(static_cast<double>(basePs) * factor);
+}
+
+/* Legacy scale_factor path; preserved so existing calibrations keep their meaning. */
+inline uint64_t computeLegacyScaledDelayPs(uint64_t basePs,
+                                           int      kernelId,
+                                           double   scaleFactor)
+{
+    if (kernelId < 0 || kernelId >= NUM_STATES) return 0;
+    if (basePs == 0)                             return 0;
+
+    int order = complexityOrder(kernelId);
+    double scaled = static_cast<double>(basePs);
+    for (int i = 0; i < order; ++i) scaled *= scaleFactor;
+    return static_cast<uint64_t>(scaled);
+}
+
+/* Route a kernelId to its relevant FSM layer counter; 0 for out-of-loop kernels. */
+inline int pickCurrentLayer(int kernelId,
+                            int vitLayer,
+                            int prefillLayer,
+                            int decodeLayer)
+{
+    switch (kernelId) {
+    case PATCHIFICATION_EMBED:
+    case VIS_ATTN_PROJ:
+    case GLOBAL_SPATIAL_ATTN:
+    case VIS_FFN:
+    case MLP_PROJECTOR:
+        return vitLayer;
+    case PREFILL_ATTN_PROJ:
+    case PREFILL_CAUSAL_ATTN:
+    case PREFILL_FFN:
+        return prefillLayer;
+    case GEMV_PROJECT:
+    case KV_CACHE_ATTN:
+    case DECODE_FFN:
+    case LM_HEAD:
+        return decodeLayer;
+    default:
+        return 0;
+    }
+}
+
 /** Positional CSV: token N -> out[N] (gaps stay 0, no shift). Allows NUM_STATES or NUM_STATES-1 (IDLE omitted). */
 inline int parseBaselinePsCsv(const std::string& csv,
                               uint64_t out[NUM_STATES],

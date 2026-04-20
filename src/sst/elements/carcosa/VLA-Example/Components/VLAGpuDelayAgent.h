@@ -45,7 +45,11 @@ public:
     SST_ELI_DOCUMENT_PARAMS(
         {"baseline_ps",     "Comma-separated baseline kernel durations in picoseconds per kernel id (from Phase 1 CSV delta_ps column), 18 values.", ""},
         {"baseline_cycles", "[deprecated] Previous name for baseline_ps. Still accepted for one release.", ""},
-        {"scale_factor",    "Dimension scale factor: target_dim / baseline_dim.", "1.0"},
+        {"scale_factor",    "[legacy] Single dimension scale: delay *= scale_factor^complexityOrder(kernel). Used only when all of scale_seq/dim/vocab are 1.0 and scale_factor != 1.0.", "1.0"},
+        {"scale_seq",       "Sequence-length scale. For runtime-sequence kernels (KV_CACHE_ATTN, PREFILL_CAUSAL_ATTN) composed with ring-delivered currentSeqLen/baseline_seq_len.", "1.0"},
+        {"scale_dim",       "Embedding/projection dim scale: target_dim / baseline_dim.", "1.0"},
+        {"scale_vocab",     "Vocabulary scale for LM_HEAD/DETOK_DEQUANT.",                "1.0"},
+        {"baseline_seq_len","Reference sequence length the baseline_ps were calibrated at; denominator for runtime-sequence kernels.", "228"},
         {"max_seq_len",     "KV-cache capacity in the stub/real binary (MAX_SEQ_LEN). Fatal if the CPU delay agent ever announces a seqlen > max_seq_len on the ring.", "64"},
         {"verbose",         "Enable verbose output.",                             "false"}
     )
@@ -80,7 +84,12 @@ private:
     bool verbose_ = false;
 
     uint64_t baselinePs_[NUM_STATES] = {};
-    double scaleFactor_ = 1.0;
+    double   scaleFactor_   = 1.0;      // legacy
+    double   scaleSeq_      = 1.0;
+    double   scaleDim_      = 1.0;
+    double   scaleVocab_    = 1.0;
+    int      baselineSeqLen_ = 228;
+    bool     legacyScaling_ = false;
     bool delayPending_ = false;
 
     struct KernelRecord {

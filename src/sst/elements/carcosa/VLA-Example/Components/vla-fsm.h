@@ -55,20 +55,8 @@ inline const char* vlaStateName(int id) {
     return (id >= 0 && id < NUM_STATES) ? names[id] : "UNKNOWN";
 }
 
-/**
- * Shared VLA pipeline FSM used by VLAAgent, VLACpuAgent, and VLACpuDelayAgent.
- *
- * Owns the state + layer/token/seqlen counters and the IDLE->ACTUATE->IDLE
- * transition table. Agents embed a VlaFsm and delegate advance()/reset()
- * to it so there is a single place to fix/unit-test the state machine.
- *
- * Logging is the caller's responsibility: read state() before and after
- * advance() if you want the old "prev -> next" trace with your agent's
- * name prefix.
- *
- * Fatal errors (peak-seqlen / KV-cache overflow) are reported through the
- * caller-supplied SST::Output* so the agent-specific prefix is preserved.
- */
+ // Shared VLA pipeline FSM used by VLAAgent, VLACpuAgent, and VLACpuDelayAgent.
+ 
 class VlaFsm {
 public:
     struct Config {
@@ -78,13 +66,8 @@ public:
         int      initialSeqLen       = 228;
         int      maxSeqLen           = 64;
         int      numActionTokens     = 1;
-        /** Per-LM_HEAD Bernoulli early-exit probability for the decode loop.
-         *  0.0 (default) disables the coin flip and the FSM decodes exactly
-         *  numActionTokens tokens. Values in (0, 1) model an EOS-like early
-         *  termination; 1.0 would exit after the first generated token. */
+        // Per-LM_HEAD Bernoulli early-exit probability for the decode loop.
         double   decodeEarlyExitProb = 0.0;
-        /** Seed for the internal MarsagliaRNG; only consumed when
-         *  decodeEarlyExitProb > 0. */
         uint32_t rngSeed             = 12345u;
     };
 
@@ -94,16 +77,12 @@ public:
     void setConfig(const Config& cfg) { cfg_ = cfg; }
     const Config& config() const { return cfg_; }
 
-    /** Reset counters and put the FSM in IDLE. Does not touch Config or exit flag state
-     *  beyond clearing it; intended to be called from agentSetup(). */
+
     void reset();
 
-    /** Fatal (via `out`) if initial_seq_len + (num_action_tokens - 1) > max_seq_len. */
     void validatePeakSeqLen(SST::Output* out, const char* agentName) const;
 
-    /** Advance one FSM step. Returns the previous state so callers can log
-     *  "prev -> next" with their own prefix. Fatal (via `out`) on KV-cache overflow
-     *  in LM_HEAD.  */
+    // Advance one FSM step.
     VLAState advance(SST::Output* out, const char* agentName);
 
     VLAState state()            const { return currentState_; }
