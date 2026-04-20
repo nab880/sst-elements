@@ -3,7 +3,6 @@
 
 #include <sst/core/link.h>
 #include <sst/core/output.h>
-#include <sst/core/rng/marsaglia.h>
 #include <sst/elements/carcosa/Components/InterceptionAgentAPI.h>
 #include <sst/elements/carcosa/VLA-Example/Components/vla-fsm.h>
 #include <sst/elements/memHierarchy/memEvent.h>
@@ -21,7 +20,7 @@ public:
         "Carcosa",
         "VLAAgent",
         SST_ELI_ELEMENT_VERSION(1, 0, 0),
-        "VLA FSM agent: command/status MMIO for 18 kernel states, layer loops, decode coin flip",
+        "VLA FSM agent: command/status MMIO for 18 kernel states, layer loops, optional per-LM_HEAD early-exit sampling.",
         SST::Carcosa::InterceptionAgentAPI
     )
 
@@ -32,7 +31,9 @@ public:
         {"initial_seq_len", "Sequence length after prefill (num_patches + num_text_tokens); must match binary.", "228"},
         {"max_seq_len", "KV-cache capacity in the RISC-V binary (must match MAX_SEQ_LEN compile-time macro in vla_shared.h / vla.c). The agent fatal-errors if initial_seq_len + (num_action_tokens - 1) would exceed this.", "64"},
         {"hyades_role", "Value returned when reading HYADES_ROLE (+0x10).", "0"},
-        {"num_action_tokens", "Number of decode tokens to generate per pipeline cycle (GEMV_PROJECT->KV_CACHE_ATTN->DECODE_FFN->LM_HEAD loop iterations).", "1"},
+        {"num_action_tokens", "Hard cap on decode tokens per pipeline cycle (GEMV_PROJECT->KV_CACHE_ATTN->DECODE_FFN->LM_HEAD loop iterations).", "1"},
+        {"decode_exit_prob", "Per-LM_HEAD Bernoulli probability of terminating the decode loop early (EOS-like). 0.0 disables the coin flip (deterministic num_action_tokens). Range [0.0, 1.0].", "0.0"},
+        {"rng_seed", "Seed for the decode early-exit RNG (Marsaglia W seed, with Z fixed at 11). Only consumed when decode_exit_prob > 0.", "12345"},
         {"verbose", "Enable verbose output.", "false"}
     )
 
@@ -55,7 +56,6 @@ private:
     uint64_t controlAddrBase_ = 0;
     VlaFsm fsm_;
     int hyadesRole_ = 0;
-    SST::RNG::MarsagliaRNG* rng_ = nullptr;
     bool verbose_ = false;
 };
 

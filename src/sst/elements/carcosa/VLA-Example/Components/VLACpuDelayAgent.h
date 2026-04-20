@@ -17,7 +17,6 @@
 #include <sst/core/event.h>
 #include <sst/core/link.h>
 #include <sst/core/output.h>
-#include <sst/core/rng/marsaglia.h>
 #include <sst/elements/carcosa/Components/HaliEvent.h>
 #include <sst/elements/carcosa/Components/InterceptionAgentAPI.h>
 #include <sst/elements/carcosa/VLA-Example/Components/VLAAgent.h>
@@ -49,7 +48,9 @@ public:
         {"max_cycles",      "Pipeline cycles before exit. 0 = forever.",     "1"},
         {"initial_seq_len", "Sequence length after prefill.",                 "228"},
         {"max_seq_len",     "KV-cache capacity in the stub/real binary (MAX_SEQ_LEN). Fatal if initial_seq_len + (num_action_tokens - 1) > max_seq_len.", "64"},
-        {"num_action_tokens","Decode tokens generated per pipeline cycle.",   "1"},
+        {"num_action_tokens","Hard cap on decode tokens per pipeline cycle.", "1"},
+        {"decode_exit_prob","Per-LM_HEAD Bernoulli probability of terminating the decode loop early (EOS-like). 0.0 disables. Range [0.0, 1.0].", "0.0"},
+        {"rng_seed",        "Seed for the decode early-exit RNG. Only consumed when decode_exit_prob > 0.", "12345"},
         {"baseline_ps",     "Comma-separated baseline kernel durations in picoseconds per kernel id (from Phase 1 CSV delta_ps column), 18 values.", ""},
         {"baseline_cycles", "[deprecated] Previous name for baseline_ps. Still accepted for one release.", ""},
         {"scale_factor",    "Dimension scale factor: target_dim / baseline_dim.", "1.0"},
@@ -83,7 +84,6 @@ private:
     uint64_t controlAddrBase_ = 0;
 
     VlaFsm fsm_;
-    SST::RNG::MarsagliaRNG* rng_ = nullptr;
 
     int nextCommand_ = INT_MIN;
     bool partnerDone_ = false;

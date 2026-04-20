@@ -179,6 +179,8 @@ class CPU_Builder:
             "initial_seq_len": os.getenv("VLA_INITIAL_SEQ_LEN", "8"),
             "max_seq_len":    os.getenv("VLA_MAX_SEQ_LEN", "64"),
             "num_action_tokens": os.getenv("VLA_NUM_ACTION_TOKENS", "1"),
+            "decode_exit_prob": os.getenv("VLA_DECODE_EXIT_PROB", "0.0"),
+            "rng_seed":         os.getenv("VLA_RNG_SEED", "12345"),
             "verbose": "true",
         })
 

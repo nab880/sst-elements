@@ -15,6 +15,8 @@
 #define CARCOSA_VLA_FSM_H
 
 #include <sst/core/output.h>
+#include <sst/core/rng/marsaglia.h>
+#include <cstdint>
 
 namespace SST {
 namespace Carcosa {
@@ -70,12 +72,20 @@ inline const char* vlaStateName(int id) {
 class VlaFsm {
 public:
     struct Config {
-        int numViTLayers    = 24;
-        int numLLMLayers    = 32;
-        int maxCycles       = 1;
-        int initialSeqLen   = 228;
-        int maxSeqLen       = 64;
-        int numActionTokens = 1;
+        int      numViTLayers        = 24;
+        int      numLLMLayers        = 32;
+        int      maxCycles           = 1;
+        int      initialSeqLen       = 228;
+        int      maxSeqLen           = 64;
+        int      numActionTokens     = 1;
+        /** Per-LM_HEAD Bernoulli early-exit probability for the decode loop.
+         *  0.0 (default) disables the coin flip and the FSM decodes exactly
+         *  numActionTokens tokens. Values in (0, 1) model an EOS-like early
+         *  termination; 1.0 would exit after the first generated token. */
+        double   decodeEarlyExitProb = 0.0;
+        /** Seed for the internal MarsagliaRNG; only consumed when
+         *  decodeEarlyExitProb > 0. */
+        uint32_t rngSeed             = 12345u;
     };
 
     VlaFsm() = default;
@@ -107,15 +117,16 @@ public:
     void     clearExitFlag()          { exitAfterThisRead_ = false; }
 
 private:
-    Config   cfg_{};
-    VLAState currentState_      = IDLE;
-    int      vitLayer_          = 0;
-    int      prefillLayer_      = 0;
-    int      decodeLayer_       = 0;
-    int      currentSeqLen_     = 0;
-    int      actionTokenCount_  = 0;
-    int      pipelineCycles_    = 0;
-    bool     exitAfterThisRead_ = false;
+    Config                cfg_{};
+    VLAState              currentState_      = IDLE;
+    int                   vitLayer_          = 0;
+    int                   prefillLayer_      = 0;
+    int                   decodeLayer_       = 0;
+    int                   currentSeqLen_     = 0;
+    int                   actionTokenCount_  = 0;
+    int                   pipelineCycles_    = 0;
+    bool                  exitAfterThisRead_ = false;
+    SST::RNG::MarsagliaRNG rng_{};
 };
 
 } // namespace Carcosa

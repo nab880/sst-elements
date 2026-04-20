@@ -79,6 +79,7 @@ EXTRA_DIST = \
     VLA-Example/tests/vla.c                       \
     VLA-Example/tests/vla_shared.h                \
     VLA-Example/tests/testCarcosaVLA.py           \
+    VLA-Example/tests/testCarcosaVLA_earlyexit.py \
     VLA-Example/tests/vla_cpu.c                   \
     VLA-Example/tests/vla_gpu.c                   \
     VLA-Example/tests/stub_cpu.c                  \

@@ -14,25 +14,30 @@ VLAAgent::VLAAgent(ComponentId_t id, Params& params)
 {
     out_ = new Output("", 1, 0, Output::STDOUT);
     VlaFsm::Config cfg;
-    cfg.numViTLayers    = params.find<int>("num_vit_layers", 24);
-    cfg.numLLMLayers    = params.find<int>("num_llm_layers", 32);
-    cfg.maxCycles       = params.find<int>("max_cycles", 1);
-    cfg.initialSeqLen   = params.find<int>("initial_seq_len", 228);
-    cfg.maxSeqLen       = params.find<int>("max_seq_len", 64);
-    cfg.numActionTokens = params.find<int>("num_action_tokens", 1);
+    cfg.numViTLayers         = params.find<int>("num_vit_layers", 24);
+    cfg.numLLMLayers         = params.find<int>("num_llm_layers", 32);
+    cfg.maxCycles            = params.find<int>("max_cycles", 1);
+    cfg.initialSeqLen        = params.find<int>("initial_seq_len", 228);
+    cfg.maxSeqLen            = params.find<int>("max_seq_len", 64);
+    cfg.numActionTokens      = params.find<int>("num_action_tokens", 1);
     if (cfg.numActionTokens < 1) cfg.numActionTokens = 1;
+    cfg.decodeEarlyExitProb  = params.find<double>("decode_exit_prob", 0.0);
+    cfg.rngSeed              = params.find<uint32_t>("rng_seed", 12345u);
     fsm_.setConfig(cfg);
+
+    if (cfg.decodeEarlyExitProb < 0.0 || cfg.decodeEarlyExitProb > 1.0) {
+        out_->fatal(CALL_INFO, -1,
+            "VLAAgent: decode_exit_prob=%.6f is out of range [0.0, 1.0].\n",
+            cfg.decodeEarlyExitProb);
+    }
 
     hyadesRole_ = params.find<int>("hyades_role", 0);
     verbose_ = params.find<bool>("verbose", false);
-    unsigned int seed = params.find<uint32_t>("rng_seed", 12345u);
-    rng_ = new RNG::MarsagliaRNG(11, seed);
 }
 
 VLAAgent::~VLAAgent()
 {
     delete out_;
-    delete rng_;
 }
 
 bool VLAAgent::handleInterceptedEvent(MemEvent* ev, Link* highlink)
