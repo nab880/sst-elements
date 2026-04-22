@@ -25,6 +25,8 @@ libcarcosa_la_SOURCES =                     \
     injectors/randomFlipFaultInjector.h     \
     injectors/dropFlipFaultInjector.cc      \
     injectors/dropFlipFaultInjector.h       \
+    injectors/portModuleStateGate.cc        \
+    injectors/portModuleStateGate.h         \
     injectors/faultInjectorMemH.cc          \
     injectors/faultInjectorMemH.h           \
     faultlogic/faultBase.cc                 \
@@ -53,6 +55,8 @@ libcarcosa_la_SOURCES =                     \
     Components/PipelineStateRegistry.h      \
     Components/PingPongAgent.cc             \
     Components/PingPongAgent.h              \
+    Components/FourStateAgent.cc            \
+    Components/FourStateAgent.h             \
     Components/CarcosaMemCtrl.cc            \
     Components/CarcosaMemCtrl.h             \
     Components/SensorComponent.cc           \
@@ -65,8 +69,12 @@ libcarcosa_la_SOURCES =                     \
 EXTRA_DIST = \
     hyades.h                                      \
     tests/pingpong.c                              \
+    tests/fourstate.c                             \
     tests/testCarcosaPingPong.py                  \
+    tests/testFourStateRegistry.py                \
+    tests/testFourStateRegistryGated.py           \
     examples/SimplePipeline/tests/testSimplePipeline.py \
+    examples/SimplePipeline/tests/testPortModuleStateGate.py \
     tests/testCorruptMemBasic.py                  \
     tests/testCorruptMemDouble.py                 \
     tests/testCorruptMemDoubleOverlap.py          \
@@ -91,6 +99,7 @@ nobase_sst_HEADERS =                        \
     injectors/randomDropFaultInjector.h     \
     injectors/randomFlipFaultInjector.h     \
     injectors/dropFlipFaultInjector.h       \
+    injectors/portModuleStateGate.h         \
     injectors/faultInjectorMemH.h           \
     faultlogic/faultBase.h                  \
     faultlogic/stuckAtFault.h               \
@@ -103,6 +112,7 @@ nobase_sst_HEADERS =                        \
     Components/InterceptionAgentAPI.h      \
     Components/PipelineStateRegistry.h     \
     Components/PingPongAgent.h             \
+    Components/FourStateAgent.h            \
     examples/SimplePipeline/SimplePipelineExample.h
 
 libcarcosa_la_LDFLAGS = -module -avoid-version
