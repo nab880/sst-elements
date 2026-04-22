@@ -33,10 +33,16 @@ namespace Carcosa {
  * that prefer to store the id in the entry itself.
  */
 struct MemoryRegion {
-    uint64_t base  = 0;
-    uint64_t size  = 0;
-    bool     valid = false;
-    int      id    = -1;
+    uint64_t    base  = 0;
+    uint64_t    size  = 0;
+    bool        valid = false;
+    int         id    = -1;
+    /**
+     * Optional symbolic label (e.g. "weights", "kv_cache", "action_queue").
+     * PortModuleStateGate exposes a `region_names` predicate that matches
+     * against this field so configs don't have to hard-code slot ids.
+     */
+    std::string name;
 };
 
 /**

@@ -25,6 +25,8 @@ libcarcosa_la_SOURCES =                     \
     injectors/randomFlipFaultInjector.h     \
     injectors/dropFlipFaultInjector.cc      \
     injectors/dropFlipFaultInjector.h       \
+    injectors/portModuleStateGate.cc        \
+    injectors/portModuleStateGate.h         \
     injectors/faultInjectorMemH.cc          \
     injectors/faultInjectorMemH.h           \
     faultlogic/faultBase.cc                 \
@@ -51,6 +53,8 @@ libcarcosa_la_SOURCES =                     \
     components/faultInjManagerAPI.h         \
     components/interceptionAgentAPI.h       \
     components/pipelineStateRegistry.h      \
+    components/fourStateAgent.cc            \
+    components/fourStateAgent.h             \
     components/pingPongAgent.cc             \
     components/pingPongAgent.h              \
     components/carcosaMemCtrl.cc            \
@@ -65,8 +69,12 @@ libcarcosa_la_SOURCES =                     \
 EXTRA_DIST = \
     hyades.h                                      \
     tests/pingpong.c                              \
+    tests/fourstate.c                             \
     tests/testcarcosaPingPong.py                  \
+    tests/testfourStateRegistry.py                \
+    tests/testfourStateRegistryGated.py           \
     examples/simplePipeline/tests/testsimplePipeline.py \
+    examples/simplePipeline/tests/testportModuleStateGate.py \
     tests/testCorruptMemBasic.py                  \
     tests/testCorruptMemDouble.py                 \
     tests/testCorruptMemDoubleOverlap.py          \
@@ -91,6 +99,7 @@ nobase_sst_HEADERS =                        \
     injectors/randomDropFaultInjector.h     \
     injectors/randomFlipFaultInjector.h     \
     injectors/dropFlipFaultInjector.h       \
+    injectors/portModuleStateGate.h         \
     injectors/faultInjectorMemH.h           \
     faultlogic/faultBase.h                  \
     faultlogic/stuckAtFault.h               \
@@ -102,6 +111,7 @@ nobase_sst_HEADERS =                        \
     components/faultInjManagerAPI.h        \
     components/interceptionAgentAPI.h      \
     components/pipelineStateRegistry.h     \
+    components/fourStateAgent.h            \
     components/pingPongAgent.h             \
     examples/simplePipeline/simplePipelineExample.h
 
