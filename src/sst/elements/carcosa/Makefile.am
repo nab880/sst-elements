@@ -50,6 +50,7 @@ libcarcosa_la_SOURCES =                     \
     Components/FaultInjEvent.h              \
     Components/FaultInjManagerAPI.h         \
     Components/InterceptionAgentAPI.h       \
+    Components/PipelineStateRegistry.h      \
     Components/PingPongAgent.cc             \
     Components/PingPongAgent.h              \
     Components/CarcosaMemCtrl.cc            \
@@ -57,12 +58,15 @@ libcarcosa_la_SOURCES =                     \
     Components/SensorComponent.cc           \
     Components/SensorComponent.h           \
     Components/SensorEvent.h                \
-    Components/HaliEvent.h
+    Components/HaliEvent.h                  \
+    examples/SimplePipeline/SimplePipelineExample.cc \
+    examples/SimplePipeline/SimplePipelineExample.h
 
 EXTRA_DIST = \
     hyades.h                                      \
     tests/pingpong.c                              \
     tests/testCarcosaPingPong.py                  \
+    examples/SimplePipeline/tests/testSimplePipeline.py \
     tests/testCorruptMemBasic.py                  \
     tests/testCorruptMemDouble.py                 \
     tests/testCorruptMemDoubleOverlap.py          \
@@ -97,10 +101,11 @@ nobase_sst_HEADERS =                        \
     Components/PMDataRegistry.h             \
     Components/FaultInjManagerAPI.h        \
     Components/InterceptionAgentAPI.h      \
-    Components/PingPongAgent.h
+    Components/PipelineStateRegistry.h     \
+    Components/PingPongAgent.h             \
+    examples/SimplePipeline/SimplePipelineExample.h
 
 libcarcosa_la_LDFLAGS = -module -avoid-version
-libcarcosa_la_LIBADD =
 
 AM_CPPFLAGS += $(HMC_FLAG)
 install-exec-hook:
