@@ -27,6 +27,8 @@ libcarcosa_la_SOURCES =                     \
     injectors/dropFlipFaultInjector.h       \
     injectors/portModuleStateGate.cc        \
     injectors/portModuleStateGate.h         \
+    injectors/portModuleMitigatedGate.cc    \
+    injectors/portModuleMitigatedGate.h     \
     injectors/faultInjectorMemH.cc          \
     injectors/faultInjectorMemH.h           \
     faultlogic/faultBase.cc                 \
@@ -74,6 +76,7 @@ EXTRA_DIST = \
     tests/testFourStateRegistry.py                \
     tests/testFourStateRegistryGated.py           \
     examples/SimplePipeline/tests/testSimplePipeline.py \
+    examples/SimplePipeline/tests/testPortModuleMitigatedGate.py \
     examples/SimplePipeline/tests/testPortModuleStateGate.py \
     tests/testCorruptMemBasic.py                  \
     tests/testCorruptMemDouble.py                 \
@@ -100,6 +103,7 @@ nobase_sst_HEADERS =                        \
     injectors/randomFlipFaultInjector.h     \
     injectors/dropFlipFaultInjector.h       \
     injectors/portModuleStateGate.h         \
+    injectors/portModuleMitigatedGate.h     \
     injectors/faultInjectorMemH.h           \
     faultlogic/faultBase.h                  \
     faultlogic/stuckAtFault.h               \
