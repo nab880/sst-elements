@@ -13,8 +13,11 @@
 #include "sst/elements/carcosa/faultlogic/randomFlipFault.h"
 #include "sst/core/params.h"
 
+#include "sst/elements/memHierarchy/memEvent.h"
+
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <set>
 #include <sstream>
 #include <string>
@@ -96,6 +99,23 @@ PortModuleStateGate::PortModuleStateGate(Params& params)
                  : nullptr;
 
     buildPredicates(params);
+
+    // Per-event address filter. Turns on whenever the caller supplied region_ids
+    // or region_names (keeping the gate focused on the published regions
+    // they already care about). Can be force-disabled via match_event_address=0
+    // for callers that want the pre-existing state-only semantics.
+    const std::string regionIdsStr   = params.find<std::string>("region_ids", "");
+    const std::string regionNamesStr = params.find<std::string>("region_names", "");
+    const bool hasAnyRegionFilter    = !regionIdsStr.empty() || !regionNamesStr.empty();
+    const bool wantAddressMatch      = params.find<bool>("match_event_address", hasAnyRegionFilter);
+    matchEventAddress_ = hasAnyRegionFilter && wantAddressMatch;
+    if (matchEventAddress_) {
+        addrFilterIds_   = parseIntSet(regionIdsStr);
+        addrFilterNames_ = parseStringSet(regionNamesStr);
+    }
+
+    logInjections_ = params.find<bool>("log_injections", true);
+
     setValidInstallation(params, SEND_RECEIVE_VALID);
 
 #ifdef __SST_DEBUG_OUTPUT__
@@ -170,6 +190,32 @@ PortModuleStateGate::matchesState(const PipelineStateBase& state) const
 }
 
 bool
+PortModuleStateGate::eventMatchesAddressFilter(Event* ev) const
+{
+    if (!matchEventAddress_) return true;
+
+    auto* mem_ev = dynamic_cast<SST::MemHierarchy::MemEvent*>(ev);
+    if (!mem_ev) {
+        // Non-MemEvents can't be meaningfully address-filtered; let them
+        // through so drop-mode gates on generic Event subtypes still work.
+        return true;
+    }
+
+    const PipelineStateBase* state =
+        PipelineStateRegistry<PipelineStateBase>::get(stateKey_);
+    if (!state) return false;
+
+    const uint64_t addr = mem_ev->getBaseAddr();
+    for (const auto& r : state->regions) {
+        if (!r.valid) continue;
+        if (addr < r.base || addr >= r.base + r.size) continue;
+        if (!addrFilterIds_.empty() && addrFilterIds_.count(r.id) > 0)       return true;
+        if (!addrFilterNames_.empty() && addrFilterNames_.count(r.name) > 0) return true;
+    }
+    return false;
+}
+
+bool
 PortModuleStateGate::doInjection()
 {
     triggered_ = {{false, false}};
@@ -205,10 +251,45 @@ PortModuleStateGate::doInjection()
 void
 PortModuleStateGate::executeFaults(Event*& ev)
 {
+    // Per-event address filter runs AFTER doInjection() has already rolled the
+    // dice. We intentionally consume the RNG draw even for filtered events so
+    // that RNG traces remain stable regardless of which events the program
+    // happens to send outside the protected region; only the side effect
+    // (flipping bytes / cancelling delivery) is suppressed.
+    if ((triggered_[0] || triggered_[1]) && !eventMatchesAddressFilter(ev)) {
+        ++events_address_filtered_;
+        triggered_ = {{false, false}};
+        // Rate-limited visibility: emit a running status every 64 filtered
+        // events so operators can see the address filter is live even when
+        // the program never touches an MMIO address.
+        if (logInjections_ && (events_address_filtered_ & 0x3F) == 0) {
+            uint64_t addr = 0;
+            if (auto* mem_ev = dynamic_cast<SST::MemHierarchy::MemEvent*>(ev)) {
+                addr = mem_ev->getBaseAddr();
+            }
+            out_->output(
+                "carcosa.PortModuleStateGate[%s] FILTER addr=0x%lx "
+                "matched=%lu flipped=%lu dropped=%lu filtered=%lu\n",
+                stateKey_.c_str(),
+                static_cast<unsigned long>(addr),
+                static_cast<unsigned long>(events_matched_),
+                static_cast<unsigned long>(events_flipped_),
+                static_cast<unsigned long>(events_dropped_),
+                static_cast<unsigned long>(events_address_filtered_));
+        }
+        return;
+    }
+
     if (triggered_[0]) {
-        // Generic drop: just tell the dispatcher to cancel delivery. Works
-        // for any Event subtype. The cancel_ pointer is populated by
-        // FaultInjectorBase::interceptHandler when installed on Receive.
+        ++events_matched_;
+        ++events_dropped_;
+        // Grab MMIO address (if any) before cancelling delivery, so the log
+        // line shows what we actually skipped.
+        uint64_t addr = 0;
+        if (auto* mem_ev = dynamic_cast<SST::MemHierarchy::MemEvent*>(ev)) {
+            addr = mem_ev->getBaseAddr();
+        }
+
         if (getInstallDirection() == installDirection::Receive) {
             this->cancelDelivery();
         } else {
@@ -218,14 +299,50 @@ PortModuleStateGate::executeFaults(Event*& ev)
                         "(the framework doesn't expose a cancel hook on Send).\n");
 #endif
         }
+
+        if (logInjections_) {
+            out_->output(
+                "carcosa.PortModuleStateGate[%s] DROP addr=0x%lx matched=%lu flipped=%lu dropped=%lu filtered=%lu\n",
+                stateKey_.c_str(),
+                static_cast<unsigned long>(addr),
+                static_cast<unsigned long>(events_matched_),
+                static_cast<unsigned long>(events_flipped_),
+                static_cast<unsigned long>(events_dropped_),
+                static_cast<unsigned long>(events_address_filtered_));
+        }
         return;
     }
+
     if (triggered_[1]) {
         if (!fault[1]) {
             out_->fatal(CALL_INFO_LONG, -1,
                         "PortModuleStateGate: flip triggered but fault[1] is null "
                         "(fault_mode must be 'flip' or 'drop_flip' to enable flip).\n");
         }
+
+        uint64_t addr = 0;
+        size_t   payload_sz = 0;
+        if (auto* mem_ev = dynamic_cast<SST::MemHierarchy::MemEvent*>(ev)) {
+            addr       = mem_ev->getBaseAddr();
+            payload_sz = mem_ev->getPayload().size();
+        }
+
         fault[1]->faultLogic(ev);
+
+        ++events_matched_;
+        ++events_flipped_;
+
+        if (logInjections_) {
+            out_->output(
+                "carcosa.PortModuleStateGate[%s] FLIP addr=0x%lx payload=%zu "
+                "matched=%lu flipped=%lu dropped=%lu filtered=%lu\n",
+                stateKey_.c_str(),
+                static_cast<unsigned long>(addr),
+                payload_sz,
+                static_cast<unsigned long>(events_matched_),
+                static_cast<unsigned long>(events_flipped_),
+                static_cast<unsigned long>(events_dropped_),
+                static_cast<unsigned long>(events_address_filtered_));
+        }
     }
 }
