@@ -109,9 +109,11 @@
 
 #define HYADES_COMMAND_OFFSET  0
 #define HYADES_STATUS_OFFSET   4
+#define HYADES_SEQ_LEN_OFFSET  8
 
 #define HYADES_COMMAND  ((volatile int *)(HYADES_MMIO_BASE + HYADES_COMMAND_OFFSET))
 #define HYADES_STATUS   ((volatile int *)(HYADES_MMIO_BASE + HYADES_STATUS_OFFSET))
+#define HYADES_SEQ_LEN  ((volatile int *)(HYADES_MMIO_BASE + HYADES_SEQ_LEN_OFFSET))
 
 /**
  * Read next command index from Hali. Value < 0 means exit.
@@ -125,6 +127,11 @@ static inline int hyades_command_read(void) {
  */
 static inline void hyades_status_write(int idx) {
     *HYADES_STATUS = idx;
+}
+
+/* Read the VLA agent's current sequence length (decoder-only helper; KV-cache write index). */
+static inline int hyades_seq_len_read(void) {
+    return *HYADES_SEQ_LEN;
 }
 
 /**
