@@ -18,6 +18,7 @@
 #include <sst/core/output.h>
 #include <sst/elements/carcosa/Components/HaliEvent.h>
 #include <sst/elements/carcosa/Components/InterceptionAgentAPI.h>
+#include <sst/elements/carcosa/Components/PipelineStateRegistry.h>
 #include <sst/elements/memHierarchy/memEvent.h>
 #include <climits>
 #include <cstdint>
@@ -42,6 +43,8 @@ public:
 
     SST_ELI_DOCUMENT_PARAMS(
         {"max_seq_len", "KV-cache capacity in the RISC-V binary (must match MAX_SEQ_LEN). Fatal if the CPU agent ever announces a seqlen > max_seq_len on the ring.", "64"},
+        {"state_key",   "Optional. PipelineStateRegistry<PipelineStateBase> key this agent publishes into so PortModuleStateGate can read currentKernel/pipelineCycle/regions[]. Empty disables publishing.", ""},
+        {"region_size", "Size in bytes of the published MMIO control region (regions[0]).", "4096"},
         {"verbose",     "Enable verbose output.", "false"}
     )
 
@@ -56,9 +59,16 @@ public:
     void setInterceptBase(uint64_t base) override;
     void setHighlink(SST::Link* highlink) override;
 
+    /** Sentinel written into PipelineStateBase::currentKernel between
+     *  kernel dispatches on this GPU follower. Distinct from VLA's
+     *  IDLE FSM state (== 0). */
+    static constexpr int KERNEL_IDLE = -1;
+
 private:
     void sendCommandResponse(SST::MemHierarchy::MemEvent* request, int value);
     void sendWriteAck(SST::MemHierarchy::MemEvent* ev);
+    void publishKernel(int kernel);
+    void publishMmioRegion();
 
     SST::Output* out_;
     SST::Link* highlink_ = nullptr;
@@ -70,6 +80,12 @@ private:
     int maxSeqLen_ = 64;
     SST::MemHierarchy::MemEvent* pendingCommandRead_ = nullptr;
     bool verbose_ = false;
+
+    std::string stateKey_;
+    uint64_t    regionSize_ = 4096;
+    // GPU has no FSM; advance pipelineCycle locally each time we finish an
+    // ACTUATE kernel (== end of a full CPU/GPU pipeline iteration).
+    int gpuPipelineCycle_ = 0;
 
     struct KernelRecord {
         std::string core;

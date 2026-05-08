@@ -19,6 +19,7 @@
 #include <sst/core/output.h>
 #include <sst/elements/carcosa/Components/HaliEvent.h>
 #include <sst/elements/carcosa/Components/InterceptionAgentAPI.h>
+#include <sst/elements/carcosa/Components/PipelineStateRegistry.h>
 #include <sst/elements/carcosa/VLA-Example/Components/VLAAgent.h>
 #include <sst/elements/memHierarchy/memEvent.h>
 #include <climits>
@@ -58,6 +59,8 @@ public:
         {"scale_dim",       "Embedding/projection dim scale: target_dim / baseline_dim.",  "1.0"},
         {"scale_vocab",     "Vocabulary scale for LM_HEAD/DETOK_DEQUANT: target_vocab / baseline_vocab.", "1.0"},
         {"baseline_seq_len","Reference sequence length the baseline_ps were calibrated at; denominator for runtime-sequence kernels. Defaults to initial_seq_len if unset.", "0"},
+        {"state_key",       "Optional. PipelineStateRegistry<PipelineStateBase> key this agent publishes into so PortModuleStateGate can read currentKernel/pipelineCycle/regions[]. Empty disables publishing.", ""},
+        {"region_size",     "Size in bytes of the published MMIO control region (regions[0]).", "4096"},
         {"verbose",         "Enable verbose output.",                        "false"}
     )
 
@@ -72,6 +75,10 @@ public:
     void setInterceptBase(uint64_t base) override;
     void setHighlink(SST::Link* highlink) override;
 
+    /** Sentinel written into PipelineStateBase::currentKernel between
+     *  kernel dispatches. Distinct from VLA's IDLE FSM state (== 0). */
+    static constexpr int KERNEL_IDLE = -1;
+
 private:
     void handleDelayComplete(SST::Event* ev);
     void checkBothDone();
@@ -80,6 +87,8 @@ private:
     void sendWriteAck(SST::MemHierarchy::MemEvent* ev);
     void dispatchToGpu();
     uint64_t computeScaledDelay(int kernelId);
+    void publishKernel(int kernel);
+    void publishMmioRegion();
 
     SST::Output* out_;
     SST::Link* highlink_ = nullptr;
@@ -104,6 +113,9 @@ private:
     bool     legacyScaling_ = false;
 
     bool delayPending_ = false;
+
+    std::string stateKey_;
+    uint64_t    regionSize_ = 4096;
 
     struct KernelRecord {
         std::string core;

@@ -19,6 +19,7 @@
 #include <sst/core/output.h>
 #include <sst/elements/carcosa/Components/HaliEvent.h>
 #include <sst/elements/carcosa/Components/InterceptionAgentAPI.h>
+#include <sst/elements/carcosa/Components/PipelineStateRegistry.h>
 #include <sst/elements/carcosa/VLA-Example/Components/VLAAgent.h>
 #include <sst/elements/memHierarchy/memEvent.h>
 #include <climits>
@@ -51,6 +52,8 @@ public:
         {"scale_vocab",     "Vocabulary scale for LM_HEAD/DETOK_DEQUANT.",                "1.0"},
         {"baseline_seq_len","Reference sequence length the baseline_ps were calibrated at; denominator for runtime-sequence kernels.", "228"},
         {"max_seq_len",     "KV-cache capacity in the stub/real binary (MAX_SEQ_LEN). Fatal if the CPU delay agent ever announces a seqlen > max_seq_len on the ring.", "64"},
+        {"state_key",       "Optional. PipelineStateRegistry<PipelineStateBase> key this agent publishes into so PortModuleStateGate can read currentKernel/pipelineCycle/regions[]. Empty disables publishing.", ""},
+        {"region_size",     "Size in bytes of the published MMIO control region (regions[0]).", "4096"},
         {"verbose",         "Enable verbose output.",                             "false"}
     )
 
@@ -65,11 +68,17 @@ public:
     void setInterceptBase(uint64_t base) override;
     void setHighlink(SST::Link* highlink) override;
 
+    /** Sentinel written into PipelineStateBase::currentKernel between
+     *  kernel dispatches. Distinct from VLA's IDLE FSM state (== 0). */
+    static constexpr int KERNEL_IDLE = -1;
+
 private:
     void handleDelayComplete(SST::Event* ev);
     void sendCommandResponse(SST::MemHierarchy::MemEvent* request, int value);
     void sendWriteAck(SST::MemHierarchy::MemEvent* ev);
     uint64_t computeScaledDelay(int kernelId);
+    void publishKernel(int kernel);
+    void publishMmioRegion();
 
     SST::Output* out_;
     SST::Link* highlink_ = nullptr;
@@ -91,6 +100,11 @@ private:
     int      baselineSeqLen_ = 228;
     bool     legacyScaling_ = false;
     bool delayPending_ = false;
+
+    std::string stateKey_;
+    uint64_t    regionSize_ = 4096;
+    // GPU has no FSM; advance pipelineCycle each completed ACTUATE.
+    int gpuPipelineCycle_ = 0;
 
     struct KernelRecord {
         std::string core;

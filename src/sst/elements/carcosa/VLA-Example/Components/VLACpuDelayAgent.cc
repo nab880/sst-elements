@@ -43,6 +43,9 @@ VLACpuDelayAgent::VLACpuDelayAgent(ComponentId_t id, Params& params)
     baselineSeqLen_ = params.find<int>("baseline_seq_len", 0);
     if (baselineSeqLen_ <= 0) baselineSeqLen_ = cfg.initialSeqLen;
 
+    stateKey_   = params.find<std::string>("state_key", "");
+    regionSize_ = params.find<uint64_t>("region_size", 4096);
+
     // Legacy single-factor path is used only when the user migrated no per-dim
     // scale and set scale_factor to something non-trivial. Defaults (everything
     // 1.0) go through the new path and produce factor=1.0 -> bit-identical.
@@ -121,6 +124,7 @@ bool VLACpuDelayAgent::handleInterceptedEvent(MemEvent* ev, Link* highlink)
             selfLink_->send(static_cast<SimTime_t>(delayPs), nullptr);
         } else {
             recordKernelEnd();
+            publishKernel(KERNEL_IDLE);
             localDone_ = true;
             if (verbose_)
                 out_->output("VLACpuDelayAgent: local done (0 delay) state %d\n",
@@ -138,6 +142,7 @@ void VLACpuDelayAgent::handleDelayComplete(Event* ev)
     delete ev;
     delayPending_ = false;
     recordKernelEnd();
+    publishKernel(KERNEL_IDLE);
     localDone_ = true;
     if (verbose_)
         out_->output("VLACpuDelayAgent: local done (after delay) state %d\n",
@@ -162,6 +167,14 @@ void VLACpuDelayAgent::agentSetup()
 
     fsm_.validatePeakSeqLen(out_, "VLACpuDelayAgent");
 
+    if (!stateKey_.empty()) {
+        PipelineStateBase* s =
+            PipelineStateRegistry<PipelineStateBase>::getOrCreate(stateKey_);
+        s->currentKernel = KERNEL_IDLE;
+        s->pipelineCycle = 0;
+        publishMmioRegion();
+    }
+
     if (verbose_) {
         const auto& cfg = fsm_.config();
         if (legacyScaling_) {
@@ -185,8 +198,34 @@ void VLACpuDelayAgent::agentSetup()
 }
 
 void VLACpuDelayAgent::setRingLink(Link* leftLink)  { leftHaliLink_ = leftLink; }
-void VLACpuDelayAgent::setInterceptBase(uint64_t b)  { controlAddrBase_ = b; }
+void VLACpuDelayAgent::setInterceptBase(uint64_t b)  {
+    controlAddrBase_ = b;
+    if (!stateKey_.empty()) publishMmioRegion();
+}
 void VLACpuDelayAgent::setHighlink(Link* h)          { highlink_ = h; }
+
+void VLACpuDelayAgent::publishMmioRegion()
+{
+    PipelineStateBase* s =
+        PipelineStateRegistry<PipelineStateBase>::getMutable(stateKey_);
+    if (!s) return;
+    s->ensureRegionSlot(0);
+    s->regions[0].base  = controlAddrBase_;
+    s->regions[0].size  = regionSize_;
+    s->regions[0].valid = regionSize_ > 0;
+    s->regions[0].id    = 0;
+    s->regions[0].name  = "mmio_control";
+}
+
+void VLACpuDelayAgent::publishKernel(int kernel)
+{
+    if (stateKey_.empty()) return;
+    PipelineStateBase* s =
+        PipelineStateRegistry<PipelineStateBase>::getMutable(stateKey_);
+    if (!s) s = PipelineStateRegistry<PipelineStateBase>::getOrCreate(stateKey_);
+    s->currentKernel = kernel;
+    s->pipelineCycle = fsm_.pipelineCycles();
+}
 
 void VLACpuDelayAgent::checkBothDone()
 {
@@ -256,6 +295,8 @@ uint64_t VLACpuDelayAgent::computeScaledDelay(int kernelId)
 
 void VLACpuDelayAgent::sendCommandResponse(MemEvent* request, int value)
 {
+    publishKernel(value >= 0 ? value : KERNEL_IDLE);
+
     MemEvent* resp = request->makeResponse();
     std::vector<uint8_t> data(4);
     std::memcpy(data.data(), &value, sizeof(int));

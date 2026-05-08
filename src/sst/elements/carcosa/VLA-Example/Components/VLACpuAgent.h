@@ -18,6 +18,7 @@
 #include <sst/core/output.h>
 #include <sst/elements/carcosa/Components/HaliEvent.h>
 #include <sst/elements/carcosa/Components/InterceptionAgentAPI.h>
+#include <sst/elements/carcosa/Components/PipelineStateRegistry.h>
 #include <sst/elements/carcosa/VLA-Example/Components/VLAAgent.h>
 #include <sst/elements/memHierarchy/memEvent.h>
 #include <climits>
@@ -50,6 +51,8 @@ public:
         {"num_action_tokens","Hard cap on decode tokens per pipeline cycle.", "1"},
         {"decode_exit_prob","Per-LM_HEAD Bernoulli probability of terminating the decode loop early (EOS-like). 0.0 disables. Range [0.0, 1.0].", "0.0"},
         {"rng_seed",        "Seed for the decode early-exit RNG. Only consumed when decode_exit_prob > 0.", "12345"},
+        {"state_key",       "Optional. PipelineStateRegistry<PipelineStateBase> key this agent publishes into so PortModuleStateGate (or any consumer) can read currentKernel/pipelineCycle/regions[]. Empty disables publishing.", ""},
+        {"region_size",     "Size in bytes of the published MMIO control region (regions[0]).", "4096"},
         {"verbose",         "Enable verbose output.",                        "false"}
     )
 
@@ -64,12 +67,19 @@ public:
     void setInterceptBase(uint64_t base) override;
     void setHighlink(SST::Link* highlink) override;
 
+    /** Sentinel written into PipelineStateBase::currentKernel when the
+     *  CPU is between kernels (status-write received, no kernel dispatched
+     *  yet). Distinct from VLA's IDLE FSM state (== 0). */
+    static constexpr int KERNEL_IDLE = -1;
+
 private:
     void checkBothDone();
     void advanceFSM();
     void sendCommandResponse(SST::MemHierarchy::MemEvent* request, int value);
     void sendWriteAck(SST::MemHierarchy::MemEvent* ev);
     void dispatchToGpu();
+    void publishKernel(int kernel);
+    void publishMmioRegion();
 
     SST::Output* out_;
     SST::Link* highlink_ = nullptr;
@@ -83,6 +93,9 @@ private:
     bool localDone_ = false;
     SST::MemHierarchy::MemEvent* pendingCommandRead_ = nullptr;
     bool verbose_ = false;
+
+    std::string stateKey_;
+    uint64_t    regionSize_ = 4096;
 
     struct KernelRecord {
         std::string core;

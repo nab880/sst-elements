@@ -33,6 +33,9 @@ VLAAgent::VLAAgent(ComponentId_t id, Params& params)
 
     hyadesRole_ = params.find<int>("hyades_role", 0);
     verbose_ = params.find<bool>("verbose", false);
+
+    stateKey_   = params.find<std::string>("state_key", "");
+    regionSize_ = params.find<uint64_t>("region_size", 4096);
 }
 
 VLAAgent::~VLAAgent()
@@ -65,6 +68,7 @@ bool VLAAgent::handleInterceptedEvent(MemEvent* ev, Link* highlink)
     }
     if (offset == 0x0004 && (ev->getCmd() == Command::Write || ev->getCmd() == Command::GetX)) {
         sendWriteAck(ev);
+        publishKernel(KERNEL_IDLE);
         advanceFSM();
         return true;
     }
@@ -76,16 +80,49 @@ void VLAAgent::agentSetup()
     fsm_.reset();
     fsm_.validatePeakSeqLen(out_, "VLAAgent");
 
+    if (!stateKey_.empty()) {
+        PipelineStateBase* s =
+            PipelineStateRegistry<PipelineStateBase>::getOrCreate(stateKey_);
+        s->currentKernel = KERNEL_IDLE;
+        s->pipelineCycle = 0;
+        publishMmioRegion();
+    }
+
     if (verbose_) {
         const auto& cfg = fsm_.config();
-        out_->output("VLAAgent: setup num_vit_layers=%d num_llm_layers=%d max_cycles=%d initial_seq_len=%d max_seq_len=%d hyades_role=%d\n",
-                    cfg.numViTLayers, cfg.numLLMLayers, cfg.maxCycles, cfg.initialSeqLen, cfg.maxSeqLen, hyadesRole_);
+        out_->output("VLAAgent: setup num_vit_layers=%d num_llm_layers=%d max_cycles=%d initial_seq_len=%d max_seq_len=%d hyades_role=%d state_key=%s\n",
+                    cfg.numViTLayers, cfg.numLLMLayers, cfg.maxCycles, cfg.initialSeqLen, cfg.maxSeqLen, hyadesRole_,
+                    stateKey_.empty() ? "<unset>" : stateKey_.c_str());
     }
 }
 
 void VLAAgent::setInterceptBase(uint64_t base)
 {
     controlAddrBase_ = base;
+    if (!stateKey_.empty()) publishMmioRegion();
+}
+
+void VLAAgent::publishMmioRegion()
+{
+    PipelineStateBase* s =
+        PipelineStateRegistry<PipelineStateBase>::getMutable(stateKey_);
+    if (!s) return;
+    s->ensureRegionSlot(0);
+    s->regions[0].base  = controlAddrBase_;
+    s->regions[0].size  = regionSize_;
+    s->regions[0].valid = regionSize_ > 0;
+    s->regions[0].id    = 0;
+    s->regions[0].name  = "mmio_control";
+}
+
+void VLAAgent::publishKernel(int kernel)
+{
+    if (stateKey_.empty()) return;
+    PipelineStateBase* s =
+        PipelineStateRegistry<PipelineStateBase>::getMutable(stateKey_);
+    if (!s) s = PipelineStateRegistry<PipelineStateBase>::getOrCreate(stateKey_);
+    s->currentKernel = kernel;
+    s->pipelineCycle = fsm_.pipelineCycles();
 }
 
 void VLAAgent::setHighlink(Link* highlink)
@@ -105,6 +142,10 @@ void VLAAgent::advanceFSM()
 
 void VLAAgent::sendCommandResponse(MemEvent* request, int value)
 {
+    // Publish before sending so any PortModule on the lowlink already sees the
+    // updated currentKernel by the time the CPU's first handler memop arrives.
+    publishKernel(value >= 0 ? value : KERNEL_IDLE);
+
     MemEvent* resp = request->makeResponse();
     std::vector<uint8_t> data(4);
     std::memcpy(data.data(), &value, sizeof(int));

@@ -16,8 +16,10 @@ VLAGpuAgent::VLAGpuAgent(ComponentId_t id, Params& params)
     : InterceptionAgentAPI(id, params)
 {
     out_ = new Output("", 1, 0, Output::STDOUT);
-    maxSeqLen_ = params.find<int>("max_seq_len", 64);
-    verbose_ = params.find<bool>("verbose", false);
+    maxSeqLen_   = params.find<int>("max_seq_len", 64);
+    verbose_     = params.find<bool>("verbose", false);
+    stateKey_    = params.find<std::string>("state_key", "");
+    regionSize_  = params.find<uint64_t>("region_size", 4096);
 }
 
 VLAGpuAgent::~VLAGpuAgent()
@@ -56,7 +58,11 @@ bool VLAGpuAgent::handleInterceptedEvent(MemEvent* ev, Link* highlink)
     if (offset == 0x0004 &&
         (ev->getCmd() == Command::Write || ev->getCmd() == Command::GetX)) {
         sendWriteAck(ev);
+        // Bump the local pipelineCycle the moment the GPU finishes an ACTUATE
+        // kernel; matches the CPU FSM's pipelineCycles_ post-ACTUATE bump.
+        if (activeKernelId_ == ACTUATE) gpuPipelineCycle_++;
         recordKernelEnd();
+        publishKernel(KERNEL_IDLE);
         if (verbose_)
             out_->output("VLAGpuAgent: core done, sending done to CPU agent\n");
         if (leftHaliLink_)
@@ -110,9 +116,19 @@ void VLAGpuAgent::agentSetup()
 {
     nextCommand_ = 0;
     seqLen_ = 0;
+    gpuPipelineCycle_ = 0;
+
+    if (!stateKey_.empty()) {
+        PipelineStateBase* s =
+            PipelineStateRegistry<PipelineStateBase>::getOrCreate(stateKey_);
+        s->currentKernel = KERNEL_IDLE;
+        s->pipelineCycle = 0;
+        publishMmioRegion();
+    }
 
     if (verbose_)
-        out_->output("VLAGpuAgent: setup (initial cmd = IDLE)\n");
+        out_->output("VLAGpuAgent: setup (initial cmd = IDLE) state_key=%s\n",
+                     stateKey_.empty() ? "<unset>" : stateKey_.c_str());
 
     if (pendingCommandRead_) {
         activeKernelId_ = nextCommand_;
@@ -124,11 +140,39 @@ void VLAGpuAgent::agentSetup()
 }
 
 void VLAGpuAgent::setRingLink(Link* leftLink)  { leftHaliLink_ = leftLink; }
-void VLAGpuAgent::setInterceptBase(uint64_t b)  { controlAddrBase_ = b; }
+void VLAGpuAgent::setInterceptBase(uint64_t b)  {
+    controlAddrBase_ = b;
+    if (!stateKey_.empty()) publishMmioRegion();
+}
 void VLAGpuAgent::setHighlink(Link* h)          { highlink_ = h; }
+
+void VLAGpuAgent::publishMmioRegion()
+{
+    PipelineStateBase* s =
+        PipelineStateRegistry<PipelineStateBase>::getMutable(stateKey_);
+    if (!s) return;
+    s->ensureRegionSlot(0);
+    s->regions[0].base  = controlAddrBase_;
+    s->regions[0].size  = regionSize_;
+    s->regions[0].valid = regionSize_ > 0;
+    s->regions[0].id    = 0;
+    s->regions[0].name  = "mmio_control";
+}
+
+void VLAGpuAgent::publishKernel(int kernel)
+{
+    if (stateKey_.empty()) return;
+    PipelineStateBase* s =
+        PipelineStateRegistry<PipelineStateBase>::getMutable(stateKey_);
+    if (!s) s = PipelineStateRegistry<PipelineStateBase>::getOrCreate(stateKey_);
+    s->currentKernel = kernel;
+    s->pipelineCycle = gpuPipelineCycle_;
+}
 
 void VLAGpuAgent::sendCommandResponse(MemEvent* request, int value)
 {
+    publishKernel(value >= 0 ? value : KERNEL_IDLE);
+
     MemEvent* resp = request->makeResponse();
     std::vector<uint8_t> data(4);
     std::memcpy(data.data(), &value, sizeof(int));

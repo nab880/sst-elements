@@ -24,6 +24,8 @@ VLAGpuDelayAgent::VLAGpuDelayAgent(ComponentId_t id, Params& params)
     scaleVocab_     = params.find<double>("scale_vocab",  1.0);
     baselineSeqLen_ = params.find<int>("baseline_seq_len", 228);
     maxSeqLen_      = params.find<int>("max_seq_len",      64);
+    stateKey_       = params.find<std::string>("state_key", "");
+    regionSize_     = params.find<uint64_t>("region_size", 4096);
 
     bool anyPerDim = (scaleSeq_ != 1.0) || (scaleDim_ != 1.0) || (scaleVocab_ != 1.0);
     legacyScaling_ = !anyPerDim && (scaleFactor_ != 1.0);
@@ -97,7 +99,9 @@ bool VLAGpuDelayAgent::handleInterceptedEvent(MemEvent* ev, Link* highlink)
             delayPending_ = true;
             selfLink_->send(static_cast<SimTime_t>(delayPs), nullptr);
         } else {
+            if (activeKernelId_ == ACTUATE) gpuPipelineCycle_++;
             recordKernelEnd();
+            publishKernel(KERNEL_IDLE);
             if (verbose_)
                 out_->output("VLAGpuDelayAgent: core done (0 delay), sending done\n");
             if (leftHaliLink_)
@@ -113,7 +117,9 @@ void VLAGpuDelayAgent::handleDelayComplete(Event* ev)
 {
     delete ev;
     delayPending_ = false;
+    if (activeKernelId_ == ACTUATE) gpuPipelineCycle_++;
     recordKernelEnd();
+    publishKernel(KERNEL_IDLE);
     if (verbose_)
         out_->output("VLAGpuDelayAgent: core done (after delay), sending done\n");
     if (leftHaliLink_)
@@ -163,6 +169,15 @@ void VLAGpuDelayAgent::agentSetup()
 {
     nextCommand_ = 0;
     seqLen_ = 0;
+    gpuPipelineCycle_ = 0;
+
+    if (!stateKey_.empty()) {
+        PipelineStateBase* s =
+            PipelineStateRegistry<PipelineStateBase>::getOrCreate(stateKey_);
+        s->currentKernel = KERNEL_IDLE;
+        s->pipelineCycle = 0;
+        publishMmioRegion();
+    }
 
     if (verbose_) {
         if (legacyScaling_) {
@@ -184,8 +199,34 @@ void VLAGpuDelayAgent::agentSetup()
 }
 
 void VLAGpuDelayAgent::setRingLink(Link* leftLink)  { leftHaliLink_ = leftLink; }
-void VLAGpuDelayAgent::setInterceptBase(uint64_t b)  { controlAddrBase_ = b; }
+void VLAGpuDelayAgent::setInterceptBase(uint64_t b)  {
+    controlAddrBase_ = b;
+    if (!stateKey_.empty()) publishMmioRegion();
+}
 void VLAGpuDelayAgent::setHighlink(Link* h)          { highlink_ = h; }
+
+void VLAGpuDelayAgent::publishMmioRegion()
+{
+    PipelineStateBase* s =
+        PipelineStateRegistry<PipelineStateBase>::getMutable(stateKey_);
+    if (!s) return;
+    s->ensureRegionSlot(0);
+    s->regions[0].base  = controlAddrBase_;
+    s->regions[0].size  = regionSize_;
+    s->regions[0].valid = regionSize_ > 0;
+    s->regions[0].id    = 0;
+    s->regions[0].name  = "mmio_control";
+}
+
+void VLAGpuDelayAgent::publishKernel(int kernel)
+{
+    if (stateKey_.empty()) return;
+    PipelineStateBase* s =
+        PipelineStateRegistry<PipelineStateBase>::getMutable(stateKey_);
+    if (!s) s = PipelineStateRegistry<PipelineStateBase>::getOrCreate(stateKey_);
+    s->currentKernel = kernel;
+    s->pipelineCycle = gpuPipelineCycle_;
+}
 
 uint64_t VLAGpuDelayAgent::computeScaledDelay(int kernelId)
 {
@@ -207,6 +248,8 @@ uint64_t VLAGpuDelayAgent::computeScaledDelay(int kernelId)
 
 void VLAGpuDelayAgent::sendCommandResponse(MemEvent* request, int value)
 {
+    publishKernel(value >= 0 ? value : KERNEL_IDLE);
+
     MemEvent* resp = request->makeResponse();
     std::vector<uint8_t> data(4);
     std::memcpy(data.data(), &value, sizeof(int));

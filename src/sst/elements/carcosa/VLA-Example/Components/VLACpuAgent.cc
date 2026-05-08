@@ -34,6 +34,8 @@ VLACpuAgent::VLACpuAgent(ComponentId_t id, Params& params)
     }
 
     verbose_      = params.find<bool>("verbose", false);
+    stateKey_     = params.find<std::string>("state_key", "");
+    regionSize_   = params.find<uint64_t>("region_size", 4096);
 }
 
 VLACpuAgent::~VLACpuAgent()
@@ -73,6 +75,7 @@ bool VLACpuAgent::handleInterceptedEvent(MemEvent* ev, Link* highlink)
         (ev->getCmd() == Command::Write || ev->getCmd() == Command::GetX)) {
         sendWriteAck(ev);
         recordKernelEnd();
+        publishKernel(KERNEL_IDLE);
         localDone_ = true;
         if (verbose_)
             out_->output("VLACpuAgent: local done for state %d\n",
@@ -101,10 +104,19 @@ void VLACpuAgent::agentSetup()
 
     fsm_.validatePeakSeqLen(out_, "VLACpuAgent");
 
+    if (!stateKey_.empty()) {
+        PipelineStateBase* s =
+            PipelineStateRegistry<PipelineStateBase>::getOrCreate(stateKey_);
+        s->currentKernel = KERNEL_IDLE;
+        s->pipelineCycle = 0;
+        publishMmioRegion();
+    }
+
     if (verbose_) {
         const auto& cfg = fsm_.config();
-        out_->output("VLACpuAgent: setup vit=%d llm=%d max_cycles=%d init_seq=%d max_seq=%d\n",
-                     cfg.numViTLayers, cfg.numLLMLayers, cfg.maxCycles, cfg.initialSeqLen, cfg.maxSeqLen);
+        out_->output("VLACpuAgent: setup vit=%d llm=%d max_cycles=%d init_seq=%d max_seq=%d state_key=%s\n",
+                     cfg.numViTLayers, cfg.numLLMLayers, cfg.maxCycles, cfg.initialSeqLen, cfg.maxSeqLen,
+                     stateKey_.empty() ? "<unset>" : stateKey_.c_str());
     }
 
     if (pendingCommandRead_) {
@@ -115,8 +127,34 @@ void VLACpuAgent::agentSetup()
 }
 
 void VLACpuAgent::setRingLink(Link* leftLink)  { leftHaliLink_ = leftLink; }
-void VLACpuAgent::setInterceptBase(uint64_t b)  { controlAddrBase_ = b; }
+void VLACpuAgent::setInterceptBase(uint64_t b)  {
+    controlAddrBase_ = b;
+    if (!stateKey_.empty()) publishMmioRegion();
+}
 void VLACpuAgent::setHighlink(Link* h)          { highlink_ = h; }
+
+void VLACpuAgent::publishMmioRegion()
+{
+    PipelineStateBase* s =
+        PipelineStateRegistry<PipelineStateBase>::getMutable(stateKey_);
+    if (!s) return;
+    s->ensureRegionSlot(0);
+    s->regions[0].base  = controlAddrBase_;
+    s->regions[0].size  = regionSize_;
+    s->regions[0].valid = regionSize_ > 0;
+    s->regions[0].id    = 0;
+    s->regions[0].name  = "mmio_control";
+}
+
+void VLACpuAgent::publishKernel(int kernel)
+{
+    if (stateKey_.empty()) return;
+    PipelineStateBase* s =
+        PipelineStateRegistry<PipelineStateBase>::getMutable(stateKey_);
+    if (!s) s = PipelineStateRegistry<PipelineStateBase>::getOrCreate(stateKey_);
+    s->currentKernel = kernel;
+    s->pipelineCycle = fsm_.pipelineCycles();
+}
 
 void VLACpuAgent::checkBothDone()
 {
@@ -164,6 +202,8 @@ void VLACpuAgent::advanceFSM()
 
 void VLACpuAgent::sendCommandResponse(MemEvent* request, int value)
 {
+    publishKernel(value >= 0 ? value : KERNEL_IDLE);
+
     MemEvent* resp = request->makeResponse();
     std::vector<uint8_t> data(4);
     std::memcpy(data.data(), &value, sizeof(int));

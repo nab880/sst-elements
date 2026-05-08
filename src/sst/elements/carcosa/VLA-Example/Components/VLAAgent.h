@@ -4,10 +4,12 @@
 #include <sst/core/link.h>
 #include <sst/core/output.h>
 #include <sst/elements/carcosa/Components/InterceptionAgentAPI.h>
+#include <sst/elements/carcosa/Components/PipelineStateRegistry.h>
 #include <sst/elements/carcosa/VLA-Example/Components/vla-fsm.h>
 #include <sst/elements/memHierarchy/memEvent.h>
 #include <climits>
 #include <cstdint>
+#include <string>
 
 namespace SST {
 namespace Carcosa {
@@ -34,6 +36,8 @@ public:
         {"num_action_tokens", "Hard cap on decode tokens per pipeline cycle (GEMV_PROJECT->KV_CACHE_ATTN->DECODE_FFN->LM_HEAD loop iterations).", "1"},
         {"decode_exit_prob", "Per-LM_HEAD Bernoulli probability of terminating the decode loop early (EOS-like). 0.0 disables the coin flip (deterministic num_action_tokens). Range [0.0, 1.0].", "0.0"},
         {"rng_seed", "Seed for the decode early-exit RNG (Marsaglia W seed, with Z fixed at 11). Only consumed when decode_exit_prob > 0.", "12345"},
+        {"state_key", "Optional. PipelineStateRegistry<PipelineStateBase> key this agent publishes into so PortModuleStateGate (or any consumer) can read currentKernel/pipelineCycle/regions[]. Empty disables publishing.", ""},
+        {"region_size", "Size in bytes of the published MMIO control region (regions[0]).", "4096"},
         {"verbose", "Enable verbose output.", "false"}
     )
 
@@ -46,10 +50,17 @@ public:
     void setInterceptBase(uint64_t base) override;
     void setHighlink(SST::Link* highlink) override;
 
+    /** Sentinel written into PipelineStateBase::currentKernel when the
+     *  CPU is between kernels (status-write received, no kernel dispatched
+     *  yet). Distinct from VLA's IDLE FSM state (== 0). */
+    static constexpr int KERNEL_IDLE = -1;
+
 private:
     void advanceFSM();
     void sendCommandResponse(SST::MemHierarchy::MemEvent* request, int value);
     void sendWriteAck(SST::MemHierarchy::MemEvent* ev);
+    void publishKernel(int kernel);
+    void publishMmioRegion();
 
     SST::Output* out_;
     SST::Link* highlink_ = nullptr;
@@ -57,6 +68,9 @@ private:
     VlaFsm fsm_;
     int hyadesRole_ = 0;
     bool verbose_ = false;
+
+    std::string stateKey_;
+    uint64_t    regionSize_ = 4096;
 };
 
 } // namespace Carcosa
