@@ -82,6 +82,17 @@ vla_max_seq_len       = os.getenv("VLA_MAX_SEQ_LEN", "64")
 vla_num_action_tokens = os.getenv("VLA_NUM_ACTION_TOKENS", "1")
 vla_scale_factor      = os.getenv("VLA_SCALE_FACTOR", "1.0")
 
+# ECC pressure-point knobs (defaults make EccGuard a transparent pass-through).
+vla_state_key             = os.getenv("VLA_STATE_KEY", "cpu0_vla")
+ecc_scheme                = os.getenv("ECC_SCHEME", "none")
+ecc_ber                   = os.getenv("ECC_BER", "0.0")
+ecc_correctable_latency_ps = os.getenv("ECC_CORRECTABLE_LATENCY_PS", "0")
+ecc_due_latency_ps        = os.getenv("ECC_DUE_LATENCY_PS", "0")
+ecc_escape_latency_ps     = os.getenv("ECC_ESCAPE_LATENCY_PS", "0")
+ecc_kernel_policy         = os.getenv("ECC_KERNEL_POLICY", "")
+ecc_seed                  = os.getenv("ECC_SEED", "0")
+ecc_apply_on_responses_only = os.getenv("ECC_RESPONSES_ONLY", "true")
+
 default_zeros = ",".join(["0"] * 18)
 
 def _baseline_env(new_var, legacy_var):
@@ -315,9 +326,28 @@ link_dir_2_rtr = sst.Link("link_dir_2_rtr")
 link_dir_2_rtr.connect((comp_chiprtr, "port" + str(numCpus), "1ns"),
                        (dirNIC, "port", "1ns"))
 link_dir_2_rtr.setNoCut()
-link_dir_2_mem = sst.Link("link_dir_2_mem")
-link_dir_2_mem.connect((dirctrl, "lowlink", "1ns"), (memctrl, "highlink", "1ns"))
-link_dir_2_mem.setNoCut()
+
+ecc_guard = sst.Component("ecc_guard", "Carcosa.EccGuard")
+ecc_guard.addParams({
+    "verbose":                 "false",
+    "state_key":               vla_state_key,
+    "ecc_scheme":              ecc_scheme,
+    "ber":                     ecc_ber,
+    "correctable_latency_ps":  ecc_correctable_latency_ps,
+    "due_latency_ps":          ecc_due_latency_ps,
+    "escape_latency_ps":       ecc_escape_latency_ps,
+    "kernel_policy":           ecc_kernel_policy,
+    "apply_on_responses_only": ecc_apply_on_responses_only,
+    "seed":                    ecc_seed,
+})
+ecc_guard.enableAllStatistics()
+
+link_dir_2_ecc = sst.Link("link_dir_2_ecc")
+link_dir_2_ecc.connect((dirctrl, "lowlink", "1ns"), (ecc_guard, "highlink", "1ns"))
+link_dir_2_ecc.setNoCut()
+link_ecc_2_mem = sst.Link("link_ecc_2_mem")
+link_ecc_2_mem.connect((ecc_guard, "lowlink", "1ns"), (memctrl, "highlink", "1ns"))
+link_ecc_2_mem.setNoCut()
 link_os_cache_link = sst.Link("link_os_cache_link")
 link_os_cache_link.connect((node_os_mem_if, "lowlink", "1ns"),
                            (os_cache, "highlink", "1ns"))
@@ -336,6 +366,7 @@ cpuDelayAgentParams = {
     "num_action_tokens": vla_num_action_tokens,
     "baseline_ps":       vla_baseline_cpu_ps,
     "scale_factor":      vla_scale_factor,
+    "state_key":         vla_state_key,
     "verbose":           "true",
 }
 gpuDelayAgentParams = {

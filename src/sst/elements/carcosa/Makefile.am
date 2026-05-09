@@ -11,6 +11,10 @@ comp_LTLIBRARIES = libcarcosa.la
 libcarcosa_la_SOURCES =                     \
     Components/Hali.cc                      \
     Components/Hali.h                       \
+    Components/EccGuard.cc                  \
+    Components/EccGuard.h                   \
+    Components/EccScheme.h                  \
+    Components/EccPolicy.h                  \
     Components/FaultInjManager.cc           \
     Components/FaultInjManager.h            \
     injectors/faultInjectorBase.cc          \
@@ -133,6 +137,9 @@ nobase_sst_HEADERS =                        \
     faultlogic/randomFlipFault.h            \
     faultlogic/randomFlipMemHFault.h        \
     Components/PMDataRegistry.h             \
+    Components/EccScheme.h                  \
+    Components/EccPolicy.h                  \
+    Components/EccGuard.h                   \
     Components/FaultInjManagerAPI.h        \
     Components/InterceptionAgentAPI.h      \
     Components/PipelineStateRegistry.h     \
