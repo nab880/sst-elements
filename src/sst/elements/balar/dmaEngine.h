@@ -30,9 +30,7 @@ using namespace SST::MemHierarchy;
 
 namespace SST {
 namespace BalarComponent {
-/*
- * DMA Engine used in balar component
- */
+
 
 class DMAEngine : public SST::Component {
 public:
@@ -57,7 +55,7 @@ public:
     void finish() {};
     bool tick(SST::Cycle_t x);
 
-    /* DMA Registers */
+    
     enum DMA_DIR {
         SIM_TO_SST = 0,
         SST_TO_SIM,
@@ -76,23 +74,13 @@ public:
         DMA_ERR_INVALID,
     };
 
-    /**
-     * @brief DMA control and status registers
-     *        Host need to pass a struct like this in write request
-     *        to initiate a DMA transfer
-     *
-     *        Once the transfer is done, status field will be updated
-     *
-     */
+    
     struct DMAEngineControlRegisters {
         uint8_t * simulator_mem_addr;
         Addr sst_mem_addr;
         size_t data_size;
         // The bytes count to copy each time
         // Sample values are like 4B or 8B
-        // We will change the data_size and address
-        // each time we perform a copy in DMA
-        // Once the data_size is zero, we are done
         uint32_t transfer_size;
         // Use to track how many DMA requests are still waiting for mem response
         size_t ongoing_count;
@@ -108,7 +96,7 @@ public:
     typedef struct DMAEngineControlRegisters DMAEngineRequest_t;
 
 protected:
-    /* Handle DMA requests from Host and responses from mem system */
+    
     void handleEvent(StandardMem::Request* req);
 
     class DMAHandlers : public StandardMem::RequestHandler {
@@ -117,13 +105,7 @@ protected:
         DMAHandlers(DMAEngine* dma, SST::Output* out) : StandardMem::RequestHandler(out), dma(dma) {}
         virtual ~DMAHandlers() {}
 
-        /**
-         * @brief Pass in the simulator buffer address and size
-         *        Also the SST memspace address and size
-         *        Also the copy direction
-         *
-         * @param write
-         */
+        
         virtual void handle(StandardMem::Write* write) override;
 
         // Handlers for mem responses
@@ -134,35 +116,35 @@ protected:
         DMAEngine* dma;
     };
 
-    /* Received ongoing DMA request queue */
+    
     std::vector<std::pair<DMAEngineRequest_t *, StandardMem::Write*>> dma_requests;
 
-    /* Memory requests associating with an active DMA request */
+    
     std::map<StandardMem::Request::id_t, DMAEngineRequest_t *> memory_requests;
 
 private:
-    /* Output */
+    
     Output out;
 
-    /* MMIO config */
+    
     Addr mmio_addr;
     uint32_t mmio_size;
 
-    /* Command MMIO interface */
+    
     StandardMem* mmio_iface;
-    /* Memory access interface */
+    
     StandardMem* mem_iface;
 
-    /* Handlers */
+    
     DMAHandlers* handlers;
 
-    /* Save pending transfer and notify host once finishes */
+    
     StandardMem::Write* pending_transfer;
 
-    /* Convert DMA reg to string */
+    
     std::string dmaRegToString(DMAEngineControlRegisters* reg_ptr);
 
-    /* Debug -triggered by output.fatal() and/or SIGUSR2 */
+    
     virtual void emergencyShutdown() {};
 
 }; // end DMAEngine

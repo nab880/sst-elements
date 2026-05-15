@@ -37,4 +37,3 @@ class testcase_balar_simple(BalarTestCase):
     # @BalarTestCase.balar_gpuapp_unittest
     # def test_balar_vanadis_clang_rodinia_20_bfs_SampleGraph(self):
     #     self.balar_vanadis_clang_template("rodinia-2.0-bfs-SampleGraph")
-

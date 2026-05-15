@@ -17,10 +17,10 @@
 #if defined(__cplusplus)
 #define __dv(v) \
 		= v
-#else /* __cplusplus */
+#else 
 #define __dv(v)
-#endif /* __cplusplus */
-#endif /* !__dv */
+#endif 
+#endif 
 #include "balar_consts.h"
 
 extern "C"{
@@ -139,4 +139,3 @@ bool SST_gpgpusim_launch_blocking();
 }
 
 std::tuple<cudaError_t, size_t, unsigned> SST_cudaGetParamConfig(uint64_t hostFun, unsigned index);
-

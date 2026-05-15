@@ -156,4 +156,3 @@ class Builder:
 
         link = sst.Link( linkName )
         link.connect( (self.mmu, name, "1ns"), (niclink, "mmu", "1ns") )
-

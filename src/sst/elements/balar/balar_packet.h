@@ -117,7 +117,6 @@ namespace BalarComponent {
         enum CudaAPI_t cuda_call_id;
         // 0: means pointer data are not in SST mem space
         // 1: means data are in SST mem space, which is the
-        //    case for Vanadis as all data are in SST mem space
         bool isSSTmem;
         union {
             struct {

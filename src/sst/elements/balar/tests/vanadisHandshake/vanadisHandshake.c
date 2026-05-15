@@ -95,7 +95,6 @@ int main( int argc, char* argv[] ) {
         }
     }
     // DEBUG: END
-
     // Configure the kernel and arguments
     dim3 gridSize, blockSize;
     blockSize.x = 256;

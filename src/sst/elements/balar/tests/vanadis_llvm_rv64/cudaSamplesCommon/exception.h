@@ -25,7 +25,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-/* CUda UTility Library */
+
 #ifndef COMMON_EXCEPTION_H_
 #define COMMON_EXCEPTION_H_
 
@@ -43,17 +43,11 @@ class Exception : public Std_Exception {
  public:
   //! @brief Static construction interface
   //! @return Alwayss throws ( Located_Exception<Exception>)
-  //! @param file file in which the Exception occurs
-  //! @param line line in which the Exception occurs
-  //! @param detailed details on the code fragment causing the Exception
   static void throw_it(const char *file, const int line,
                        const char *detailed = "-");
 
   //! Static construction interface
   //! @return Alwayss throws ( Located_Exception<Exception>)
-  //! @param file file in which the Exception occurs
-  //! @param line line in which the Exception occurs
-  //! @param detailed details on the code fragment causing the Exception
   static void throw_it(const char *file, const int line,
                        const std::string &detailed);
 
@@ -71,8 +65,6 @@ class Exception : public Std_Exception {
 
 ////////////////////////////////////////////////////////////////////////////////
 //! Exception handler function for arbitrary exceptions
-//! @param ex exception to handle
-////////////////////////////////////////////////////////////////////////////////
 template <class Exception_Typ>
 inline void handleException(const Exception_Typ &ex) {
   std::cerr << ex.what() << std::endl;
@@ -81,7 +73,6 @@ inline void handleException(const Exception_Typ &ex) {
 }
 
 //! Convenience macros
-
 //! Exception caused by dynamic program behavior, e.g. file does not exist
 #define RUNTIME_EXCEPTION(msg) \
   Exception<std::runtime_error>::throw_it(__FILE__, __LINE__, msg)
@@ -96,15 +87,11 @@ inline void handleException(const Exception_Typ &ex) {
 
 ////////////////////////////////////////////////////////////////////////////////
 //! Implementation
-
-// includes, system
 #include <sstream>
 
 ////////////////////////////////////////////////////////////////////////////////
 //! Static construction interface.
-//! @param  Exception causing code fragment (file and line) and detailed infos.
-////////////////////////////////////////////////////////////////////////////////
-/*static*/ template <class Std_Exception>
+ template <class Std_Exception>
 void Exception<Std_Exception>::throw_it(const char *file, const int line,
                                         const char *detailed) {
   std::stringstream s;
@@ -119,9 +106,7 @@ void Exception<Std_Exception>::throw_it(const char *file, const int line,
 
 ////////////////////////////////////////////////////////////////////////////////
 //! Static construction interface.
-//! @param  Exception causing code fragment (file and line) and detailed infos.
-////////////////////////////////////////////////////////////////////////////////
-/*static*/ template <class Std_Exception>
+ template <class Std_Exception>
 void Exception<Std_Exception>::throw_it(const char *file, const int line,
                                         const std::string &msg) {
   throw_it(file, line, msg.c_str());
@@ -129,20 +114,16 @@ void Exception<Std_Exception>::throw_it(const char *file, const int line,
 
 ////////////////////////////////////////////////////////////////////////////////
 //! Constructor, default (private).
-////////////////////////////////////////////////////////////////////////////////
 template <class Std_Exception>
 Exception<Std_Exception>::Exception() : Std_Exception("Unknown Exception.\n") {}
 
 ////////////////////////////////////////////////////////////////////////////////
 //! Constructor, standard (private).
-//! String returned by what().
-////////////////////////////////////////////////////////////////////////////////
 template <class Std_Exception>
 Exception<Std_Exception>::Exception(const std::string &s) : Std_Exception(s) {}
 
 ////////////////////////////////////////////////////////////////////////////////
 //! Destructor
-////////////////////////////////////////////////////////////////////////////////
 template <class Std_Exception>
 Exception<Std_Exception>::~Exception() throw() {}
 

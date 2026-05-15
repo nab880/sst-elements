@@ -74,13 +74,7 @@ void DMAEngine::setup() {
     mem_iface->setup();
 }
 
-/**
- * @brief Process through the DMA request queue
- *
- * @param x
- * @return true
- * @return false
- */
+
 bool DMAEngine::tick(SST::Cycle_t x) {
     // Iterate through the DMA request queue to handle each request
     out.verbose(_INFO_, "%s: DMA request queue size: %ld\n", this->getName().c_str(), dma_requests.size());
@@ -90,9 +84,7 @@ bool DMAEngine::tick(SST::Cycle_t x) {
 
         if (dma_req->status == DMA_BUSY) {
             // Perform DMA copy
-
             // Make a request
-            // Handle unaligned case
             uint32_t actual_transfer_size = dma_req->transfer_size;
             if (dma_req->data_size < dma_req->transfer_size)
                 actual_transfer_size = dma_req->data_size;
@@ -156,8 +148,6 @@ bool DMAEngine::tick(SST::Cycle_t x) {
         } else if (dma_req->status == DMA_WAITING_DONE) {
             // This means we have issued all required memory requests
             // Just waiting for those DMA memory transfers to be done
-            // The DONE flag will be marked in writeresp handler if the data size is 0
-            // and the ongoing count is 0
         } else if (dma_req->status == DMA_DONE) {
             // Clean up request and send response back
             delete dma_req;
@@ -190,11 +180,7 @@ void DMAEngine::handleEvent(StandardMem::Request* req) {
     req->handle(handlers);
 }
 
-/**
- * @brief Handle write to the DMA control and status registers
- *
- * @param write
- */
+
 void DMAEngine::DMAHandlers::handle(StandardMem::Write* write) {
     // Extract the DMA request from data payload
     DMAEngineControlRegisters* reg_ptr = decode_balar_packet<DMAEngineControlRegisters>(&(write->data));
@@ -233,11 +219,7 @@ void DMAEngine::DMAHandlers::handle(StandardMem::Write* write) {
     // We will send the response back once DMA transfer is done in `tick` function
 }
 
-/**
- * @brief Handle response from copying sst mem space data to simulator mem space
- *
- * @param read
- */
+
 void DMAEngine::DMAHandlers::handle(StandardMem::ReadResp* resp) {
     dma->out.verbose(_INFO_, "%s: readresp from SST mem space, reading vaddr: %lx paddr: %lx size: %ld!\n", dma->getName().c_str(), resp->vAddr, resp->pAddr, resp->size);
 
@@ -274,11 +256,7 @@ void DMAEngine::DMAHandlers::handle(StandardMem::ReadResp* resp) {
     delete resp;
 }
 
-/**
- * @brief Handle response from copying simulator mem space data to sst mem space
- *
- * @param write
- */
+
 void DMAEngine::DMAHandlers::handle(StandardMem::WriteResp* resp) {
     dma->out.verbose(_INFO_, "%s: writeresp from SST mem space, reading vaddr: %lx paddr: %lx size: %ld!\n", dma->getName().c_str(), resp->vAddr, resp->pAddr, resp->size);
 
@@ -304,12 +282,7 @@ void DMAEngine::DMAHandlers::handle(StandardMem::WriteResp* resp) {
     delete resp;
 }
 
-/**
- * @brief Convert DMA request into a string with hex address range
- *
- * @param reg_ptr
- * @return std::string
- */
+
 std::string DMAEngine::dmaRegToString(DMAEngineControlRegisters* reg_ptr) {
     std::stringstream ss;
     std::string dir = reg_ptr->dir == SIM_TO_SST ? "<<" : "<<";

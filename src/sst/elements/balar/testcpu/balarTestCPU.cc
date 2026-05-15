@@ -32,7 +32,7 @@ using namespace SST::MemHierarchy;
 using namespace SST::BalarComponent;
 using namespace SST::Statistics;
 
-/* Constructor */
+
 BalarTestCPU::BalarTestCPU(ComponentId_t id, Params& params) :
     Component(id) {
 
@@ -56,7 +56,7 @@ BalarTestCPU::BalarTestCPU(ComponentId_t id, Params& params) :
     clockHandler = new Clock::Handler<BalarTestCPU,&BalarTestCPU::clockTic>(this);
     clockTC = registerClock( clockFreq, clockHandler );
 
-    /* Find the interface the user provided in the Python and load it*/
+    
     memory = loadUserSubComponent<StandardMem>("memory", ComponentInfo::SHARE_NONE, clockTC, new StandardMem::Handler<BalarTestCPU,&BalarTestCPU::handleEvent>(this));
 
     if (!memory) {
@@ -143,13 +143,7 @@ void BalarTestCPU::emergencyShutdown() {
     }
 }
 
-/**
- * @brief Helper function to create a write request to scratch memory
- *        address with the passed in packet as payload
- *
- * @param pack : CUDA call config packet
- * @return Interfaces::StandardMem::Request*
- */
+
 Interfaces::StandardMem::Request*
     BalarTestCPU::createGPUReqFromPacket(BalarCudaCallPacket_t pack) {
     vector<uint8_t> *buffer = encode_balar_packet<BalarCudaCallPacket_t>(&pack);
@@ -162,34 +156,7 @@ Interfaces::StandardMem::Request*
     return req;
 }
 
-/**
- * @brief mmio event handler for a read we issued
- *        Check the pending map for the request corresponding to the response
- *        If the resp does not have a corresponding pending request, we abort
- *        If the req exist, we identify the type of the request.
- *          "Start_CUDA_ret":
- *              This request is previously sent to ask balar to prepare the
- *              return packet.
- *
- *              Since it has received a resp, it means now we are ready
- *              to read the packet in the address returned in this read.
- *
- *              Thus we create a read request with the returned
- *              value as address. Then we send it to memory and
- *              mark this request as "Read_CUDA_ret_packet"
- *          "Read_CUDA_ret_packet":
- *              This request is sent to read CUDA return packet.
- *              Since we have received response, we have gotten the
- *              return value of last cuda call.
- *
- *              We will output the return value if it exists. Also
- *              if the previous call is a memcpy, we compare the data
- *              with the actual data from real GPU trace and output byte
- *              correct ratio.
- *        Remove that request after finish handling it.
- *
- * @param resp
- */
+
 void BalarTestCPU::mmioHandlers::handle(Interfaces::StandardMem::ReadResp* resp) {
     // Find the request from pending requests map
     std::map<uint64_t, std::pair<SimTime_t,std::string>>::iterator i = cpu->requests.find(resp->getID());
@@ -201,15 +168,9 @@ void BalarTestCPU::mmioHandlers::handle(Interfaces::StandardMem::ReadResp* resp)
 
         // Need to identify whether this response is a
         //  write to the MMIO address
-        //  or to the scratch memory where we prepare the cuda packet
-        // Dispatcher here
         if (request_type.compare("Start_CUDA_ret") == 0) {
             // Balar has prepared the return packet by writing it to memory
             // pointed by the read paylod
-            // We now need to issue yet another read to actually read the balar
-            // return packet
-
-            // Prepare packet
             std::string cmdString = "Read_CUDA_ret_packet";
             uint64_t ret_pack_addr = dataToUInt64(&(resp->data));
             Interfaces::StandardMem::Request* req = new Interfaces::StandardMem::Read(ret_pack_addr, sizeof(BalarCudaCallReturnPacket_t));
@@ -291,32 +252,7 @@ void BalarTestCPU::mmioHandlers::handle(Interfaces::StandardMem::ReadResp* resp)
     delete resp;
 }
 
-/**
- * @brief mmio event handler for a write we issued
- *        Check the pending map for the request corresponding to the response
- *        If the resp does not have a corresponding pending request, we abort
- *        If the req exist, we identify the type of the request.
- *          "Prepare_CUDA_packet":
- *              This request is previously sent to store the CUDA packet to
- *              some place in memory so that BalarMMIO could access it
- *              later.
- *
- *              Since it has received a resp, it means now we are ready
- *              to let BalarMMIO initiate a CUDA call. Thus we create
- *              a write request to BalarMMIO mmio address and pass the
- *              scratch memory address we placed the packet.
- *
- *              Then we send it to balar and mark this request as
- *              "Start_CUDA_call"
- *          "Start_CUDA_call":
- *              This request is sent to initiate a CUDA call. Since it
- *              has received response, we should issue a read to
- *              balar mmio address to let it prepare the return packet
- *              in memory
- *        Remove that request after finish handling it.
- *
- * @param resp
- */
+
 void BalarTestCPU::mmioHandlers::handle(Interfaces::StandardMem::WriteResp* resp) {
     // Find the request from pending requests map
     std::map<uint64_t, std::pair<SimTime_t,std::string>>::iterator i = cpu->requests.find(resp->getID());
@@ -328,16 +264,9 @@ void BalarTestCPU::mmioHandlers::handle(Interfaces::StandardMem::WriteResp* resp
 
         // Need to identify whether this response is a
         //  write to the MMIO address
-        //  or to the scratch memory where we prepare the cuda packet
-        // Dispatcher here
         if (request_type.compare("Prepare_CUDA_packet") == 0) {
             // A response to a write of scratch memory address
             // where we store the cuda packet
-            // Now we are ready to issue a write to the MMIO
-            // address to notify the balarMMIO packet is ready
-
-            // Create the write request to balar address
-            // Store the scratch memory address to it
             vector<uint8_t> payload;
             UInt64ToData(cpu->scratchMemAddr, &payload);
             StandardMem::Request* req = new Interfaces::StandardMem::Write(cpu->gpuAddr, payload.size(), payload, false);
@@ -351,7 +280,6 @@ void BalarTestCPU::mmioHandlers::handle(Interfaces::StandardMem::WriteResp* resp
         } else if (request_type.compare("Start_CUDA_call") == 0) {
             // A response to a write which initiates the balarMMIO
             // We should now first send a read request to GPU to let it prepare the
-            // return packet.
             std::string cmdString = "Start_CUDA_ret";
             Interfaces::StandardMem::Request* req = new Interfaces::StandardMem::Read(cpu->gpuAddr, 8);
             cpu->requests[req->getID()] = std::make_pair(cpu->getCurrentSimTime(), cmdString);
@@ -366,14 +294,7 @@ void BalarTestCPU::mmioHandlers::handle(Interfaces::StandardMem::WriteResp* resp
     delete resp;
 }
 
-/**
- * @brief Construct a new BalarTestCPU::CudaAPITraceParser::CudaAPITraceParser object
- *
- * @param cpu               : BalarTestCPU object that used this parser
- * @param out               : SST Output object to log info
- * @param traceFile         : Path to the CUDA API trace file
- * @param cudaExecutable    : Path to the CUDA executable, which will be used by GPGPU-Sim
- */
+
 BalarTestCPU::CudaAPITraceParser::CudaAPITraceParser(BalarTestCPU* cpu, SST::Output* out, std::string& traceFile, std::string& cudaExecutable) {
     this->cpu = cpu;
     this->out = out;
@@ -406,12 +327,7 @@ BalarTestCPU::CudaAPITraceParser::CudaAPITraceParser(BalarTestCPU* cpu, SST::Out
     initReqs->push(req);
 }
 
-/**
- * @brief Receive next CUDA api call from the trace file
- *
- * @return Interfaces::StandardMem::Request*,
- *          a request that write a BalarCudaCallPacket_t to scratch memory place
- */
+
 Interfaces::StandardMem::Request* BalarTestCPU::CudaAPITraceParser::getNextCall() {
     Interfaces::StandardMem::Request* req;
     if (!initReqs->empty()) {   // Finish initialization first
@@ -431,7 +347,6 @@ Interfaces::StandardMem::Request* BalarTestCPU::CudaAPITraceParser::getNextCall(
 
             // Parse the trace
             // Before first colon: api type
-            // Search every colon for individual argument
             size_t firstColIdx = line.find(":");
             std::string cudaCallType = line.substr(0, firstColIdx);
             line = line.substr(firstColIdx + 1);
@@ -476,7 +391,6 @@ Interfaces::StandardMem::Request* BalarTestCPU::CudaAPITraceParser::getNextCall(
                 } else {
                     // Old pointer
                     // Impossible as current trace implementation
-                    // Every malloc will get a new pointer
                     CUdeviceptr* dptr = res->second;
 
                     // Prepare call pack
@@ -565,7 +479,6 @@ Interfaces::StandardMem::Request* BalarTestCPU::CudaAPITraceParser::getNextCall(
 
 
                 // Configure call, register function, set args, and then launch kernel
-
                 // Other request in sequence pack into the queue
                 BalarCudaCallPacket_t config_call_pack;
                 BalarCudaCallPacket_t set_arg_pack;
@@ -593,7 +506,6 @@ Interfaces::StandardMem::Request* BalarTestCPU::CudaAPITraceParser::getNextCall(
                 if(func_map->find(func_name) == func_map->end()) {
                     // New function, register first
                     // This map will growing thus will not have repeated
-                    // id
                     uint64_t func_id = func_map->size();
                     func_map->insert({func_name, func_id});
                     out->verbose(CALL_INFO, 2, 0, "Create pack to register function '%s' to device function '%s' with fatbinhandle: %d\n", func_name.c_str(), ptx_name.c_str(), fatCubinHandle);
@@ -641,7 +553,6 @@ Interfaces::StandardMem::Request* BalarTestCPU::CudaAPITraceParser::getNextCall(
 
                     // Get argument value
                     // Check if a device pointer first
-                    // if not, convert as value
                     if (arg_val.find("dptr") != std::string::npos) {
                         // A device pointer
                         auto it = dptr_map->find(arg_val);

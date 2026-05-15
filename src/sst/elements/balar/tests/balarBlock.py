@@ -313,5 +313,3 @@ class Builder():
 
         # mem_iface replaced by TLB, keep mmio_iface
         return dma_mem_if, balarTlb, balar_mmio_iface, dma_mmio_if
-
-
