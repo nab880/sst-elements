@@ -56,8 +56,8 @@ public:
         SST_ELI_ELEMENT_VERSION(1, 0, 0),
         "QEMU TCG-plugin-based CPU model: traces memory accesses from a "
         "guest binary and drives memHierarchy for cache/memory simulation. "
-        "Designed for RISC-V extended-ISA research (RVV, custom extensions); "
-        "works with any qemu-user-mode target.",
+        "Supports both QEMU user-mode (qemu-<arch>) and system-emulation "
+        "(qemu-system-<arch>) targets.",
         COMPONENT_CATEGORY_PROCESSOR
     )
 
@@ -91,9 +91,21 @@ public:
           "Path to the compiled SST QEMU plugin shared library "
           "(libqemu_sst_plugin.so).  If empty, the component looks for it "
           "in the directory returned by sst-config --prefix/libexec/.", "" },
+        { "system_mode",
+          "Set to 1 to run qemu-system-* (system emulation) instead of "
+          "qemu-user.  When enabled, the executable is passed as "
+          "'-kernel <path>' (or the loader set by system_mode_loader) and "
+          "qemu_args should include the machine/CPU flags.", "0" },
+        { "system_mode_loader",
+          "Flag inserted before the executable path in system mode. "
+          "Use '-kernel' (default) for ELF binaries loaded by the QEMU "
+          "multi-boot/kernel loader, or '-bios' for raw ROM images (e.g. "
+          "MIPS Malta raw binary written at the BIOS ROM region).",
+          "-kernel" },
         { "qemu_args",
-          "Space-separated extra QEMU arguments inserted before -plugin "
-          "(e.g. \"-L /opt/riscv/sysroot\" for a custom library path).",
+          "Space-separated extra QEMU arguments inserted before -plugin. "
+          "For user mode: e.g. \"-L /opt/riscv/sysroot\". "
+          "For system mode: e.g. \"-machine virt -nographic -bios none\".",
           "" },
         { "appargcount",
           "Number of arguments to pass to the guest binary.", "0" },
@@ -205,9 +217,15 @@ public:
         { "memmap%(memmap_count)d_end",
           "Inclusive end address of region N (decimal or 0x hex).", "0" },
         { "memmap%(memmap_count)d_type",
-          "Region type: 'memory' (forward to hierarchy) or "
-          "'filtered' (drop, count in filtered_reads/filtered_writes).",
-          "memory" }
+          "Region type: 'memory' (forward to hierarchy), "
+          "'filtered' (drop, count in filtered_reads/filtered_writes), or "
+          "'uart' (capture TX bytes — printed at simulation end as "
+          "\"UART[N]: ...\"; does not forward to hierarchy).",
+          "memory" },
+        { "memmap%(memmap_count)d_uart_tx_offset",
+          "For type='uart': byte offset of the TX data register within the "
+          "region (default 0 covers NS16550 THR, PL011 DR, SiFive txdata, "
+          "CMSDK DATA — all at offset 0 from their base).", "0" }
     )
 
     SST_ELI_DOCUMENT_PORTS(
@@ -309,6 +327,8 @@ private:
     // -----------------------------------------------------------------------
     // Configuration
     // -----------------------------------------------------------------------
+    bool        system_mode_;
+    std::string system_mode_loader_;
     uint32_t    vcpu_count_;
     std::string qemu_bin_;
     std::string qemu_plugin_;

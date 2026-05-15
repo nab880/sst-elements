@@ -108,6 +108,10 @@ void QuetzCore::finishCore() {
         "QuetzCore %" PRIu32 " finishing, %" PRIu32
         " transactions still pending.\n",
         core_id_, pending_count_);
+
+    if (!uart_tx_buf_.empty())
+        output_->output("UART[%" PRIu32 "]: %s\n",
+            core_id_, uart_tx_buf_.c_str());
 }
 
 // ---------------------------------------------------------------------------
@@ -194,15 +198,23 @@ void QuetzCore::processQueue() {
             return;
         }
 
-        // Filtered memory accesses are dropped before the stall check: they
+        // Filtered/UART accesses are dropped before the stall check: they
         // don't consume issue bandwidth, stall cycles, or pending slots.
         if ((cmd.cmd == QUETZ_CMD_READ || cmd.cmd == QUETZ_CMD_WRITE) &&
             isFiltered(cmd.addr))
         {
-            if (cmd.cmd == QUETZ_CMD_WRITE)
+            if (cmd.cmd == QUETZ_CMD_WRITE) {
+                // Capture byte written to a UART TX data register.
+                const MemRegion* r = findRegion(cmd.addr);
+                if (r && r->type == MemRegionType::UART) {
+                    uint64_t offset = cmd.addr - r->start;
+                    if (offset == r->uart_tx_offset && cmd.size >= 1)
+                        uart_tx_buf_ += static_cast<char>(cmd.data[0]);
+                }
                 stat_filtered_writes_->addData(1);
-            else
+            } else {
                 stat_filtered_reads_->addData(1);
+            }
             stat_insn_count_->addData(1);
             coreQ_.pop();
             inst_count_++;
@@ -294,12 +306,17 @@ uint32_t QuetzCore::slotsNeeded(uint64_t vaddr, uint32_t size) const {
 }
 
 // ---------------------------------------------------------------------------
-bool QuetzCore::isFiltered(uint64_t vaddr) const {
-    for (const auto& r : memmap_) {
+const MemRegion* QuetzCore::findRegion(uint64_t vaddr) const {
+    for (const auto& r : memmap_)
         if (vaddr >= r.start && vaddr <= r.end)
-            return r.filtered;
-    }
-    return false;
+            return &r;
+    return nullptr;
+}
+
+// ---------------------------------------------------------------------------
+bool QuetzCore::isFiltered(uint64_t vaddr) const {
+    const MemRegion* r = findRegion(vaddr);
+    return r && r->type != MemRegionType::MEMORY;
 }
 
 // ---------------------------------------------------------------------------
