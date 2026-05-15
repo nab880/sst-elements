@@ -2,9 +2,12 @@
 """
 testsuite_default_quetz.py — SST test harness for the Quetz element.
 
-Tests run the basic_quetz.py SDL file and compare deterministic statistics
-(instruction counts, request counts) against reference files:
+User-mode tests run basic_quetz.py and compare deterministic statistics
+against reference files:
   usermode/small/<testname>/sst.stdout.gold
+
+System-mode tests run basic_quetz_sysmode.py and compare against:
+  sysmode/small/<testname>/sst.stdout.gold
 
 Timing-sensitive statistics (latency accumulators, cycle counts) are excluded
 from comparison via the QuetzStatsFilter; only event-count statistics are
@@ -22,6 +25,7 @@ import os
 module_init = 0
 module_sema = threading.Semaphore()
 quetz_test_matrix = []
+quetz_sysmode_matrix = []
 
 updateFiles = False
 # updateFiles = True   # uncomment to regenerate gold files
@@ -29,7 +33,11 @@ updateFiles = False
 # ---------------------------------------------------------------------------
 # Filter: keep only " cpu." event-count lines; discard timing stats.
 # ---------------------------------------------------------------------------
-_TIMING_KEYWORDS = ("_latency", ".cycles.", "active_cycles", "stall_cycles")
+# instruction_count and no_ops are also excluded: they include idle NOP cycles
+# injected during QEMU startup and async-shutdown spin loops, making them
+# non-deterministic across environments and QEMU versions.
+_TIMING_KEYWORDS = ("_latency", ".cycles.", "active_cycles", "stall_cycles",
+                    "instruction_count", "no_ops")
 
 class QuetzStatsFilter(LineFilter):
     """Keep only deterministic event-count statistics from QuetzComponent."""
@@ -64,6 +72,68 @@ def build_quetz_test_matrix():
         quetz_test_matrix.append((testnum,) + t)
 
 build_quetz_test_matrix()
+
+
+# ---------------------------------------------------------------------------
+# System-mode test matrix
+# ---------------------------------------------------------------------------
+# Each entry:
+#   (testname, qemu_target, exe_rel, qemu_args, loader,
+#    ram_start, ram_end, memmaps, uart_echo_input, timeout_sec)
+#
+# memmaps is a list of (name, start, end, type) tuples.
+# uart_echo_input is None (no echo) or a bytes object to inject via stdin.
+# ---------------------------------------------------------------------------
+def build_quetz_sysmode_matrix():
+    global quetz_sysmode_matrix
+    quetz_sysmode_matrix = []
+
+    fw = "sysmode/firmware"
+
+    testlist = [
+        ("riscv64_virt_hello",
+         "qemu-system-riscv64",
+         f"{fw}/riscv_virt_hello",
+         "-machine virt -nographic -bios none",
+         "-kernel",
+         0x00000000, 0xFFFFFFFF,
+         [("sub_ram", 0x00000000, 0x7FFFFFFF, "filtered")],
+         None, 120),
+
+        ("uart_echo",
+         "qemu-system-riscv64",
+         f"{fw}/riscv_virt_uart_echo",
+         "-machine virt -nographic -bios none",
+         "-kernel",
+         0x00000000, 0xFFFFFFFF,
+         [("sub_ram", 0x00000000, 0x7FFFFFFF, "filtered")],
+         b"ABCDE", 120),
+
+        ("arm_m7_hello",
+         "qemu-system-arm",
+         f"{fw}/arm_m7_hello",
+         "-machine mps2-an500 -nographic "
+         "-semihosting-config enable=on,target=native",
+         "-kernel",
+         0x00000000, 0xFFFFFFFF,
+         [("periph", 0x40000000, 0xFFFFFFFF, "filtered")],
+         None, 120),
+
+        ("x86_hello",
+         "qemu-system-i386",
+         f"{fw}/x86_hello",
+         "-machine pc -nographic "
+         "-device isa-debug-exit,iobase=0x501,iosize=1",
+         "-kernel",
+         0x00000000, 0xFFFFFFFF,
+         [],
+         None, 120),
+    ]
+
+    for testnum, t in enumerate(testlist, start=1):
+        quetz_sysmode_matrix.append((testnum,) + t)
+
+build_quetz_sysmode_matrix()
 
 
 def gen_custom_name(testcase_func, param_num, param):
@@ -151,3 +221,113 @@ class testcase_quetz(SSTTestCase):
         else:
             log_testing_note(
                 "Quetz test {} has no gold file; did not compare".format(testname))
+
+
+# ---------------------------------------------------------------------------
+class testcase_quetz_sysmode(SSTTestCase):
+
+    def setUp(self):
+        super(type(self), self).setUp()
+
+    def tearDown(self):
+        super(type(self), self).tearDown()
+
+    # -------------------------------------------------------------------------
+    @parameterized.expand(quetz_sysmode_matrix, name_func=gen_custom_name)
+    def test_quetz_sysmode(self, testnum, testname, qemu_target, exe_rel,
+                           qemu_args, loader, ram_start, ram_end,
+                           memmaps, uart_echo_input, timeout_sec):
+        log_debug("Quetz sysmode test #{} ({}): qemu={}".format(
+            testnum, testname, qemu_target))
+        self._sysmode_test_template(
+            testnum, testname, qemu_target, exe_rel,
+            qemu_args, loader, ram_start, ram_end,
+            memmaps, uart_echo_input, timeout_sec)
+
+    # -------------------------------------------------------------------------
+    def _sysmode_test_template(self, testnum, testname, qemu_target, exe_rel,
+                                qemu_args, loader, ram_start, ram_end,
+                                memmaps, uart_echo_input, testtimeout=120):
+        test_path = self.get_testsuite_dir()   # .../quetz/tests/
+
+        sst_prefix  = sstsimulator_conf_get_value("SSTCore", "prefix",     str, "")
+        sst_bindir  = sstsimulator_conf_get_value("SSTCore", "bindir",     str, "")
+        sst_libexec = sstsimulator_conf_get_value("SSTCore", "libexecdir", str, "")
+
+        # For x86 tests, check system PATH too.
+        import shutil
+        qemu_bin = os.path.join(sst_bindir, qemu_target)
+        if not os.path.exists(qemu_bin):
+            found = shutil.which(qemu_target)
+            if found:
+                qemu_bin = found
+
+        exe_abs = os.path.normpath(os.path.join(test_path, exe_rel))
+
+        if not os.path.exists(qemu_bin):
+            self.skipTest("{} not found; skipping".format(qemu_target))
+        if not os.path.exists(exe_abs):
+            self.skipTest("firmware not found at {}; skipping".format(exe_abs))
+
+        outdir = os.path.join(self.get_test_output_run_dir(),
+                              "quetz_sysmode_tests", testname)
+        os.makedirs(outdir, exist_ok=True)
+
+        sdlfile     = os.path.join(test_path, "sysmode", "basic_quetz_sysmode.py")
+        test_label  = "test_quetz_sysmode_{}".format(testname)
+        sst_outfile = os.path.join(outdir, test_label + ".out")
+        sst_errfile = os.path.join(outdir, test_label + ".err")
+        mpifiles    = os.path.join(outdir, test_label + ".testfile")
+        ref_outfile = os.path.join(test_path, "sysmode", "small",
+                                   testname, "sst.stdout.gold")
+
+        # Write UART echo input to a temp file if needed.
+        stdin_file = ""
+        if uart_echo_input is not None:
+            stdin_path = os.path.join(outdir, "uart_stdin.bin")
+            with open(stdin_path, "wb") as f:
+                f.write(uart_echo_input)
+            stdin_file = stdin_path
+
+        os.environ["QUETZ_EXE"]         = exe_abs
+        os.environ["QUETZ_QEMU"]        = qemu_bin
+        os.environ["QUETZ_PLUGIN"]      = os.path.join(sst_libexec,
+                                                        "libqemu_sst_plugin.so")
+        os.environ["QUETZ_QEMU_ARGS"]   = qemu_args
+        os.environ["QUETZ_LOADER"]      = loader
+        os.environ["QUETZ_RAM_START"]   = str(ram_start)
+        os.environ["QUETZ_RAM_END"]     = str(ram_end)
+        os.environ["QUETZ_MEMMAP_COUNT"]= str(len(memmaps))
+        os.environ["SST_HOME"]          = sst_prefix
+        os.environ["QUETZ_STDIN_FILE"]  = stdin_file
+        os.environ["QUETZ_STDOUT_FILE"] = ""
+
+        for n, (name, start, end, rtype) in enumerate(memmaps):
+            os.environ[f"QUETZ_MEMMAP{n}_NAME"]  = name
+            os.environ[f"QUETZ_MEMMAP{n}_START"] = str(start)
+            os.environ[f"QUETZ_MEMMAP{n}_END"]   = str(end)
+            os.environ[f"QUETZ_MEMMAP{n}_TYPE"]  = rtype
+
+        self.run_sst(sdlfile, sst_outfile, sst_errfile,
+                     mpi_out_files=mpifiles,
+                     set_cwd=outdir,
+                     timeout_sec=testtimeout)
+
+        if os.path.exists(ref_outfile):
+            cmp_result = testing_compare_filtered_diff(
+                testname, sst_outfile, ref_outfile,
+                filters=[QuetzStatsFilter()])
+            if not cmp_result:
+                diffdata = testing_get_diff_data(testname)
+                log_failure(diffdata)
+                if updateFiles:
+                    import subprocess
+                    print("Updating gold file", sst_outfile, "->", ref_outfile)
+                    subprocess.call(["cp", sst_outfile, ref_outfile])
+            self.assertTrue(cmp_result,
+                "Quetz sysmode output {} does not match reference {}".format(
+                    sst_outfile, ref_outfile))
+        else:
+            log_testing_note(
+                "Quetz sysmode test {} has no gold file; did not compare".format(
+                    testname))
