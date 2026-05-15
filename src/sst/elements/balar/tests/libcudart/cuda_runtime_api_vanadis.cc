@@ -29,10 +29,10 @@ static const char *version = BALAR_CUDA_VERSION;
 #if !defined(__dv)
 #if defined(__cplusplus)
 #define __dv(v) = v
-#else /* __cplusplus */
+#else 
 #define __dv(v)
-#endif /* __cplusplus */
-#endif /* !__dv */
+#endif 
+#endif 
 
 extern "C" {
     #include <unistd.h>
@@ -46,7 +46,6 @@ extern "C" {
 
     // Map balar's address with some memory protection bits
     // Use inline syscall to avoid unexpected speculative
-    // loads to balar's address
     inline __attribute__((always_inline)) void __vanadisMapBalar(int prot) {
         // Default to restrict access til we make a cuda call
         __vanadisFence();
@@ -58,10 +57,6 @@ extern "C" {
         #endif
         // #ifdef SYS_mmap2
         //     g_balarBaseAddr = (Addr_t*) syscall(SYS_mmap2, 0, 0, prot, 0, -2000, 0);
-        // #else
-        //     g_balarBaseAddr = (Addr_t*) syscall(SYS_mmap, 0, 0, prot, 0, -2000, 0);
-        // #endif
-        // mmap
         asm volatile (
             "add sp, sp, -56\n\t" // Reserve some stack space for storing ecall regs
             "sd a0, 48(sp)\n\t"   // Save regs
@@ -488,7 +483,6 @@ __host__ cudaError_t CUDARTAPI cudaLaunchKernel(const void *hostFun,
         } else {
             // How to pass argument? All use the value[8]
             // as cudaSetupArgument will make a copy of its content
-            // so that GPGPU-Sim will know both the constant and pointer pass to the kernel
             uint8_t value[BALAR_CUDA_MAX_ARG_SIZE];
             if (ret.cudaparamconfig.size > BALAR_CUDA_MAX_ARG_SIZE) {
                 printf("CUDA function argument size(%d) exceeds %d bytes limit!\n", ret.cudaparamconfig.size, BALAR_CUDA_MAX_ARG_SIZE);
@@ -659,10 +653,6 @@ __host__ cudaError_t CUDARTAPI cudaMemset(void *mem, int c, size_t count) {
 
 // Weili: There might be an issue with passing deviceName directly.
 // As its value is a pointer in Vanadis memory space and this value
-// will be used to instantiate std::string.
-// Which should cause issue if that Vanadis's address is invalid
-// in simulator memory space.
-// So we use a fixed size buffer in the packet to pass by value
 void __cudaRegisterVar(
     void **fatCubinHandle,
     char *hostVar,           // pointer to...something
@@ -1240,7 +1230,6 @@ __host__ cudaError_t cudaHostUnregister(void *ptr) {
     printf("WARNING: cudaHostUnregister has not been implemented yet.");
     return cudaSuccess;
 }
-
 
 
 }

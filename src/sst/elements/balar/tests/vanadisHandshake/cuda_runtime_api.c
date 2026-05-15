@@ -84,7 +84,6 @@ cudaError_t cudaMemcpy(uint64_t dst, uint64_t src, uint64_t count, enum cudaMemc
 
     // Read from GPU will return the address to the cuda return packet
     // Make the memcpy sync with balar so that CPU will
-    // issue another write/read to balar only if the previous memcpy is done
     BalarCudaCallReturnPacket_t *response_packet_ptr;
 
     while (1) {
@@ -96,7 +95,6 @@ cudaError_t cudaMemcpy(uint64_t dst, uint64_t src, uint64_t count, enum cudaMemc
 
         // if (wait % 10 == 0) {
         //     printf("Waited %d times\n", wait);
-        // }
     }
     __sync_synchronize();
 

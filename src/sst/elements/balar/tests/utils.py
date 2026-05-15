@@ -61,7 +61,6 @@ def connect(name, c0, port0, c1, port1, latency):
     return link
 
 
-
 class Config:
     def __init__(self, cfgFile, **kwargs):
         cp = ConfigParser.ConfigParser()
@@ -421,10 +420,4 @@ class Config:
           "nRP" : 12,
           "nRAS" : 28,
             })
-
-
-
-
-
-
 

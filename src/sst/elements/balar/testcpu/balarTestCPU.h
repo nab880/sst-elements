@@ -46,7 +46,7 @@ using Req = SST::Interfaces::StandardMem::Request;
 
 class BalarTestCPU : public SST::Component {
 public:
-/* Element Library Info */
+
     SST_ELI_REGISTER_COMPONENT(BalarTestCPU, "balar", "BalarTestCPU", SST_ELI_ELEMENT_VERSION(1,0,0),
             "Simple demo CPU for testing balar", COMPONENT_CATEGORY_PROCESSOR)
 
@@ -65,10 +65,10 @@ public:
         {"correct_memD2H_ratio", "Ratio of correct/total memD2Hcpy bytes for each individual memD2Hcpy call", "count", 1},
     )
 
-    /* Slot for a memory interface. This must be user defined (aka defined in Python config) */
+    
     SST_ELI_DOCUMENT_SUBCOMPONENT_SLOTS( { "memory", "Interface to memory hierarchy", "SST::Interfaces::StandardMem" } )
 
-/* Begin class definition */
+
     BalarTestCPU(SST::ComponentId_t id, SST::Params& params);
     void init(unsigned int phase) override;
     void setup() override;
@@ -101,7 +101,6 @@ private:
 
     // Create a handler class here to handle incoming requests
     // Like the one for the balarMMIO
-    // In charge of initiate CUDA api calls
     class mmioHandlers : public Interfaces::StandardMem::RequestHandler {
         public:
             friend class BalarTestCPU;
@@ -110,7 +109,6 @@ private:
             virtual ~mmioHandlers() {}
             // Only need to handle read and write response
             // virtual void handle(StandardMem::Read* read) override;
-            // virtual void handle(StandardMem::Write* write) override;
             virtual void handle(Interfaces::StandardMem::ReadResp* resp) override;
             virtual void handle(Interfaces::StandardMem::WriteResp* resp) override;
             void UInt64ToData(uint64_t num, vector<uint8_t>* data) {
@@ -150,17 +148,10 @@ private:
             std::ifstream traceStream;
             std::queue<Interfaces::StandardMem::Request*>* initReqs;
 
-            /**
-             * @brief A map of pointers to device pointer
-             *
-             */
+            
             std::map<std::string, CUdeviceptr*>* dptr_map;
 
-            /**
-             * @brief A map of kernel function name and pointer
-             *        used for registering functions in GPGPUSIM
-             *
-             */
+            
             std::map<std::string, uint64_t>* func_map;
 
             unsigned fatCubinHandle;
@@ -170,4 +161,4 @@ private:
 
 }
 }
-#endif /* BALAR_BALAR_TEST_CPU_H */
+#endif 

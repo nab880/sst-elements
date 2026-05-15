@@ -269,21 +269,10 @@ inline bool getCmdLineArgumentString(const int argc, const char **argv,
 
 //////////////////////////////////////////////////////////////////////////////
 //! Find the path for a file assuming that
-//! files are found in the searchPath.
-//!
-//! @return the path if succeeded, otherwise 0
-//! @param filename         name of the file
-//! @param executable_path  optional absolute path of the executable
-//////////////////////////////////////////////////////////////////////////////
 inline char *sdkFindFilePath(const char *filename,
                              const char *executable_path) {
   // <executable_name> defines a variable that is replaced with the name of the
   // executable
-
-  // Typical relative search paths to locate needed companion files (e.g. sample
-  // input data, or JIT source files) The origin for the relative search may be
-  // the .exe file, a .bat file launching an .exe, a browser .exe launching the
-  // .exe or .bat, etc
   const char *searchPath[] = {
       "./",                                           // same dir
       "./data/",                                      // same dir

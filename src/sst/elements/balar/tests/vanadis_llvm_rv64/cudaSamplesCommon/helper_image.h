@@ -59,7 +59,6 @@ namespace helper_image_internal {
 const unsigned int PGMHeaderSize = 0x40;
 
 // types
-
 //! Data converter from unsigned char / unsigned byte to type T
 template <class T>
 struct ConverterFromUByte;
@@ -69,7 +68,6 @@ template <>
 struct ConverterFromUByte<unsigned char> {
   //! Conversion operator
   //! @return converted value
-  //! @param  val  value to convert
   float operator()(const unsigned char &val) {
     return static_cast<unsigned char>(val);
   }
@@ -80,7 +78,6 @@ template <>
 struct ConverterFromUByte<float> {
   //! Conversion operator
   //! @return converted value
-  //! @param  val  value to convert
   float operator()(const unsigned char &val) {
     return static_cast<float>(val) / 255.0f;
   }
@@ -95,7 +92,6 @@ template <>
 struct ConverterToUByte<unsigned char> {
   //! Conversion operator (essentially a passthru
   //! @return converted value
-  //! @param  val  value to convert
   unsigned char operator()(const unsigned char &val) { return val; }
 };
 
@@ -104,7 +100,6 @@ template <>
 struct ConverterToUByte<float> {
   //! Conversion operator
   //! @return converted value
-  //! @param  val  value to convert
   unsigned char operator()(const float &val) {
     return static_cast<unsigned char>(val * 255.0f);
   }
@@ -345,12 +340,6 @@ inline bool sdkSavePPM4ub(const char *file, unsigned char *data, unsigned int w,
 
 //////////////////////////////////////////////////////////////////////////////
 //! Read file \filename and return the data
-//! @return bool if reading the file succeeded, otherwise false
-//! @param filename name of the source file
-//! @param data  uninitialized pointer, returned initialized and pointing to
-//!        the data read
-//! @param len  number of data elements in data, -1 on error
-//////////////////////////////////////////////////////////////////////////////
 template <class T>
 inline bool sdkReadFile(const char *filename, T **data, unsigned int *len,
                         bool verbose) {
@@ -407,12 +396,6 @@ inline bool sdkReadFile(const char *filename, T **data, unsigned int *len,
 
 //////////////////////////////////////////////////////////////////////////////
 //! Read file \filename and return the data
-//! @return bool if reading the file succeeded, otherwise false
-//! @param filename name of the source file
-//! @param data  uninitialized pointer, returned initialized and pointing to
-//!        the data read
-//! @param len  number of data elements in data, -1 on error
-//////////////////////////////////////////////////////////////////////////////
 template <class T>
 inline bool sdkReadFileBlocks(const char *filename, T **data, unsigned int *len,
                               unsigned int block_num, unsigned int block_size,
@@ -444,12 +427,6 @@ inline bool sdkReadFileBlocks(const char *filename, T **data, unsigned int *len,
 
 //////////////////////////////////////////////////////////////////////////////
 //! Write a data file \filename
-//! @return true if writing the file succeeded, otherwise false
-//! @param filename name of the source file
-//! @param data  data to write
-//! @param len  number of data elements in data, -1 on error
-//! @param epsilon  epsilon for comparison
-//////////////////////////////////////////////////////////////////////////////
 template <class T, class S>
 inline bool sdkWriteFile(const char *filename, const T *data, unsigned int len,
                          const S epsilon, bool verbose, bool append = false) {
@@ -465,15 +442,7 @@ inline bool sdkWriteFile(const char *filename, const T *data, unsigned int len,
               << " for write/append." << std::endl;
   }
 
-  /*    } else {
-          std::fstream fh(filename, std::fstream::out);
-          if (verbose) {
-              std::cerr << "sdkWriteFile() : Open file " << filename << " for
-     write." << std::endl;
-          }
-      }
-  */
-
+  
   // check if filestream is valid
   if (!fh.good()) {
     if (verbose) {
@@ -508,12 +477,6 @@ inline bool sdkWriteFile(const char *filename, const T *data, unsigned int len,
 
 //////////////////////////////////////////////////////////////////////////////
 //! Compare two arrays of arbitrary type
-//! @return  true if \a reference and \a data are identical, otherwise false
-//! @param reference  timer_interface to the reference data / gold image
-//! @param data       handle to the computed data
-//! @param len        number of elements in reference and data
-//! @param epsilon    epsilon to use for the comparison
-//////////////////////////////////////////////////////////////////////////////
 template <class T, class S>
 inline bool compareData(const T *reference, const T *data,
                         const unsigned int len, const S epsilon,
@@ -561,13 +524,6 @@ inline bool compareData(const T *reference, const T *data,
 
 //////////////////////////////////////////////////////////////////////////////
 //! Compare two arrays of arbitrary type
-//! @return  true if \a reference and \a data are identical, otherwise false
-//! @param reference  handle to the reference data / gold image
-//! @param data       handle to the computed data
-//! @param len        number of elements in reference and data
-//! @param epsilon    epsilon to use for the comparison
-//! @param epsilon    threshold % of (# of bytes) for pass/fail
-//////////////////////////////////////////////////////////////////////////////
 template <class T, class S>
 inline bool compareDataAsFloatThreshold(const T *reference, const T *data,
                                         const unsigned int len, const S epsilon,

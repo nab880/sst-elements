@@ -49,9 +49,6 @@ using namespace SST::MemHierarchy;
 namespace SST {
 namespace BalarComponent {
 
-/*
- * Interface to GPGPU-Sim via MMIO
- */
 
 class BalarMMIO : public SST::Component {
 public:
@@ -93,16 +90,16 @@ public:
     uint32_t mmio_size;
 
 protected:
-    /* Handle event from MMIO interface */
+    
     void handleEvent(StandardMem::Request* req);
 
-    /* Handle DMA transfers */
+    
     void handleDMAEvent(StandardMem::Request* req);
 
-    /* Handle event from gpu cache */
+    
     void handleGPUCache(StandardMem::Request* req);
 
-    /* Handlers for command and data requests/responses on the two interfaces */
+    
     class BalarHandlers : public StandardMem::RequestHandler {
     public:
         friend class BalarMMIO;
@@ -126,17 +123,17 @@ protected:
         BalarMMIO* balar;
     };
 
-    /* Debug -triggered by output.fatal() and/or SIGUSR2 */
+    
     virtual void printStatus(Output &out);
 
-    /* Output */
+    
     Output out;
 
     Addr mmio_addr;
     BalarHandlers* handlers;
     Addr dma_addr;
 
-    /* Debug -triggered by output.fatal() and/or SIGUSR2 */
+    
     virtual void emergencyShutdown() {};
 
 private:
@@ -154,7 +151,6 @@ private:
 
     // Indicating that an API has been blocked from issuing
     // This should be marked for every CUDA API in GPGPU-Sim that
-    // would push an operation to its stream manager
     bool has_blocked_issue;
     // Indicating that an API has issued, but is blocking on completion
     bool has_blocked_response;
@@ -163,9 +159,6 @@ private:
 
     // A currently pending write and read
     // as we need readresp from reading the CUDA
-    // packet within SST memory
-    // As well as writeresp when we finish writing
-    // CUDA return packet
     StandardMem::Write* pending_write = nullptr;
     StandardMem::Read* pending_read = nullptr;
 
@@ -173,11 +166,6 @@ private:
     std::map<Interfaces::StandardMem::Request::id_t, std::tuple<SimTime_t, std::string, BalarCudaCallPacket_t*>> requests;
     // CUDA call packets with pending response (callback from GPGPU-Sim)
     // calls to different streams are stored in separate queue
-    // as within stream, order of calls should be preserved
-    // Particularly, default stream is map with key 0
-    // Packet are inserted into the queue on receiving the packet
-    // and are removed from the queue on receiving the corresponding callback
-    // TL;DR: This is a lightweight stream manager for CUDA API calls
     std::map<cudaStream_t, std::queue<BalarCudaCallPacket_t*>> pending_packets_per_stream;
     // CUDA Launch config stream stack
     std::stack<cudaStream_t> cudalaunch_stream_stack;
@@ -228,4 +216,4 @@ private:
 }
 
 
-#endif /*  BALAR_MMIO_H */
+#endif 

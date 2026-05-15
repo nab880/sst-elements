@@ -53,11 +53,11 @@ enum CudaAPI_t {
 
 enum cudaMemcpyKind
 {
-    cudaMemcpyHostToHost          =   0,      /**< Host   -> Host */
-    cudaMemcpyHostToDevice        =   1,      /**< Host   -> Device */
-    cudaMemcpyDeviceToHost        =   2,      /**< Device -> Host */
-    cudaMemcpyDeviceToDevice      =   3,      /**< Device -> Device */
-    cudaMemcpyDefault             =   4       /**< Direction of the transfer is inferred from the pointer values. Requires unified virtual addressing */
+    cudaMemcpyHostToHost          =   0,      
+    cudaMemcpyHostToDevice        =   1,      
+    cudaMemcpyDeviceToHost        =   2,      
+    cudaMemcpyDeviceToDevice      =   3,      
+    cudaMemcpyDefault             =   4       
 };
 
 enum cudaError
@@ -118,7 +118,6 @@ typedef struct BalarCudaCallPacket {
     enum CudaAPI_t cuda_call_id;
     // 0: means pointer data are not in SST mem space
     // 1: means data are in SST mem space, which is the
-    //    case for Vanadis as all data are in SST mem space
     bool isSSTmem;
     union {
         struct {

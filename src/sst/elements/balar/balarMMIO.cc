@@ -25,7 +25,7 @@ using namespace SST::MemHierarchy;
 
 SST::BalarComponent::BalarMMIO* g_balarmmio_component = NULL;
 
-/* Example MMIO device */
+
 BalarMMIO::BalarMMIO(ComponentId_t id, Params &params) : SST::Component(id) {
 
     // Output for warnings
@@ -145,16 +145,7 @@ bool BalarMMIO::is_SST_buffer_full(unsigned core_id) {
     return (numPendingCacheTransPerCore[core_id] == maxPendingCacheTrans);
 }
 
-/**
- * @brief Callback in sst-gpgpusim to send memory read request to balarMMIO/SST
- *        and use the SST backend for timing simulation?
- *        Check shader.cc:void simt_core_cluster::icnt_inject_request_packet_to_SST
- *
- * @param core_id:  GPU core id
- * @param address:  memory request addr
- * @param size   :  request size
- * @param mem_req:  pointer to memory fetch object in GPGPUSim
- */
+
 void BalarMMIO::send_read_request_SST(unsigned core_id, uint64_t address, uint64_t size, void* mem_req) {
     assert(numPendingCacheTransPerCore[core_id] < maxPendingCacheTrans);
     StandardMem::Read* req = new Interfaces::StandardMem::Read(address, size);
@@ -167,16 +158,7 @@ void BalarMMIO::send_read_request_SST(unsigned core_id, uint64_t address, uint64
     out.verbose(CALL_INFO, 1, 0, "Sent a read request with id (%ld) to addr %lx\n", req->getID(), req->vAddr);
 }
 
-/**
- * @brief Callback in sst-gpgpusim to send memory write request to balarMMIO/SST
- *        and use the SST backend for timing simulation?
- *        Check shader.cc:void simt_core_cluster::icnt_inject_request_packet_to_SST
- *
- * @param core_id:  GPU core id
- * @param address:  memory request addr
- * @param size   :  request size
- * @param mem_req:  pointer to memory fetch object in GPGPUSim
- */
+
 void BalarMMIO::send_write_request_SST(unsigned core_id, uint64_t address, uint64_t size, void* mem_req) {
     assert(numPendingCacheTransPerCore[core_id] < maxPendingCacheTrans);
     std::vector<uint8_t> mock_data(size);
@@ -188,16 +170,7 @@ void BalarMMIO::send_write_request_SST(unsigned core_id, uint64_t address, uint6
     out.verbose(CALL_INFO, 1, 0, "Sent a write request with id (%ld) to addr: %lx\n", req->getID(), req->vAddr);
 }
 
-/**
- * @brief Callback function called by GPGPU-Sim when certain CUDA calls
- *        are actually done. Each if is a handler for different
- *        callbacks.
- *
- * @param event_name
- * @param stream
- * @param payload
- * @param payload_size
- */
+
 void BalarMMIO::SST_callback_event_done(const char* event_name, cudaStream_t stream, uint8_t* payload, size_t payload_size) {
     out.verbose(CALL_INFO, 1, 0, "Receiving event %s from GPGPU-Sim at stream %p\n", event_name, stream);
     std::string event_string = std::string(event_name);
@@ -230,10 +203,6 @@ void BalarMMIO::SST_callback_event_done(const char* event_name, cudaStream_t str
         if (head_packet->cuda_call_id == CUDA_MEMCPY_ASYNC) {
             // Check that payload's memcpy params matches
             // Cannot just use isSameBalarCudaCallPacket as we dont know from callback
-            // whether it is a SST mem cuda call or not, so the src field might be
-            // different due to the fact that we will assign a buffer to hold the src data
-            // from SST memspace. So instead, we will just compare the count and dst
-            // field
             if (head_packet->cudaMemcpyAsync.count != payload_packet->cudaMemcpyAsync.count ||
                 head_packet->cudaMemcpyAsync.dst != payload_packet->cudaMemcpyAsync.dst ||
                 (head_packet->cudaMemcpyAsync.kind != cudaMemcpyHostToDevice)) {
@@ -349,8 +318,6 @@ void BalarMMIO::SST_callback_event_done(const char* event_name, cudaStream_t str
 
             // Use DMA engine to send the copy from Simulator to SST memspace
             // Should wait for the memcpy to complete
-            // as memcpy is blocking
-            // Prepare a request to write the dst data to CPU
             if (head_packet->isSSTmem) {
                 std::string cmdString = "Issue_DMA_memcpy_D2H";
                 // Prepare DMA config
@@ -414,8 +381,6 @@ void BalarMMIO::SST_callback_event_done(const char* event_name, cudaStream_t str
     } else if (event_string == "memcpy_from_symbol_done") {
         // Use DMA engine to send the copy from Simulator to SST memspace
         // Should wait for the memcpy to complete
-        // as memcpy is blocking
-        // Prepare a request to write the dst data to CPU
         out.verbose(CALL_INFO, 1, 0, "Prepare memcpyFromSymbol writes\n");
 
         // Check if the head packet is a cudaMemcpyFromSymbol call
@@ -549,7 +514,6 @@ void BalarMMIO::SST_callback_event_done(const char* event_name, cudaStream_t str
 
         // CUDA kernel dont need any callback handling, we
         // will just remove it from the stream queue
-        // for the blocking issue check
     } else {
         out.fatal(CALL_INFO, -1, "Unknown event %s from GPGPU-Sim\n", event_string.c_str());
     }
@@ -571,13 +535,7 @@ void BalarMMIO::handleEvent(StandardMem::Request* req) {
     req->handle(handlers);
 }
 
-/**
- * @brief Handle a request we send to cache backend
- *        return the memory fetch object back to GPGPUSim
- *        after the request return from cache backend
- *
- * @param req
- */
+
 void BalarMMIO::handleGPUCache(SST::Interfaces::StandardMem::Request* req) {
     // Handle cache request/response?
     SST::Interfaces::StandardMem::Request::id_t req_id = req->getID();
@@ -595,15 +553,7 @@ void BalarMMIO::handleGPUCache(SST::Interfaces::StandardMem::Request* req) {
     }
 }
 
-/**
- * @brief Handler for incoming Write requests via `mmio_iface`
- *        the payload will be an address to the actual cuda call packet
- *        the function will save the Write object and issue a DMA request
- *        to fetch the cuda call packet (via `mmio_iface`).
- *        The actual calling to GPGPU-Sim will be done in WriteResp handler
- *
- * @param write
- */
+
 void BalarMMIO::BalarHandlers::handle(SST::Interfaces::StandardMem::Write* write) {
     out->verbose(_INFO_, "%s: receiving incoming write (%ld) to vaddr: %lx and paddr: %lx with size %ld\n", balar->getName().c_str(), write->getID(), write->vAddr, write->pAddr, write->size);
 
@@ -650,15 +600,7 @@ void BalarMMIO::BalarHandlers::handle(SST::Interfaces::StandardMem::Write* write
     balar->mmio_iface->send(dma_req);
 }
 
-/**
- * @brief Handler for return value query via `mmio_iface`.
- *        Will save the read as pending read. Then it will issue a write
- *        request to save the return packet to the previously passed in
- *        memory address in DMA request (via `mmio_iface`).
- *        Response to CPU will be done in handler for WriteResp
- *
- * @param read
- */
+
 void BalarMMIO::BalarHandlers::handle(SST::Interfaces::StandardMem::Read* read) {
     out->verbose(_INFO_, "%s: receiving incoming read (%ld) to vaddr: %lx and paddr: %lx with size %ld\n", balar->getName().c_str(), read->getID(), read->vAddr, read->pAddr, read->size);
 
@@ -698,12 +640,7 @@ void BalarMMIO::BalarHandlers::handle(SST::Interfaces::StandardMem::Read* read) 
     balar->mmio_iface->send(dma_req);
 }
 
-/**
- * @brief Handler for the previous read request that get the cuda call packet.
- *        Right now is not used.
- *
- * @param resp
- */
+
 void BalarMMIO::BalarHandlers::handle(SST::Interfaces::StandardMem::ReadResp* resp) {
     out->verbose(_INFO_, "%s: receiving incoming readresp (%ld) to vaddr: %lx and paddr: %lx with size %ld\n", balar->getName().c_str(), resp->getID(), resp->vAddr, resp->pAddr, resp->size);
     // Classify the read request type
@@ -723,14 +660,6 @@ void BalarMMIO::BalarHandlers::handle(SST::Interfaces::StandardMem::ReadResp* re
 }
 
 
-/**
- * @brief Handler for a write we made (via `mmio_iface`), which includes
- *        read/writing of cuda packets and cuda memcpy.
- *        It will then use the pending read request to make request telling
- *        CPU the return value is ready (via `mmio_iface`).
- *
- * @param resp
- */
 void BalarMMIO::BalarHandlers::handle(SST::Interfaces::StandardMem::WriteResp* resp) {
     out->verbose(_INFO_, "%s: receiving incoming writeresp (%ld) to vaddr: %lx and paddr: %lx with size %ld\n", balar->getName().c_str(), resp->getID(), resp->vAddr, resp->pAddr, resp->size);
 
@@ -746,8 +675,6 @@ void BalarMMIO::BalarHandlers::handle(SST::Interfaces::StandardMem::WriteResp* r
         if (request_type.compare("Read_cuda_packet") == 0) {
             // This is a response to a request we send to cache
             // to read the cuda packet
-
-            // Whether the request is blocking on issue
             balar->has_blocked_issue = false;
             // Whether the request is blocking on completion
             balar->has_blocked_response = false;
@@ -807,9 +734,6 @@ void BalarMMIO::BalarHandlers::handle(SST::Interfaces::StandardMem::WriteResp* r
                             if (packet_copy->cuda_memcpy.kind == cudaMemcpyHostToDevice) {
                                 // We will end the handler early as we
                                 // need to read the src data in host mem first
-                                // and then proceed
-
-                                // Assign device dst buffer
                                 size_t data_size = packet_copy->cuda_memcpy.count;
                                 packet_copy->cuda_memcpy.src_buf = (uint8_t *) calloc(data_size, sizeof(uint8_t));
 
@@ -847,9 +771,6 @@ void BalarMMIO::BalarHandlers::handle(SST::Interfaces::StandardMem::WriteResp* r
                             } else if (packet->cuda_memcpy.kind == cudaMemcpyDeviceToHost) {
                                 // Create a dst buffer to hold the dst data
                                 // The write to the SST memspace will be created
-                                // once the gpgpusim finish cpy data in the callback
-                                // `SST_callback_memcpy_D2H_done`
-                                // Assign buffer space
                                 packet_copy->cuda_memcpy.dst_buf = (uint8_t *) calloc(packet_copy->cuda_memcpy.count, sizeof(uint8_t));
 
                                 // Call memcpy
@@ -1002,9 +923,6 @@ void BalarMMIO::BalarHandlers::handle(SST::Interfaces::StandardMem::WriteResp* r
                         );
                         //  Push the launch stream info a stack
                         // Similar to ctx->api->g_cuda_launch_stack during GPGPU-Sim's cudaLaunch
-                        // So we can know which stream the kernel
-                        // launch belongs to for managing
-                        // blocking and non-blocking launch
                         balar->cudalaunch_stream_stack.push(packet->configure_call.stream);
                     }
                     break;
@@ -1097,8 +1015,6 @@ void BalarMMIO::BalarHandlers::handle(SST::Interfaces::StandardMem::WriteResp* r
 
                         // Check if need to make this a blocked response
                         // if so, mark this and defer the completion
-                        // after GPGPU-Sim notifies us it is done with
-                        // cudaThreadSynchronize()
                         if (result != cudaSuccess) {
                             // cudaThreadSynchronize require callback response from GPGPUSim
                             // insert into default stream's pending packet queue
@@ -1269,8 +1185,6 @@ void BalarMMIO::BalarHandlers::handle(SST::Interfaces::StandardMem::WriteResp* r
 
                         // Check if need to make this a blocked response
                         // if so, mark this and defer the completion
-                        // after GPGPU-Sim notifies us it is done with
-                        // cudaStreamSynchronize()
                         if (result != cudaSuccess) {
                             // cudaStreamSync require callback response from GPGPUSim
                             // insert into default stream's pending packet queue
@@ -1287,11 +1201,6 @@ void BalarMMIO::BalarHandlers::handle(SST::Interfaces::StandardMem::WriteResp* r
                 case CUDA_STREAM_DESTROY: {
                         // This cudaStreamDestroy should just remove stream
                         // as it assume stream is already synchronized
-                        // Which means that before calling this,
-                        // cudaStreamSynchronize() should be explicitly
-                        // called, otherwise balar will deadlock
-
-                        // Check if the stream queue is drained
                         if (!(balar->pending_packets_per_stream.at(packet->cudaStreamDestroy.stream).empty())) {
                             // Error, stream is not empty
                             out->fatal(CALL_INFO, -1, "Stream %p is not empty when destroyed!\n", packet->cudaStreamDestroy.stream);
@@ -1427,10 +1336,6 @@ void BalarMMIO::BalarHandlers::handle(SST::Interfaces::StandardMem::WriteResp* r
         } else if (request_type.compare("Issue_DMA_memcpy_D2H") == 0) {
             // To a DMA request we made to store the dst data into SST memory space
             // Send the blocked response aved in the previous
-            // request handler for memcpyD2H to notify CPU we are done with memcpyD2H
-            // Since we get this request only after all data have been copied into host memory
-
-            // Free temp buffer to hold memcpyD2H data
             out->verbose(_INFO_, "%s: done with a memcpyD2H\n", balar->getName().c_str());
 
             free(request_associated_packet->cuda_memcpy.dst_buf);
@@ -1483,8 +1388,6 @@ void BalarMMIO::BalarHandlers::handle(SST::Interfaces::StandardMem::WriteResp* r
 
             // Can safely delete this packet as it is just a copy of the original packet
             // that is in the pending_packets_per_stream
-            // plus no indirection in its cuda_memcpy field
-            // Also its allocated buffer will be freed once GPGPU-Sim finish memcpy
             delete request_associated_packet;
             delete write;
             delete resp;
@@ -1587,8 +1490,6 @@ void BalarMMIO::printStatus(Output &statusOut) {
 bool BalarMMIO::isStreamBlocking(cudaStream_t stream) {
     // Stream blocking happens when:
     //   1. We are pushing to default stream (blocking by default)
-    //   2. We enable cuda launch blocking in GPGPU-Sim (for other concurrent streams)
-    // And there are still ongoing stream operations in all streams
     bool needBlocking = !stream || isLaunchBlocking;
     if (needBlocking) {
         for (auto& [stream, queue] : pending_packets_per_stream) {
@@ -1616,13 +1517,7 @@ extern void send_write_request_SST(unsigned core_id, uint64_t address, uint64_t 
     g_balarmmio_component->send_write_request_SST(core_id, address, size, mem_req);
 }
 
-/**
- * @brief Signal that the cudaMemcpy with H2D is done, could be from async memcpy
- *
- * @param dst
- * @param src
- * @param count
- */
+
 extern void SST_callback_memcpy_H2D_done(uint64_t dst, uint64_t src, size_t count, cudaStream_t stream) {
     assert(g_balarmmio_component);
     BalarCudaCallPacket_t *callback_packet = new BalarCudaCallPacket_t();
@@ -1645,13 +1540,7 @@ extern void SST_callback_memcpy_H2D_done(uint64_t dst, uint64_t src, size_t coun
     g_balarmmio_component->SST_callback_event_done("memcpy_H2D_done", stream, (uint8_t *)callback_packet, sizeof(BalarCudaCallPacket_t));
 }
 
-/**
- * @brief Signal that the cudaMemcpy with D2H is done, could be from async memcpy
- *
- * @param dst
- * @param src
- * @param count
- */
+
 extern void SST_callback_memcpy_D2H_done(uint64_t dst, uint64_t src, size_t count, cudaStream_t stream) {
     assert(g_balarmmio_component);
     BalarCudaCallPacket_t *callback_packet = new BalarCudaCallPacket_t();
@@ -1674,47 +1563,31 @@ extern void SST_callback_memcpy_D2H_done(uint64_t dst, uint64_t src, size_t coun
     g_balarmmio_component->SST_callback_event_done("memcpy_D2H_done", stream, (uint8_t *)callback_packet, sizeof(BalarCudaCallPacket_t));
 }
 
-/**
- * @brief Signal that the cudaMemcpyToSymbol is done
- *
- */
+
 extern void SST_callback_memcpy_to_symbol_done() {
     assert(g_balarmmio_component);
     g_balarmmio_component->SST_callback_event_done("memcpy_to_symbol_done", 0, NULL, 0);
 }
 
-/**
- * @brief Signal that the cudaMemcpyFromSymbol is done
- *
- */
+
 extern void SST_callback_memcpy_from_symbol_done() {
     assert(g_balarmmio_component);
     g_balarmmio_component->SST_callback_event_done("memcpy_from_symbol_done", 0, NULL, 0);
 }
 
-/**
- * @brief Signal that the cudaThreadSynchronize is done
- *
- */
+
 extern void SST_callback_cudaThreadSynchronize_done() {
     assert(g_balarmmio_component);
     g_balarmmio_component->SST_callback_event_done("cudaThreadSynchronize_done", 0, NULL, 0);
 }
 
-/**
- * @brief Signal that cudaStreamSynchronize is done for stream
- *
- * @param stream
- */
+
 extern void SST_callback_cudaStreamSynchronize_done(cudaStream_t stream) {
     assert(g_balarmmio_component);
     g_balarmmio_component->SST_callback_event_done("cudaStreamSynchronize_done", stream, NULL, 0);
 }
 
 
-/**
- * @brief Signal that the cudaEventSynchronize is done
- */
 extern void SST_callback_cudaEventSynchronize_done(cudaEvent_t event) {
     assert(g_balarmmio_component);
     BalarCudaCallPacket_t *callback_packet = new BalarCudaCallPacket_t();
@@ -1724,11 +1597,7 @@ extern void SST_callback_cudaEventSynchronize_done(cudaEvent_t event) {
     g_balarmmio_component->SST_callback_event_done("cudaEventSynchronize_done", 0, (uint8_t *)callback_packet, sizeof(BalarCudaCallPacket_t));
 }
 
-/**
- * @brief Signal that a kernel has finished
- *
- * @param stream : stream of the finished kernel
- */
+
 extern void SST_callback_kernel_done(cudaStream_t stream) {
     assert(g_balarmmio_component);
     g_balarmmio_component->SST_callback_event_done("Kernel_done", stream, NULL, 0);

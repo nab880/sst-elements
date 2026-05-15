@@ -46,9 +46,6 @@
 
 // Note, it is required that your SDK sample to include the proper header
 // files, please refer the CUDA examples for examples of the needed CUDA
-// headers, which may change depending on which CUDA functions are used.
-
-// CUDA Runtime error messages
 #ifdef __DRIVER_TYPES_H__
 static const char *_cudaGetErrorEnum(cudaError_t error) {
   return cudaGetErrorName(error);
@@ -482,7 +479,7 @@ static const char *_cudaGetErrorEnum(NppStatus error) {
       return "NPP_WRONG_INTERSECTION_ROI_WARNING";
 
 #if ((NPP_VERSION_MAJOR << 12) + (NPP_VERSION_MINOR << 4)) >= 0x6000
-    /* These are 6.0 or higher */
+    
     case NPP_LUT_PALETTE_BITSIZE_ERROR:
       return "NPP_LUT_PALETTE_BITSIZE_ERROR";
 
@@ -566,7 +563,7 @@ static const char *_cudaGetErrorEnum(NppStatus error) {
 #endif
 
 #if ((NPP_VERSION_MAJOR << 12) + (NPP_VERSION_MINOR << 4)) >= 0x7000
-    /* These are 7.0 or higher */
+    
     case NPP_OVERFLOW_ERROR:
       return "NPP_OVERFLOW_ERROR";
 
