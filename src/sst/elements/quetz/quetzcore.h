@@ -43,11 +43,18 @@ namespace Quetz {
 // ---------------------------------------------------------------------------
 // Named address-range region
 // ---------------------------------------------------------------------------
+enum class MemRegionType {
+    MEMORY,    // forward to memory hierarchy (default)
+    FILTERED,  // count only, do not forward
+    UART,      // capture TX bytes; do not forward to hierarchy
+};
+
 struct MemRegion {
-    std::string name;
-    uint64_t    start;
-    uint64_t    end;        // inclusive
-    bool        filtered;   // true = drop; false = forward to hierarchy
+    std::string    name;
+    uint64_t       start;
+    uint64_t       end;           // inclusive
+    MemRegionType  type;
+    uint32_t       uart_tx_offset; // byte offset of TX data register within region
 };
 
 // ---------------------------------------------------------------------------
@@ -113,8 +120,9 @@ private:
     void issueRead (uint64_t vaddr, uint32_t size, uint64_t pc);
     void issueWrite(uint64_t vaddr, uint32_t size, uint64_t pc,
                     const uint8_t* raw_data = nullptr);
-    uint32_t slotsNeeded(uint64_t vaddr, uint32_t size) const;
-    bool     isFiltered(uint64_t vaddr) const;
+    uint32_t          slotsNeeded(uint64_t vaddr, uint32_t size) const;
+    const MemRegion*  findRegion (uint64_t vaddr) const;
+    bool              isFiltered (uint64_t vaddr) const;
 
     // -----------------------------------------------------------------------
     // State
@@ -136,8 +144,10 @@ private:
     uint32_t check_addresses_;
     bool     detailed_tracking_;
 
-    bool     halted_;
-    bool     stalled_;
+    bool        halted_;
+    bool        stalled_;
+
+    std::string uart_tx_buf_;     // accumulated guest UART TX bytes
 
     std::queue<StagedCmd> coreQ_;
 

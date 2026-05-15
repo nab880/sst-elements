@@ -51,6 +51,8 @@ QuetzCPU::QuetzCPU(ComponentId_t id, Params& params)
     uint32_t max_issue_cyc   = params.find<uint32_t>("maxissuepercycle",   1);
     uint64_t cache_line_sz   = params.find<uint64_t>("cachelinesize",     64);
 
+    system_mode_        = params.find<bool>("system_mode", false);
+    system_mode_loader_ = params.find<std::string>("system_mode_loader", "-kernel");
     qemu_bin_    = params.find<std::string>("qemu",        "qemu-riscv64");
     qemu_plugin_ = params.find<std::string>("qemu_plugin", "");
     executable_  = params.find<std::string>("executable",  "");
@@ -146,13 +148,23 @@ QuetzCPU::QuetzCPU(ComponentId_t id, Params& params)
             region.end   = params.find<uint64_t>(buf, 0ULL);
             snprintf(buf, sizeof(buf), "memmap%" PRIu32 "_type",  r);
             std::string type = params.find<std::string>(buf, "memory");
-            region.filtered = (type == "filtered");
+            if (type == "filtered")
+                region.type = MemRegionType::FILTERED;
+            else if (type == "uart")
+                region.type = MemRegionType::UART;
+            else
+                region.type = MemRegionType::MEMORY;
 
+            snprintf(buf, sizeof(buf), "memmap%" PRIu32 "_uart_tx_offset", r);
+            region.uart_tx_offset = params.find<uint32_t>(buf, 0);
+
+            const char* type_str =
+                (region.type == MemRegionType::FILTERED) ? "filtered" :
+                (region.type == MemRegionType::UART)     ? "uart"     : "memory";
             output_->verbose(CALL_INFO, 1, 0,
                 "MemMap region[%" PRIu32 "] '%s': "
-                "0x%016" PRIx64 "–0x%016" PRIx64 " (%s)\n",
-                r, region.name.c_str(), region.start, region.end,
-                region.filtered ? "filtered" : "memory");
+                "0x%016" PRIx64 "-0x%016" PRIx64 " (%s)\n",
+                r, region.name.c_str(), region.start, region.end, type_str);
             memmap_.push_back(region);
         }
     }
@@ -331,8 +343,10 @@ void QuetzCPU::launchQEMU() {
                 QEMU_PLUGIN_INSTALL_DIR);
     }
 
-    // Build argv:
-    //   qemu-riscv64  [qemu_args]  -plugin <plugin,shmname=N>  <exe>  [args]
+    // Build argv.
+    //
+    // User mode:   qemu-<arch>  [qemu_args] -plugin <...>  <exe>  [args]
+    // System mode: qemu-system-<arch>  [qemu_args] -plugin <...>  -kernel <exe>  [args]
     std::string shmem_name = tunnelmgr_->getRegionName();
     std::string plugin_arg = qemu_plugin_ + ",shmname=" + shmem_name;
     if (detailed_tracking_)
@@ -341,7 +355,7 @@ void QuetzCPU::launchQEMU() {
     uint32_t max_argc = 1
         + (uint32_t)qemu_extra_args_.size()
         + 2          // -plugin <arg>
-        + 1          // executable
+        + 2          // optional: -kernel <exe>
         + appargcount_
         + 1;         // NULL terminator
     char** argv = (char**)malloc(sizeof(char*) * max_argc);
@@ -353,15 +367,19 @@ void QuetzCPU::launchQEMU() {
     for (const auto& a : qemu_extra_args_) push(a);
     push("-plugin");
     push(plugin_arg);
+    if (system_mode_ && !system_mode_loader_.empty())
+        push(system_mode_loader_);
     push(executable_);
     for (const auto& arg : app_args_) push(arg);
     argv[ai] = nullptr;
 
     output_->verbose(CALL_INFO, 1, 0,
-        "QEMU command: %s %s-plugin %s %s ...\n",
+        "QEMU command: %s %s-plugin %s %s%s ...\n",
         qemu_bin_.c_str(),
         qemu_extra_args_.empty() ? "" : "[extra_args] ",
         qemu_plugin_.c_str(),
+        (system_mode_ && !system_mode_loader_.empty())
+            ? (system_mode_loader_ + " ").c_str() : "",
         executable_.c_str());
 
     pid_t child = fork();

@@ -1,11 +1,9 @@
- cpu.read_requests.0 : Accumulator : Sum.u64 = 21367; SumSQ.u64 = 21367; Count.u64 = 21367; Min.u64 = 1; Max.u64 = 1; 
- cpu.write_requests.0 : Accumulator : Sum.u64 = 5478; SumSQ.u64 = 5478; Count.u64 = 5478; Min.u64 = 1; Max.u64 = 1; 
- cpu.read_request_sizes.0 : Accumulator : Sum.u64 = 97024; SumSQ.u64 = 851992; Count.u64 = 21355; Min.u64 = 1; Max.u64 = 16; 
+ cpu.read_requests.0 : Accumulator : Sum.u64 = 21934; SumSQ.u64 = 21934; Count.u64 = 21934; Min.u64 = 1; Max.u64 = 1; 
+ cpu.write_requests.0 : Accumulator : Sum.u64 = 5486; SumSQ.u64 = 5486; Count.u64 = 5486; Min.u64 = 1; Max.u64 = 1; 
+ cpu.read_request_sizes.0 : Accumulator : Sum.u64 = 97945; SumSQ.u64 = 855585; Count.u64 = 21927; Min.u64 = 1; Max.u64 = 16; 
  cpu.write_request_sizes.0 : Accumulator : Sum.u64 = 50499; SumSQ.u64 = 529643; Count.u64 = 5450; Min.u64 = 1; Max.u64 = 16; 
- cpu.split_read_requests.0 : Accumulator : Sum.u64 = 12; SumSQ.u64 = 12; Count.u64 = 12; Min.u64 = 1; Max.u64 = 1; 
- cpu.split_write_requests.0 : Accumulator : Sum.u64 = 28; SumSQ.u64 = 28; Count.u64 = 28; Min.u64 = 1; Max.u64 = 1; 
- cpu.no_ops.0 : Accumulator : Sum.u64 = 190037; SumSQ.u64 = 190037; Count.u64 = 190037; Min.u64 = 1; Max.u64 = 1; 
- cpu.instruction_count.0 : Accumulator : Sum.u64 = 216842; SumSQ.u64 = 216842; Count.u64 = 216842; Min.u64 = 1; Max.u64 = 1; 
+ cpu.split_read_requests.0 : Accumulator : Sum.u64 = 7; SumSQ.u64 = 7; Count.u64 = 7; Min.u64 = 1; Max.u64 = 1; 
+ cpu.split_write_requests.0 : Accumulator : Sum.u64 = 36; SumSQ.u64 = 36; Count.u64 = 36; Min.u64 = 1; Max.u64 = 1; 
  cpu.filtered_reads.0 : Accumulator : Sum.u64 = 0; SumSQ.u64 = 0; Count.u64 = 0; Min.u64 = 0; Max.u64 = 0; 
  cpu.filtered_writes.0 : Accumulator : Sum.u64 = 0; SumSQ.u64 = 0; Count.u64 = 0; Min.u64 = 0; Max.u64 = 0; 
  cpu.int_compute.0 : Accumulator : Sum.u64 = 0; SumSQ.u64 = 0; Count.u64 = 0; Min.u64 = 0; Max.u64 = 0; 

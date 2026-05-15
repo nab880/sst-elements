@@ -28,7 +28,11 @@
  * instructions classified as OTHER.
  */
 
+// qemu-plugin.h is a C header without its own extern-C guards.
+// Wrap it so all its declarations get C linkage when compiled as C++.
+extern "C" {
 #include "qemu-plugin.h"
+}
 
 #include "../quetz_shmem.h"
 #include <sst/core/interprocess/shmchild.h>
@@ -51,7 +55,8 @@ using SHMChild = SST::Core::Interprocess::SHMChild<QuetzTunnel>;
 static SHMChild*     g_shmchild = nullptr;
 static QuetzTunnel*  g_tunnel   = nullptr;
 static std::string   g_shmem_name;
-static bool          g_detailed = false;   // detailed instruction tracking
+static bool          g_detailed     = false;   // detailed instruction tracking
+static bool          g_system_mode  = false;   // true for qemu-system-* targets
 
 static constexpr unsigned MAX_VCPUS = 256;
 static std::atomic<bool> g_mem_seen[MAX_VCPUS];
@@ -263,8 +268,11 @@ static inline void handle_mem(unsigned int vcpu_index,
     if (g_isa == QUETZ_ISA_GENERIC)
         cls = classify_by_size(size);
 
+    // In user-mode, guest VA == host VA so we can read store data directly.
+    // In system-mode, guest VAs are unrelated to host VAs — skip this capture
+    // to avoid reading from an arbitrary host address or segfaulting.
     const uint8_t* store_data = nullptr;
-    if (is_store && size <= 16)
+    if (is_store && size <= 16 && !g_system_mode)
         store_data = reinterpret_cast<const uint8_t*>(
             static_cast<uintptr_t>(vaddr));
 
@@ -452,10 +460,12 @@ int qemu_plugin_install(qemu_plugin_id_t id,
         if      (strncmp(t, "riscv",   5) == 0) g_isa = QUETZ_ISA_RISCV;
         else if (strncmp(t, "aarch64", 7) == 0) g_isa = QUETZ_ISA_AARCH64;
         else                                     g_isa = QUETZ_ISA_GENERIC;
+        g_system_mode = info->system_emulation;
         fprintf(stderr,
-            "[qemu_sst_plugin] Target: %s  ISA class: %s\n", t,
+            "[qemu_sst_plugin] Target: %s  ISA class: %s  system_mode: %d\n", t,
             (g_isa == QUETZ_ISA_RISCV)   ? "riscv" :
-            (g_isa == QUETZ_ISA_AARCH64) ? "aarch64" : "generic");
+            (g_isa == QUETZ_ISA_AARCH64) ? "aarch64" : "generic",
+            (int)g_system_mode);
     }
 
     for (unsigned i = 0; i < MAX_VCPUS; i++) {
