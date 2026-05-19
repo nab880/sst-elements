@@ -34,7 +34,8 @@ using namespace SST::Interfaces;
 QuetzCPU::QuetzCPU(ComponentId_t id, Params& params)
     : Component(id),
       child_pid_(0),
-      stop_ticking_(true)
+      stop_ticking_(true),
+      halted_count_(0)
 {
     int verbosity = params.find<int>("verbose", 0);
     output_ = new SST::Output(
@@ -306,24 +307,43 @@ void QuetzCPU::emergencyShutdown() {
 }
 
 // ---------------------------------------------------------------------------
+// Halt quorum: the simulation ends only when EVERY vCPU has halted AND every
+// vCPU has drained its in-flight memory transactions.  This prevents a single
+// thread's early EXIT from terminating an MP run while other threads are still
+// pumping work through the shared-memory tunnel.
+//
+// Implementation note: halted_count_ is incremented exactly once per vCPU on
+// the rising edge of isCoreHalted(); the per-core halted_ flag is monotonic
+// (set once on EXIT or max_insts, never cleared) so the edge fires at most
+// once per vCPU and halted_count_ never exceeds vcpu_count_.
 bool QuetzCPU::tick(SST::Cycle_t /*cycle*/) {
     tunnel_->updateTime(getCurrentSimTimeNano());
     tunnel_->incrementCycles();
 
-    stop_ticking_ = false;
-
     for (uint32_t i = 0; i < vcpu_count_; i++) {
+        bool was_halted = cores_[i]->isCoreHalted();
         cores_[i]->tick();
-        if (cores_[i]->isCoreHalted()) {
-            stop_ticking_ = true;
-            break;
-        }
+        if (!was_halted && cores_[i]->isCoreHalted())
+            halted_count_++;
     }
 
-    if (stop_ticking_)
-        primaryComponentOKToEndSim();
+    if (halted_count_ < vcpu_count_)
+        return false;
 
-    return stop_ticking_;
+    // All vCPUs halted — wait for pending transactions to drain before
+    // releasing primaryComponentOKToEndSim, otherwise late responses arrive
+    // on a torn-down component.
+    for (uint32_t i = 0; i < vcpu_count_; i++)
+        if (cores_[i]->pendingCount() > 0) return false;
+
+    if (!stop_ticking_) {
+        output_->verbose(CALL_INFO, 1, 0,
+            "All %" PRIu32 " vCPUs halted and drained — ending simulation.\n",
+            vcpu_count_);
+        primaryComponentOKToEndSim();
+        stop_ticking_ = true;
+    }
+    return true;
 }
 
 // ---------------------------------------------------------------------------
