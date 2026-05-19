@@ -299,10 +299,15 @@ void QuetzCore::tick() {
 }
 
 // ---------------------------------------------------------------------------
+// Compute the number of cache-line-sized sub-requests an access of (vaddr, size)
+// produces.  An access wholly contained in one line takes 1 slot; an access
+// that spans N cache lines takes N slots.  Required for wide RVV (LMUL=8 can
+// produce up to 512-byte segment accesses spanning 8 lines on a 64B-line host).
 uint32_t QuetzCore::slotsNeeded(uint64_t vaddr, uint32_t size) const {
     if (size == 0) return 1;
-    uint64_t line_end = (vaddr & ~(cache_line_size_ - 1)) + cache_line_size_;
-    return (vaddr + size <= line_end) ? 1 : 2;
+    uint64_t first_line = vaddr / cache_line_size_;
+    uint64_t last_line  = (vaddr + size - 1) / cache_line_size_;
+    return (uint32_t)(last_line - first_line + 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -320,80 +325,104 @@ bool QuetzCore::isFiltered(uint64_t vaddr) const {
 }
 
 // ---------------------------------------------------------------------------
+// Walk an access (vaddr, size) one cache line at a time, emitting one
+// StandardMem::Read per chunk.  Accesses contained in a single line emit one
+// request; accesses spanning N lines emit N requests.  The split_*_requests
+// statistic records the number of EXTRA parts beyond the first (so a single
+// 2-line access counts as 1 split, a 4-line access as 3 splits, etc.).
 void QuetzCore::issueRead(uint64_t vaddr, uint32_t size, uint64_t /*pc*/) {
     output_->verbose(CALL_INFO, 8, 0,
         "QuetzCore %" PRIu32 " READ  vaddr=0x%016" PRIx64 " size=%" PRIu32 "\n",
         core_id_, vaddr, size);
 
-    if (check_addresses_ && size > (uint32_t)cache_line_size_)
-        output_->verbose(CALL_INFO, 1, 0,
-            "QuetzCore %" PRIu32 " READ vaddr=0x%016" PRIx64 " size=%" PRIu32
-            " exceeds cache line size %" PRIu64 "; split may be incomplete\n",
-            core_id_, vaddr, size, cache_line_size_);
-
     stat_read_req_sizes_->addData(size);
 
-    uint64_t line_end = (vaddr & ~(cache_line_size_ - 1)) + cache_line_size_;
+    if (size == 0) return;
 
-    auto send_read = [&](uint64_t addr, uint32_t len) {
-        auto* req = new StandardMem::Read(addr, len, 0, addr);
+    uint64_t addr      = vaddr;
+    uint32_t remaining = size;
+    uint32_t parts     = 0;
+
+    while (remaining > 0) {
+        uint64_t line_end = (addr & ~(cache_line_size_ - 1)) + cache_line_size_;
+        uint32_t chunk    = (uint32_t)std::min<uint64_t>(line_end - addr,
+                                                          (uint64_t)remaining);
+
+        auto* req = new StandardMem::Read(addr, chunk, 0, addr);
         pending_txns_[req->getID()] = { req, getCurrentSimTime(tc_) };
         pending_count_++;
         stat_read_reqs_->addData(1);
         mem_link_->send(req);
-    };
 
-    if (vaddr + size <= line_end) {
-        send_read(vaddr, size);
-    } else {
-        uint32_t first  = (uint32_t)(line_end - vaddr);
-        uint32_t second = size - first;
-        send_read(vaddr,         first);
-        send_read(vaddr + first, second);
-        stat_split_reads_->addData(1);
+        addr      += chunk;
+        remaining -= chunk;
+        parts++;
     }
+
+    if (parts > 1)
+        stat_split_reads_->addData(parts - 1);
+
+    if (check_addresses_ && size > (uint32_t)cache_line_size_)
+        output_->verbose(CALL_INFO, 1, 0,
+            "QuetzCore %" PRIu32 " READ vaddr=0x%016" PRIx64 " size=%" PRIu32
+            " exceeds cache line size %" PRIu64 " (issued %" PRIu32 " sub-requests)\n",
+            core_id_, vaddr, size, cache_line_size_, parts);
 }
 
 // ---------------------------------------------------------------------------
+// As issueRead, but additionally threads raw_data through each chunk.
+// QuetzCommand::data carries at most 16 bytes; chunks past the 16-byte cap
+// are zero-filled.  This matches the existing protocol — wide RVV stores
+// have the full address footprint accounted in StandardMem requests, but
+// only the first 16 bytes of payload data are forwarded.  Widening the
+// shared-memory protocol to carry more data is out of scope for PR 1.
 void QuetzCore::issueWrite(uint64_t vaddr, uint32_t size, uint64_t /*pc*/,
                            const uint8_t* raw_data) {
     output_->verbose(CALL_INFO, 8, 0,
         "QuetzCore %" PRIu32 " WRITE vaddr=0x%016" PRIx64 " size=%" PRIu32 "\n",
         core_id_, vaddr, size);
 
-    if (check_addresses_ && size > (uint32_t)cache_line_size_)
-        output_->verbose(CALL_INFO, 1, 0,
-            "QuetzCore %" PRIu32 " WRITE vaddr=0x%016" PRIx64 " size=%" PRIu32
-            " exceeds cache line size %" PRIu64 "; split may be incomplete\n",
-            core_id_, vaddr, size, cache_line_size_);
-
     stat_write_req_sizes_->addData(size);
 
-    uint64_t line_end = (vaddr & ~(cache_line_size_ - 1)) + cache_line_size_;
+    if (size == 0) return;
 
     static constexpr uint32_t kDataCap = (uint32_t)sizeof(QuetzCommand::data);
-    auto send_write = [&](uint64_t addr, uint32_t len, uint32_t offset) {
-        std::vector<uint8_t> data(len, 0);
-        if (raw_data) {
-            uint32_t avail  = (offset < kDataCap) ? (kDataCap - offset) : 0;
-            uint32_t copy_n = (len < avail) ? len : avail;
-            if (copy_n > 0)
-                memcpy(data.data(), raw_data + offset, copy_n);
+
+    uint64_t addr        = vaddr;
+    uint32_t remaining   = size;
+    uint32_t data_offset = 0;  // running offset into raw_data
+    uint32_t parts       = 0;
+
+    while (remaining > 0) {
+        uint64_t line_end = (addr & ~(cache_line_size_ - 1)) + cache_line_size_;
+        uint32_t chunk    = (uint32_t)std::min<uint64_t>(line_end - addr,
+                                                          (uint64_t)remaining);
+
+        std::vector<uint8_t> data(chunk, 0);
+        if (raw_data && data_offset < kDataCap) {
+            uint32_t avail  = kDataCap - data_offset;
+            uint32_t copy_n = (chunk < avail) ? chunk : avail;
+            memcpy(data.data(), raw_data + data_offset, copy_n);
         }
-        auto* req = new StandardMem::Write(addr, len, data, false, 0, addr);
+
+        auto* req = new StandardMem::Write(addr, chunk, data, false, 0, addr);
         pending_txns_[req->getID()] = { req, getCurrentSimTime(tc_) };
         pending_count_++;
         stat_write_reqs_->addData(1);
         mem_link_->send(req);
-    };
 
-    if (vaddr + size <= line_end) {
-        send_write(vaddr, size, 0);
-    } else {
-        uint32_t first  = (uint32_t)(line_end - vaddr);
-        uint32_t second = size - first;
-        send_write(vaddr,         first,  0);
-        send_write(vaddr + first, second, first);
-        stat_split_writes_->addData(1);
+        addr        += chunk;
+        data_offset += chunk;
+        remaining   -= chunk;
+        parts++;
     }
+
+    if (parts > 1)
+        stat_split_writes_->addData(parts - 1);
+
+    if (check_addresses_ && size > (uint32_t)cache_line_size_)
+        output_->verbose(CALL_INFO, 1, 0,
+            "QuetzCore %" PRIu32 " WRITE vaddr=0x%016" PRIx64 " size=%" PRIu32
+            " exceeds cache line size %" PRIu64 " (issued %" PRIu32 " sub-requests)\n",
+            core_id_, vaddr, size, cache_line_size_, parts);
 }
