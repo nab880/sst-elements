@@ -236,15 +236,45 @@ static void cb_mem_vec(unsigned int vi, qemu_plugin_meminfo_t info,
                        uint64_t va, void* ud)
 { handle_mem(vi, info, va, ud, QUETZ_INSN_VEC_MEM); }
 
-// Instruction exec callbacks — one per instruction class.
-// The "one-instruction-delayed" pattern: when instruction N's exec callback
-static inline void handle_exec(unsigned int vcpu_index, void* userdata,
-                                QuetzInsnClass cls)
+// Instruction exec callbacks — two flavours.
+// PRECISE flavour (used for RISC-V and AArch64, where the instruction class is
+static inline void emit_nop_now(unsigned int vcpu_index, void* userdata,
+                                 QuetzInsnClass cls)
+{
+    if (vcpu_index >= MAX_VCPUS) return;
+    uint64_t pc = (uint64_t)(uintptr_t)userdata;
+    write_cmd(vcpu_index, QUETZ_CMD_NOP, 0, pc, 0, cls);
+}
+
+static void cb_emit_nop_icomp (unsigned int vi, void* ud)
+{ emit_nop_now(vi, ud, QUETZ_INSN_INT_COMPUTE); }
+static void cb_emit_nop_fcomp (unsigned int vi, void* ud)
+{ emit_nop_now(vi, ud, QUETZ_INSN_FP_COMPUTE);  }
+static void cb_emit_nop_vcomp (unsigned int vi, void* ud)
+{ emit_nop_now(vi, ud, QUETZ_INSN_VEC_COMPUTE); }
+static void cb_emit_nop_branch(unsigned int vi, void* ud)
+{ emit_nop_now(vi, ud, QUETZ_INSN_BRANCH);      }
+static void cb_emit_nop_other (unsigned int vi, void* ud)
+{ emit_nop_now(vi, ud, QUETZ_INSN_OTHER);       }
+
+// Indexed by QuetzInsnClass.  Memory entries are nullptr — those classes
+// register only a mem callback in cb_tb_trans, never an exec callback.
+static qemu_plugin_vcpu_udata_cb_t const g_emit_nop_cbs[QUETZ_INSN_CLASS_COUNT] = {
+    nullptr,             // INT_MEM      (handled by mem callback)
+    nullptr,             // FP_MEM       (handled by mem callback)
+    nullptr,             // VEC_MEM      (handled by mem callback)
+    cb_emit_nop_icomp,   // INT_COMPUTE
+    cb_emit_nop_fcomp,   // FP_COMPUTE
+    cb_emit_nop_vcomp,   // VEC_COMPUTE
+    cb_emit_nop_branch,  // BRANCH
+    cb_emit_nop_other,   // OTHER
+};
+
+static inline void handle_exec_delayed(unsigned int vcpu_index, void* userdata,
+                                        QuetzInsnClass cls)
 {
     if (vcpu_index >= MAX_VCPUS) return;
 
-    // Carry the *previous* instruction's class into the NOP we're about to
-    // send for it, then record the current instruction's class for next time.
     QuetzInsnClass prev_cls = g_prev_cls[vcpu_index];
     g_prev_cls[vcpu_index]  = cls;
 
@@ -256,37 +286,11 @@ static inline void handle_exec(unsigned int vcpu_index, void* userdata,
     }
 }
 
-// One callback function per class — class is implicit in the function pointer.
-static void cb_exec_int   (unsigned int vi, void* ud)
-{ handle_exec(vi, ud, QUETZ_INSN_INT_MEM);     }
-static void cb_exec_fp    (unsigned int vi, void* ud)
-{ handle_exec(vi, ud, QUETZ_INSN_FP_MEM);      }
-static void cb_exec_vec   (unsigned int vi, void* ud)
-{ handle_exec(vi, ud, QUETZ_INSN_VEC_MEM);     }
-static void cb_exec_icomp (unsigned int vi, void* ud)
-{ handle_exec(vi, ud, QUETZ_INSN_INT_COMPUTE); }
-static void cb_exec_fcomp (unsigned int vi, void* ud)
-{ handle_exec(vi, ud, QUETZ_INSN_FP_COMPUTE);  }
-static void cb_exec_vcomp (unsigned int vi, void* ud)
-{ handle_exec(vi, ud, QUETZ_INSN_VEC_COMPUTE); }
-static void cb_exec_branch(unsigned int vi, void* ud)
-{ handle_exec(vi, ud, QUETZ_INSN_BRANCH);      }
-static void cb_exec_other (unsigned int vi, void* ud)
-{ handle_exec(vi, ud, QUETZ_INSN_OTHER);       }
+static void cb_exec_delayed_other(unsigned int vi, void* ud)
+{ handle_exec_delayed(vi, ud, QUETZ_INSN_OTHER); }
 
-// Dispatch table indexed by QuetzInsnClass
-static qemu_plugin_vcpu_udata_cb_t const g_exec_cbs[QUETZ_INSN_CLASS_COUNT] = {
-    cb_exec_int,    // INT_MEM
-    cb_exec_fp,     // FP_MEM
-    cb_exec_vec,    // VEC_MEM
-    cb_exec_icomp,  // INT_COMPUTE
-    cb_exec_fcomp,  // FP_COMPUTE
-    cb_exec_vcomp,  // VEC_COMPUTE
-    cb_exec_branch, // BRANCH
-    cb_exec_other,  // OTHER
-};
-
-// TB translation callback — instruments every instruction
+// TB translation callback — instruments every instruction.
+// For ISAs with a TB-time decoder (RISC-V, AArch64): register EXACTLY ONE
 static void cb_tb_trans(qemu_plugin_id_t , struct qemu_plugin_tb* tb)
 {
     size_t n = qemu_plugin_tb_n_insns(tb);
@@ -307,40 +311,40 @@ static void cb_tb_trans(qemu_plugin_id_t , struct qemu_plugin_tb* tb)
 #endif
         }
 
-        QuetzInsnClass cls;
-        switch (g_isa) {
-        case QUETZ_ISA_RISCV:
-            cls = classify_riscv_insn(enc);
-            break;
-        case QUETZ_ISA_AARCH64:
-            cls = classify_aarch64_insn(enc);
-            break;
-        default:
-            // GENERIC: memory class deferred to handle_mem (size-based).
-            // Non-memory instructions cannot be classified without a full
-            cls = QUETZ_INSN_OTHER;
-            break;
-        }
-
-        // Memory callback: use the memory-specific class for load/store.
-        // For GENERIC always use cb_mem_int as placeholder (overridden in
-        qemu_plugin_vcpu_mem_cb_t mem_cb;
         if (g_isa == QUETZ_ISA_GENERIC) {
-            mem_cb = cb_mem_int;
-        } else {
-            mem_cb = (cls == QUETZ_INSN_FP_MEM || cls == QUETZ_INSN_FP_COMPUTE)
-                         ? cb_mem_fp
-                   : (cls == QUETZ_INSN_VEC_MEM || cls == QUETZ_INSN_VEC_COMPUTE)
-                         ? cb_mem_vec
-                   :       cb_mem_int;
+            // Delayed pattern: both callbacks registered.  Class is set at
+            // execution time (mem callback overrides with size-based class).
+            qemu_plugin_register_vcpu_mem_cb(insn, cb_mem_int,
+                                              QEMU_PLUGIN_CB_NO_REGS,
+                                              QEMU_PLUGIN_MEM_RW, pc_ptr);
+            qemu_plugin_register_vcpu_insn_exec_cb(insn, cb_exec_delayed_other,
+                                                    QEMU_PLUGIN_CB_NO_REGS,
+                                                    pc_ptr);
+            continue;
         }
 
-        qemu_plugin_register_vcpu_mem_cb(insn, mem_cb,
-                                          QEMU_PLUGIN_CB_NO_REGS,
-                                          QEMU_PLUGIN_MEM_RW, pc_ptr);
-        qemu_plugin_register_vcpu_insn_exec_cb(insn, g_exec_cbs[cls],
-                                                QEMU_PLUGIN_CB_NO_REGS,
-                                                pc_ptr);
+        // Precise pattern: classify at TB-trans, register ONE callback.
+        QuetzInsnClass cls = (g_isa == QUETZ_ISA_RISCV)
+            ? classify_riscv_insn(enc)
+            : classify_aarch64_insn(enc);
+
+        bool is_mem = (cls == QUETZ_INSN_INT_MEM ||
+                       cls == QUETZ_INSN_FP_MEM  ||
+                       cls == QUETZ_INSN_VEC_MEM);
+
+        if (is_mem) {
+            qemu_plugin_vcpu_mem_cb_t mem_cb =
+                  (cls == QUETZ_INSN_FP_MEM)  ? cb_mem_fp
+                : (cls == QUETZ_INSN_VEC_MEM) ? cb_mem_vec
+                :                                cb_mem_int;
+            qemu_plugin_register_vcpu_mem_cb(insn, mem_cb,
+                                              QEMU_PLUGIN_CB_NO_REGS,
+                                              QEMU_PLUGIN_MEM_RW, pc_ptr);
+        } else {
+            qemu_plugin_register_vcpu_insn_exec_cb(insn, g_emit_nop_cbs[cls],
+                                                    QEMU_PLUGIN_CB_NO_REGS,
+                                                    pc_ptr);
+        }
     }
 }
 
