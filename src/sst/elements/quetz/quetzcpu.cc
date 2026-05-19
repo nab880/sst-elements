@@ -33,7 +33,8 @@ using namespace SST::Interfaces;
 QuetzCPU::QuetzCPU(ComponentId_t id, Params& params)
     : Component(id),
       child_pid_(0),
-      stop_ticking_(true)
+      stop_ticking_(true),
+      halted_count_(0)
 {
     int verbosity = params.find<int>("verbose", 0);
     output_ = new SST::Output(
@@ -288,24 +289,35 @@ void QuetzCPU::emergencyShutdown() {
     tunnelmgr_ = nullptr;
 }
 
+// Halt quorum: the simulation ends only when EVERY vCPU has halted AND every
+// vCPU has drained its in-flight memory transactions.  This prevents a single
 bool QuetzCPU::tick(SST::Cycle_t ) {
     tunnel_->updateTime(getCurrentSimTimeNano());
     tunnel_->incrementCycles();
 
-    stop_ticking_ = false;
-
     for (uint32_t i = 0; i < vcpu_count_; i++) {
+        bool was_halted = cores_[i]->isCoreHalted();
         cores_[i]->tick();
-        if (cores_[i]->isCoreHalted()) {
-            stop_ticking_ = true;
-            break;
-        }
+        if (!was_halted && cores_[i]->isCoreHalted())
+            halted_count_++;
     }
 
-    if (stop_ticking_)
-        primaryComponentOKToEndSim();
+    if (halted_count_ < vcpu_count_)
+        return false;
 
-    return stop_ticking_;
+    // All vCPUs halted — wait for pending transactions to drain before
+    // releasing primaryComponentOKToEndSim, otherwise late responses arrive
+    for (uint32_t i = 0; i < vcpu_count_; i++)
+        if (cores_[i]->pendingCount() > 0) return false;
+
+    if (!stop_ticking_) {
+        output_->verbose(CALL_INFO, 1, 0,
+            "All %" PRIu32 " vCPUs halted and drained — ending simulation.\n",
+            vcpu_count_);
+        primaryComponentOKToEndSim();
+        stop_ticking_ = true;
+    }
+    return true;
 }
 
 // Fork and exec QEMU
