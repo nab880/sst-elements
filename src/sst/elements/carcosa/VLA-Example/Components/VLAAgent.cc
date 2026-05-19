@@ -1,5 +1,6 @@
 #include "sst_config.h"
 #include "sst/elements/carcosa/VLA-Example/Components/VLAAgent.h"
+#include "sst/elements/carcosa/VLA-Example/Components/VlaRegions.h"
 #include "sst/elements/memHierarchy/memEvent.h"
 #include "sst/elements/memHierarchy/memTypes.h"
 #include <cstring>
@@ -34,8 +35,9 @@ VLAAgent::VLAAgent(ComponentId_t id, Params& params)
     hyadesRole_ = params.find<int>("hyades_role", 0);
     verbose_ = params.find<bool>("verbose", false);
 
-    stateKey_   = params.find<std::string>("state_key", "");
-    regionSize_ = params.find<uint64_t>("region_size", 4096);
+    stateKey_    = params.find<std::string>("state_key", "");
+    regionSize_  = params.find<uint64_t>("region_size", 4096);
+    regionsCsv_  = params.find<std::string>("regions", "");
 }
 
 VLAAgent::~VLAAgent()
@@ -66,9 +68,29 @@ bool VLAAgent::handleInterceptedEvent(MemEvent* ev, Link* highlink)
         sendCommandResponse(ev, hyadesRole_);
         return true;
     }
+    if (offset == 0x0030 &&
+        (ev->getCmd() == Command::Write || ev->getCmd() == Command::GetX)) {
+        uint32_t value = 0;
+        const auto& payload = ev->getPayload();
+        if (payload.size() >= sizeof(uint32_t))
+            std::memcpy(&value, payload.data(), sizeof(uint32_t));
+        sendWriteAck(ev);
+        latestActionChecksum_    = value;
+        latestActionChecksumSet_ = true;
+        if (verbose_)
+            out_->output("VLAAgent: action checksum staged 0x%08x\n", value);
+        return true;
+    }
     if (offset == 0x0004 && (ev->getCmd() == Command::Write || ev->getCmd() == Command::GetX)) {
         sendWriteAck(ev);
         publishKernel(KERNEL_IDLE);
+        // DUE-on-frame: if EccGuard requested an abort, snap to ACTUATE so the
+        // next advance() closes the cycle (and increments framesDropped).
+        if (consumeFrameAbort(stateKey_)) {
+            if (verbose_)
+                out_->output("VLAAgent: frame abort honored, fast-forwarding to ACTUATE\n");
+            fsm_.fastForwardToActuate();
+        }
         advanceFSM();
         return true;
     }
@@ -86,6 +108,10 @@ void VLAAgent::agentSetup()
         s->currentKernel = KERNEL_IDLE;
         s->pipelineCycle = 0;
         publishMmioRegion();
+        int n = publishUserRegions(stateKey_, regionsCsv_, out_, "VLAAgent");
+        if (verbose_ && n > 0)
+            out_->output("VLAAgent: published %d user region(s) into '%s'\n",
+                         n, stateKey_.c_str());
     }
 
     if (verbose_) {
@@ -133,6 +159,44 @@ void VLAAgent::setHighlink(Link* highlink)
 void VLAAgent::advanceFSM()
 {
     VLAState prev = fsm_.advance(out_, "VLAAgent");
+    // Frame just closed if we just walked off ACTUATE. Push a record so
+    // ActionScorer can compute per-frame behavioral metrics.
+    if (prev == ACTUATE && !stateKey_.empty()) {
+        PipelineStateBase* s =
+            PipelineStateRegistry<PipelineStateBase>::getMutable(stateKey_);
+        if (s) {
+            PipelineStateBase::FrameRecord fr;
+            fr.pipelineCycle      = fsm_.pipelineCycles();
+            fr.kernelAtClose      = static_cast<int>(prev);
+            // Edge-triggered drop semantics: a frame is `dropped` iff
+            // PipelineStateBase::framesDropped advanced since the last close.
+            // The previous comparison against frames.size() was a
+            // cumulative-vs-cumulative compare; see VLACpuDelayAgent.
+            const int currentDrops = s->framesDropped;
+            fr.dropped            = (currentDrops > lastFramesDroppedSeen_);
+            lastFramesDroppedSeen_ = currentDrops;
+            // Tier B violation attribution; see VLACpuDelayAgent::advanceFSM.
+            {
+                int attr = s->argmaxEccPerFrameEscapesByKernel();
+                fr.attributingKernel = (attr >= 0) ? attr : static_cast<int>(prev);
+                s->resetEccPerFrameEscapesByKernel();
+            }
+            if (latestActionChecksumSet_) {
+                fr.actionChecksum = static_cast<uint64_t>(latestActionChecksum_);
+                latestActionChecksumSet_ = false;
+                latestActionChecksum_    = 0;
+            } else {
+                fr.actionChecksum = static_cast<uint64_t>(fsm_.pipelineCycles())
+                                    ^ (static_cast<uint64_t>(fsm_.currentSeqLen()) << 16)
+                                    ^ (static_cast<uint64_t>(s->eccCumulativeEscapes) << 32)
+                                    ^ static_cast<uint64_t>(s->eccCumulativeFlips);
+            }
+            fr.cumulativeEscapes  = s->eccCumulativeEscapes;
+            fr.cumulativeFlips    = s->eccCumulativeFlips;
+            fr.simTimePs          = static_cast<uint64_t>(getCurrentSimCycle());
+            s->frames.push_back(fr);
+        }
+    }
     if (verbose_) {
         out_->output("VLAAgent: %d -> %d (vit=%d prefill=%d decode=%d seqLen=%d)\n",
                     static_cast<int>(prev), static_cast<int>(fsm_.state()),

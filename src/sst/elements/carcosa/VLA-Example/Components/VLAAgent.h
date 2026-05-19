@@ -38,6 +38,7 @@ public:
         {"rng_seed", "Seed for the decode early-exit RNG (Marsaglia W seed, with Z fixed at 11). Only consumed when decode_exit_prob > 0.", "12345"},
         {"state_key", "Optional. PipelineStateRegistry<PipelineStateBase> key this agent publishes into so PortModuleStateGate (or any consumer) can read currentKernel/pipelineCycle/regions[]. Empty disables publishing.", ""},
         {"region_size", "Size in bytes of the published MMIO control region (regions[0]).", "4096"},
+        {"regions", "Optional CSV of workload-labeled DRAM regions for region-aware EccGuard policies. Each entry is 'name:base:size' (decimal or 0xHEX). Slots populate starting at index 1 (slot 0 is mmio_control). Example: 'weights:0x10000000:0x4000000,kv_cache:0x14000000:0x100000,activations:0x14100000:0x200000,action_queue:0x14300000:0x1000'.", ""},
         {"verbose", "Enable verbose output.", "false"}
     )
 
@@ -71,6 +72,14 @@ private:
 
     std::string stateKey_;
     uint64_t    regionSize_ = 4096;
+    std::string regionsCsv_;
+
+    // Edge-trigger cache for per-frame `dropped`; see VLACpuDelayAgent.h.
+    int lastFramesDroppedSeen_ = 0;
+
+    // Workload-published action checksum (HYADES_ACTION_CHECKSUM_OFFSET 0x0030).
+    uint32_t latestActionChecksum_    = 0;
+    bool     latestActionChecksumSet_ = false;
 };
 
 } // namespace Carcosa

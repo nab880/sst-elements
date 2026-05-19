@@ -1,6 +1,7 @@
 #include "sst_config.h"
 #include "sst/elements/carcosa/VLA-Example/Components/VLACpuDelayAgent.h"
 #include "sst/elements/carcosa/VLA-Example/Components/VLAKernelComplexity.h"
+#include "sst/elements/carcosa/VLA-Example/Components/VlaRegions.h"
 #include "sst/elements/carcosa/Components/HaliEvent.h"
 #include "sst/elements/memHierarchy/memEvent.h"
 #include "sst/elements/memHierarchy/memTypes.h"
@@ -43,8 +44,9 @@ VLACpuDelayAgent::VLACpuDelayAgent(ComponentId_t id, Params& params)
     baselineSeqLen_ = params.find<int>("baseline_seq_len", 0);
     if (baselineSeqLen_ <= 0) baselineSeqLen_ = cfg.initialSeqLen;
 
-    stateKey_   = params.find<std::string>("state_key", "");
-    regionSize_ = params.find<uint64_t>("region_size", 4096);
+    stateKey_    = params.find<std::string>("state_key", "");
+    regionSize_  = params.find<uint64_t>("region_size", 4096);
+    regionsCsv_  = params.find<std::string>("regions", "");
 
     // Legacy single-factor path is used only when the user migrated no per-dim
     // scale and set scale_factor to something non-trivial. Defaults (everything
@@ -106,6 +108,40 @@ bool VLACpuDelayAgent::handleInterceptedEvent(MemEvent* ev, Link* highlink)
         return true;
     }
 
+    // Workload region-publish ABI: write base_lo / base_hi / size / commit-slot
+    // into staging and apply to PipelineStateBase::regions[slot] on commit.
+    // The staged virtual base/size are what EccGuard matches against (via the
+    // MemEvent's preserved virtual address), so the addresses the binary
+    // actually touches now match the published regions.
+    if ((offset == 0x0020 || offset == 0x0024 || offset == 0x0028 || offset == 0x002C) &&
+        (ev->getCmd() == Command::Write || ev->getCmd() == Command::GetX)) {
+        uint32_t value = 0;
+        const auto& payload = ev->getPayload();
+        if (payload.size() >= sizeof(uint32_t))
+            std::memcpy(&value, payload.data(), sizeof(uint32_t));
+        sendWriteAck(ev);
+        applyRegionPublish(offset, value);
+        return true;
+    }
+
+    // Per-frame action checksum publish (HYADES_ACTION_CHECKSUM_OFFSET).
+    // Workload computes a fold-hash over action_queue (or any payload an
+    // Escape would corrupt) and writes here; we stamp it onto the next
+    // FrameRecord. See VLACpuDelayAgent::advanceFSM for the consumer.
+    if (offset == 0x0030 &&
+        (ev->getCmd() == Command::Write || ev->getCmd() == Command::GetX)) {
+        uint32_t value = 0;
+        const auto& payload = ev->getPayload();
+        if (payload.size() >= sizeof(uint32_t))
+            std::memcpy(&value, payload.data(), sizeof(uint32_t));
+        sendWriteAck(ev);
+        latestActionChecksum_    = value;
+        latestActionChecksumSet_ = true;
+        if (verbose_)
+            out_->output("VLACpuDelayAgent: action checksum staged 0x%08x\n", value);
+        return true;
+    }
+
     if (offset == 0x0004 &&
         (ev->getCmd() == Command::Write || ev->getCmd() == Command::GetX)) {
         sendWriteAck(ev);
@@ -121,6 +157,12 @@ bool VLACpuDelayAgent::handleInterceptedEvent(MemEvent* ev, Link* highlink)
         uint64_t delayPs = computeScaledDelay(activeKernelId_);
         if (delayPs > 0) {
             delayPending_ = true;
+            // Re-affirm currentKernel for the full modeled delay window. Vanadis
+            // is blocked on the next command read for `delayPs`, but L1/L2/dir
+            // traffic from speculative loads, writebacks and the stub's region
+            // walks must be attributed to this kernel until handleDelayComplete
+            // publishes IDLE.
+            publishKernel(activeKernelId_);
             selfLink_->send(static_cast<SimTime_t>(delayPs), nullptr);
         } else {
             recordKernelEnd();
@@ -173,6 +215,10 @@ void VLACpuDelayAgent::agentSetup()
         s->currentKernel = KERNEL_IDLE;
         s->pipelineCycle = 0;
         publishMmioRegion();
+        int n = publishUserRegions(stateKey_, regionsCsv_, out_, "VLACpuDelayAgent");
+        if (verbose_ && n > 0)
+            out_->output("VLACpuDelayAgent: published %d user region(s) into '%s'\n",
+                         n, stateKey_.c_str());
     }
 
     if (verbose_) {
@@ -217,6 +263,58 @@ void VLACpuDelayAgent::publishMmioRegion()
     s->regions[0].name  = "mmio_control";
 }
 
+// Implements the workload region-publish ABI declared in hyades.h. The binary
+// writes base_lo/base_hi/size/commit to MMIO offsets 0x20/0x24/0x28/0x2C; we
+// latch each into PipelineStateBase::stagedBase/stagedSize and commit on the
+// COMMIT write. The committed (base, size) is the workload-virtual address
+// range, which is what EccGuard matches against.
+void VLACpuDelayAgent::applyRegionPublish(uint64_t offset, uint32_t value)
+{
+    if (stateKey_.empty()) return;
+    PipelineStateBase* s =
+        PipelineStateRegistry<PipelineStateBase>::getMutable(stateKey_);
+    if (!s) s = PipelineStateRegistry<PipelineStateBase>::getOrCreate(stateKey_);
+    switch (offset) {
+    case 0x0020:
+        s->stagedBase = (s->stagedBase & 0xFFFFFFFF00000000ull) |
+                        static_cast<uint64_t>(value);
+        break;
+    case 0x0024:
+        s->stagedBase = (s->stagedBase & 0x00000000FFFFFFFFull) |
+                        (static_cast<uint64_t>(value) << 32);
+        break;
+    case 0x0028:
+        s->stagedSize = static_cast<uint64_t>(value);
+        break;
+    case 0x002C: {
+        size_t slot = static_cast<size_t>(value);
+        // Slot 0 is reserved for mmio_control; refuse to overwrite it.
+        if (slot == 0) {
+            if (verbose_)
+                out_->output("VLACpuDelayAgent: ignoring region commit to reserved slot 0\n");
+            s->stagedBase = 0;
+            s->stagedSize = 0;
+            break;
+        }
+        // Preserve any symbolic name that came from the `regions` CSV.
+        std::string preservedName;
+        if (slot < s->regions.size())
+            preservedName = s->regions[slot].name;
+        s->commitStagedRegion(slot);
+        if (!preservedName.empty())
+            s->regions[slot].name = preservedName;
+        if (verbose_)
+            out_->output("VLACpuDelayAgent: region slot %zu '%s' published base=0x%" PRIx64 " size=0x%" PRIx64 "\n",
+                         slot,
+                         (slot < s->regions.size() ? s->regions[slot].name.c_str() : ""),
+                         s->regions[slot].base, s->regions[slot].size);
+        break;
+    }
+    default:
+        break;
+    }
+}
+
 void VLACpuDelayAgent::publishKernel(int kernel)
 {
     if (stateKey_.empty()) return;
@@ -232,6 +330,12 @@ void VLACpuDelayAgent::checkBothDone()
     if (!localDone_ || !partnerDone_) return;
     localDone_   = false;
     partnerDone_ = false;
+
+    if (consumeFrameAbort(stateKey_)) {
+        if (verbose_)
+            out_->output("VLACpuDelayAgent: frame abort honored, fast-forwarding to ACTUATE\n");
+        fsm_.fastForwardToActuate();
+    }
 
     advanceFSM();
 
@@ -265,6 +369,55 @@ void VLACpuDelayAgent::dispatchToGpu()
 void VLACpuDelayAgent::advanceFSM()
 {
     VLAState prev = fsm_.advance(out_, "VLACpuDelayAgent");
+    if (prev == ACTUATE && !stateKey_.empty()) {
+        PipelineStateBase* s =
+            PipelineStateRegistry<PipelineStateBase>::getMutable(stateKey_);
+        if (s) {
+            PipelineStateBase::FrameRecord fr;
+            fr.pipelineCycle      = fsm_.pipelineCycles();
+            fr.kernelAtClose      = static_cast<int>(prev);
+            // Edge-triggered drop semantics: a frame is `dropped` iff the
+            // pipeline-wide framesDropped counter advanced since the last
+            // closed frame. The previous comparison against frames.size()
+            // was a cumulative-vs-cumulative compare and produced misleading
+            // per-frame counts whenever a single run had any drops.
+            const int currentDrops = s->framesDropped;
+            fr.dropped            = (currentDrops > lastFramesDroppedSeen_);
+            lastFramesDroppedSeen_ = currentDrops;
+            // Tier B (Fig. 3a) violation attribution: pick the kernel with
+            // the largest in-frame escape count, then reset the map for
+            // the next frame. argmax returns -1 when no escape fired this
+            // frame (and the FrameRecord falls back to kernelAtClose at
+            // the figure level).
+            int attr = s->argmaxEccPerFrameEscapesByKernel();
+            fr.attributingKernel  = (attr >= 0) ? attr : static_cast<int>(prev);
+            s->resetEccPerFrameEscapesByKernel();
+            // Prefer the workload-published checksum (Escape-sensitive: the
+            // stub reads its action_queue back through the cache hierarchy
+            // and folds it into 32 bits) if it arrived this frame; otherwise
+            // fall back to a synthetic counter hash that at least varies
+            // across frames so ActionScorer's golden file isn't all-zero.
+            if (latestActionChecksumSet_) {
+                fr.actionChecksum = static_cast<uint64_t>(latestActionChecksum_);
+                latestActionChecksumSet_ = false;
+                latestActionChecksum_    = 0;
+            } else {
+                // Fallback: mix escape/flip counters into the hash so that
+                // any frame experiencing an ECC escape diverges from the
+                // golden (BER=0) checksum. Not as precise as the stub's
+                // fold-XOR over action_queue memory, but escape-sensitive
+                // without requiring async cache reads from this agent.
+                fr.actionChecksum = static_cast<uint64_t>(fsm_.pipelineCycles())
+                                    ^ (static_cast<uint64_t>(fsm_.currentSeqLen()) << 16)
+                                    ^ (static_cast<uint64_t>(s->eccCumulativeEscapes) << 32)
+                                    ^ static_cast<uint64_t>(s->eccCumulativeFlips);
+            }
+            fr.cumulativeEscapes  = s->eccCumulativeEscapes;
+            fr.cumulativeFlips    = s->eccCumulativeFlips;
+            fr.simTimePs          = static_cast<uint64_t>(getCurrentSimCycle());
+            s->frames.push_back(fr);
+        }
+    }
     if (verbose_)
         out_->output("VLACpuDelayAgent: %d -> %d (vit=%d prefill=%d decode=%d seq=%d)\n",
                      static_cast<int>(prev), static_cast<int>(fsm_.state()),
@@ -333,4 +486,14 @@ void VLACpuDelayAgent::printProfile()
     }
     out_->output("=== End CPU Delay Profile (%zu records) ===\n\n",
                  profile_.size());
+
+    int dropped = 0;
+    if (!stateKey_.empty()) {
+        const PipelineStateBase* s =
+            PipelineStateRegistry<PipelineStateBase>::get(stateKey_);
+        if (s) dropped = s->framesDropped;
+    }
+    out_->output("=== VLA Frame Drops (CPU Delay Agent) ===\n");
+    out_->output("frames_dropped\n%d\n", dropped);
+    out_->output("=== End VLA Frame Drops ===\n\n");
 }

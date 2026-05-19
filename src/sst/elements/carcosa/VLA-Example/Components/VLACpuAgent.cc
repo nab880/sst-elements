@@ -1,5 +1,6 @@
 #include "sst_config.h"
 #include "sst/elements/carcosa/VLA-Example/Components/VLACpuAgent.h"
+#include "sst/elements/carcosa/VLA-Example/Components/VlaRegions.h"
 #include "sst/elements/carcosa/Components/HaliEvent.h"
 #include "sst/elements/memHierarchy/memEvent.h"
 #include "sst/elements/memHierarchy/memTypes.h"
@@ -36,6 +37,7 @@ VLACpuAgent::VLACpuAgent(ComponentId_t id, Params& params)
     verbose_      = params.find<bool>("verbose", false);
     stateKey_     = params.find<std::string>("state_key", "");
     regionSize_   = params.find<uint64_t>("region_size", 4096);
+    regionsCsv_   = params.find<std::string>("regions", "");
 }
 
 VLACpuAgent::~VLACpuAgent()
@@ -84,6 +86,20 @@ bool VLACpuAgent::handleInterceptedEvent(MemEvent* ev, Link* highlink)
         return true;
     }
 
+    if (offset == 0x0030 &&
+        (ev->getCmd() == Command::Write || ev->getCmd() == Command::GetX)) {
+        uint32_t value = 0;
+        const auto& payload = ev->getPayload();
+        if (payload.size() >= sizeof(uint32_t))
+            std::memcpy(&value, payload.data(), sizeof(uint32_t));
+        sendWriteAck(ev);
+        latestActionChecksum_    = value;
+        latestActionChecksumSet_ = true;
+        if (verbose_)
+            out_->output("VLACpuAgent: action checksum staged 0x%08x\n", value);
+        return true;
+    }
+
     return warnAndDropUnknownIntercept(ev, controlAddrBase_);
 }
 
@@ -110,6 +126,10 @@ void VLACpuAgent::agentSetup()
         s->currentKernel = KERNEL_IDLE;
         s->pipelineCycle = 0;
         publishMmioRegion();
+        int n = publishUserRegions(stateKey_, regionsCsv_, out_, "VLACpuAgent");
+        if (verbose_ && n > 0)
+            out_->output("VLACpuAgent: published %d user region(s) into '%s'\n",
+                         n, stateKey_.c_str());
     }
 
     if (verbose_) {
@@ -162,6 +182,12 @@ void VLACpuAgent::checkBothDone()
     localDone_   = false;
     partnerDone_ = false;
 
+    if (consumeFrameAbort(stateKey_)) {
+        if (verbose_)
+            out_->output("VLACpuAgent: frame abort honored, fast-forwarding to ACTUATE\n");
+        fsm_.fastForwardToActuate();
+    }
+
     advanceFSM();
 
     if (fsm_.exitAfterThisRead()) {
@@ -194,6 +220,39 @@ void VLACpuAgent::dispatchToGpu()
 void VLACpuAgent::advanceFSM()
 {
     VLAState prev = fsm_.advance(out_, "VLACpuAgent");
+    if (prev == ACTUATE && !stateKey_.empty()) {
+        PipelineStateBase* s =
+            PipelineStateRegistry<PipelineStateBase>::getMutable(stateKey_);
+        if (s) {
+            PipelineStateBase::FrameRecord fr;
+            fr.pipelineCycle      = fsm_.pipelineCycles();
+            fr.kernelAtClose      = static_cast<int>(prev);
+            // Edge-triggered drop semantics: see VLACpuDelayAgent::advanceFSM.
+            const int currentDrops = s->framesDropped;
+            fr.dropped            = (currentDrops > lastFramesDroppedSeen_);
+            lastFramesDroppedSeen_ = currentDrops;
+            // Tier B violation attribution; see VLACpuDelayAgent::advanceFSM.
+            {
+                int attr = s->argmaxEccPerFrameEscapesByKernel();
+                fr.attributingKernel = (attr >= 0) ? attr : static_cast<int>(prev);
+                s->resetEccPerFrameEscapesByKernel();
+            }
+            if (latestActionChecksumSet_) {
+                fr.actionChecksum = static_cast<uint64_t>(latestActionChecksum_);
+                latestActionChecksumSet_ = false;
+                latestActionChecksum_    = 0;
+            } else {
+                fr.actionChecksum = static_cast<uint64_t>(fsm_.pipelineCycles())
+                                    ^ (static_cast<uint64_t>(fsm_.currentSeqLen()) << 16)
+                                    ^ (static_cast<uint64_t>(s->eccCumulativeEscapes) << 32)
+                                    ^ static_cast<uint64_t>(s->eccCumulativeFlips);
+            }
+            fr.cumulativeEscapes  = s->eccCumulativeEscapes;
+            fr.cumulativeFlips    = s->eccCumulativeFlips;
+            fr.simTimePs          = static_cast<uint64_t>(getCurrentSimCycle());
+            s->frames.push_back(fr);
+        }
+    }
     if (verbose_)
         out_->output("VLACpuAgent: %d -> %d (vit=%d prefill=%d decode=%d seq=%d)\n",
                      static_cast<int>(prev), static_cast<int>(fsm_.state()),
@@ -240,4 +299,14 @@ void VLACpuAgent::printProfile()
     }
     out_->output("=== End CPU Profile (%zu records) ===\n\n",
                  profile_.size());
+
+    int dropped = 0;
+    if (!stateKey_.empty()) {
+        const PipelineStateBase* s =
+            PipelineStateRegistry<PipelineStateBase>::get(stateKey_);
+        if (s) dropped = s->framesDropped;
+    }
+    out_->output("=== VLA Frame Drops (CPU) ===\n");
+    out_->output("frames_dropped\n%d\n", dropped);
+    out_->output("=== End VLA Frame Drops ===\n\n");
 }

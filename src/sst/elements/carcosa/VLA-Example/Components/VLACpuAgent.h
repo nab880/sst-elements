@@ -53,6 +53,7 @@ public:
         {"rng_seed",        "Seed for the decode early-exit RNG. Only consumed when decode_exit_prob > 0.", "12345"},
         {"state_key",       "Optional. PipelineStateRegistry<PipelineStateBase> key this agent publishes into so PortModuleStateGate (or any consumer) can read currentKernel/pipelineCycle/regions[]. Empty disables publishing.", ""},
         {"region_size",     "Size in bytes of the published MMIO control region (regions[0]).", "4096"},
+        {"regions",         "Optional CSV of workload-labeled DRAM regions for region-aware EccGuard policies. 'name:base:size' triples; slot 0 reserved for mmio_control.", ""},
         {"verbose",         "Enable verbose output.",                        "false"}
     )
 
@@ -96,6 +97,7 @@ private:
 
     std::string stateKey_;
     uint64_t    regionSize_ = 4096;
+    std::string regionsCsv_;
 
     struct KernelRecord {
         std::string core;
@@ -107,6 +109,13 @@ private:
     std::vector<KernelRecord> profile_;
     uint64_t kernelStartCycle_ = 0;
     int activeKernelId_ = -1;
+
+    // Edge-trigger cache for per-frame `dropped`; see VLACpuDelayAgent.h.
+    int lastFramesDroppedSeen_ = 0;
+
+    // Workload-published action checksum (HYADES_ACTION_CHECKSUM_OFFSET 0x0030).
+    uint32_t latestActionChecksum_    = 0;
+    bool     latestActionChecksumSet_ = false;
 
     void recordKernelEnd();
     void printProfile();
