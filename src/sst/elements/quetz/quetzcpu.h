@@ -253,10 +253,12 @@ public:
           "Size distribution of write requests in bytes.",
           "bytes", 1 },
         { "split_read_requests",
-          "Read requests split across a cache-line boundary.",
+          "Extra sub-requests beyond the first for reads crossing cache-line "
+          "boundaries. An access spanning N lines contributes N-1.",
           "requests", 1 },
         { "split_write_requests",
-          "Write requests split across a cache-line boundary.",
+          "Extra sub-requests beyond the first for writes crossing cache-line "
+          "boundaries. An access spanning N lines contributes N-1.",
           "requests", 1 },
         { "no_ops",
           "Instructions observed with no memory side-effect.",

@@ -48,21 +48,30 @@ QEMU blocks (spins) whenever SST falls behind.
 |---|---|---|
 | SST-core | 13+ | `sst` and `sst-config` on `$PATH` |
 | sst-elements | this branch | `memHierarchy` element required |
-| QEMU | 8+ | `qemu-riscv64` (or any target) user-mode binary |
+| QEMU | 8+ | `qemu-<target>` or `qemu-system-<target>`; 9.0+ recommended (see below) |
 
 The QEMU user-mode binary must support the `-plugin` flag.  Static builds
 (`qemu-riscv64-static`) do **not** support plugins — use a
 dynamically-linked build.
+
+**QEMU 9.0+ is recommended.**  On older QEMU, store-data capture in
+**system mode** is disabled because the v1-v3 fallback (dereferencing the
+guest virtual address as a host pointer) only works in user mode.  QEMU 9.0
+introduces `qemu_plugin_mem_get_value`, which reads the actual stored
+value from the CPU's register file and works in both user and system mode.
+On QEMU 8.x running user mode everything still works; only sysmode store
+payloads (e.g. UART TX capture) require 9.0+.
 
 The plugin source uses `QEMU_PLUGIN_VERSION` guards to handle API changes
 across QEMU releases:
 
 | QEMU version | Plugin API version | Notes |
 |---|---|---|
-| 8.x | v1 | `qemu_plugin_n_vcpus()`, `qemu_plugin_insn_data()` returns `const void*` |
-| 9.x | v2 | `qemu_plugin_num_vcpus()` replaces `n_vcpus` |
+| 8.x | v1 | `qemu_plugin_n_vcpus()`, `qemu_plugin_insn_data()` returns `const void*`; sysmode store-data disabled |
+| 9.0 | v2 | `qemu_plugin_num_vcpus()` replaces `n_vcpus` |
 | 9.1+ | v3 | `qemu_plugin_insn_data(insn, buf, len)` write-into-buffer API |
-| 10+ | v4–v5 | Added memory read/write helpers (no breaking change for Quetz) |
+| 9.0+ | v4 | `qemu_plugin_mem_get_value()` — Quetz uses this for store-data capture (sysmode supported) |
+| 10+ | v5 | Added memory read/write helpers (no breaking change for Quetz) |
 | 11+ | v6 | Added discontinuity/syscall filter callbacks (no breaking change for Quetz) |
 
 ---
@@ -222,8 +231,8 @@ All statistics are per-vCPU and labelled with a vCPU index suffix (e.g.
 | `write_latency` | cycles | Cumulative round-trip write latency |
 | `read_request_sizes` | bytes | Size distribution of read requests |
 | `write_request_sizes` | bytes | Size distribution of write requests |
-| `split_read_requests` | requests | Reads that crossed a cache-line boundary (issued as two requests) |
-| `split_write_requests` | requests | Writes that crossed a cache-line boundary |
+| `split_read_requests` | requests | Extra sub-requests beyond the first for reads that crossed cache-line boundaries (an access spanning N lines contributes N-1 to this counter) |
+| `split_write_requests` | requests | Extra sub-requests beyond the first for writes that crossed cache-line boundaries (same N-1 convention) |
 | `no_ops` | instructions | Instructions with no memory side-effect |
 | `instruction_count` | instructions | Total instructions observed |
 | `cycles` | cycles | Simulated clock cycles |
