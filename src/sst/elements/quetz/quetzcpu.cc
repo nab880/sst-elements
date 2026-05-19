@@ -363,44 +363,39 @@ void QuetzCPU::launchQEMU() {
                 QEMU_PLUGIN_INSTALL_DIR);
     }
 
-    // Build argv.
+    // Build argv as a std::vector<std::string>.  RAII manages lifetimes; the
+    // C-style char* const[] view is constructed only in the child immediately
+    // before execvp.
     //
-    // User mode:   qemu-<arch>  [qemu_args] -plugin <...>  <exe>  [args]
+    // User mode:   qemu-<arch>         [qemu_args] -plugin <...>  <exe>  [args]
     // System mode: qemu-system-<arch>  [qemu_args] -plugin <...>  -kernel <exe>  [args]
     std::string shmem_name = tunnelmgr_->getRegionName();
     std::string plugin_arg = qemu_plugin_ + ",shmname=" + shmem_name;
     if (detailed_tracking_)
         plugin_arg += ",detailed=1";
 
-    uint32_t max_argc = 1
-        + (uint32_t)qemu_extra_args_.size()
-        + 2          // -plugin <arg>
-        + 2          // optional: -kernel <exe>
-        + appargcount_
-        + 1;         // NULL terminator
-    char** argv = (char**)malloc(sizeof(char*) * max_argc);
-    uint32_t ai = 0;
-
-    auto push = [&](const std::string& s) { argv[ai++] = strdup(s.c_str()); };
-
-    push(qemu_bin_);
-    for (const auto& a : qemu_extra_args_) push(a);
-    push("-plugin");
-    push(plugin_arg);
+    std::vector<std::string> argv_strs;
+    argv_strs.reserve(8 + qemu_extra_args_.size() + app_args_.size());
+    argv_strs.push_back(qemu_bin_);
+    for (const auto& a : qemu_extra_args_) argv_strs.push_back(a);
+    argv_strs.push_back("-plugin");
+    argv_strs.push_back(plugin_arg);
     if (system_mode_ && !system_mode_loader_.empty())
-        push(system_mode_loader_);
-    push(executable_);
-    for (const auto& arg : app_args_) push(arg);
-    argv[ai] = nullptr;
+        argv_strs.push_back(system_mode_loader_);
+    argv_strs.push_back(executable_);
+    for (const auto& a : app_args_) argv_strs.push_back(a);
 
-    output_->verbose(CALL_INFO, 1, 0,
-        "QEMU command: %s %s-plugin %s %s%s ...\n",
-        qemu_bin_.c_str(),
-        qemu_extra_args_.empty() ? "" : "[extra_args] ",
-        qemu_plugin_.c_str(),
-        (system_mode_ && !system_mode_loader_.empty())
-            ? (system_mode_loader_ + " ").c_str() : "",
-        executable_.c_str());
+    // Compose a single log line so the verbose call doesn't depend on
+    // lifetime of temporaries.
+    {
+        std::ostringstream cmdline;
+        for (size_t k = 0; k < argv_strs.size(); k++) {
+            if (k) cmdline << ' ';
+            cmdline << argv_strs[k];
+        }
+        output_->verbose(CALL_INFO, 1, 0,
+            "QEMU command: %s\n", cmdline.str().c_str());
+    }
 
     pid_t child = fork();
     if (child < 0)
@@ -422,8 +417,6 @@ void QuetzCPU::launchQEMU() {
                 output_->fatal(CALL_INFO, -1,
                     "QEMU failed to start (pstat=%d).\n", pstat);
         }
-        for (uint32_t i = 0; i < ai; i++) free(argv[i]);
-        free(argv);
         return;
     }
 
@@ -445,7 +438,15 @@ void QuetzCPU::launchQEMU() {
         if (!freopen(stderr_file_.c_str(), "w", stderr)) _exit(1);
     }
 
-    execvp(argv[0], argv);
+    // C++17: std::string::data() returns a mutable char* (sst-elements
+    // builds with -std=c++17).  Project the vector of strings to a NULL-
+    // terminated char* array for execvp.
+    std::vector<char*> argv;
+    argv.reserve(argv_strs.size() + 1);
+    for (auto& s : argv_strs) argv.push_back(s.data());
+    argv.push_back(nullptr);
+
+    execvp(argv[0], argv.data());
     perror("execvp");
     _exit(127);
 }
