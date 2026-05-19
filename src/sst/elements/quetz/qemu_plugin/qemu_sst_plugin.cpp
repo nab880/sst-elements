@@ -268,13 +268,47 @@ static inline void handle_mem(unsigned int vcpu_index,
     if (g_isa == QUETZ_ISA_GENERIC)
         cls = classify_by_size(size);
 
-    // In user-mode, guest VA == host VA so we can read store data directly.
-    // In system-mode, guest VAs are unrelated to host VAs — skip this capture
-    // to avoid reading from an arbitrary host address or segfaulting.
+    // Store-data capture.
+    //
+    // Preferred path (QEMU plugin API >= 4, QEMU 9.0+): qemu_plugin_mem_get_value
+    // returns the actual value from the simulated CPU's register file as a
+    // tagged union (U8/U16/U32/U64/U128).  Works in both user-mode and
+    // system-mode QEMU and is the only API-blessed way to read store data.
+    //
+    // Fallback (API v1-v3): cast the guest VA to a host pointer.  This works
+    // only in user-mode where QEMU maps the guest 1:1 into the host VA space;
+    // in system-mode the guest VA is unrelated to host VAs and the read would
+    // segfault, so the fallback is gated on !g_system_mode.
     const uint8_t* store_data = nullptr;
-    if (is_store && size <= 16 && !g_system_mode)
-        store_data = reinterpret_cast<const uint8_t*>(
-            static_cast<uintptr_t>(vaddr));
+    uint8_t        store_buf[sizeof(QuetzCommand::data)] = {0};
+    if (is_store && size <= sizeof(QuetzCommand::data)) {
+#if QEMU_PLUGIN_VERSION >= 4
+        qemu_plugin_mem_value v = qemu_plugin_mem_get_value(info);
+        switch (v.type) {
+        case QEMU_PLUGIN_MEM_VALUE_U8:
+            store_buf[0] = v.data.u8;
+            break;
+        case QEMU_PLUGIN_MEM_VALUE_U16:
+            memcpy(store_buf, &v.data.u16, sizeof(v.data.u16));
+            break;
+        case QEMU_PLUGIN_MEM_VALUE_U32:
+            memcpy(store_buf, &v.data.u32, sizeof(v.data.u32));
+            break;
+        case QEMU_PLUGIN_MEM_VALUE_U64:
+            memcpy(store_buf, &v.data.u64, sizeof(v.data.u64));
+            break;
+        case QEMU_PLUGIN_MEM_VALUE_U128:
+            memcpy(store_buf,     &v.data.u128.low,  sizeof(v.data.u128.low));
+            memcpy(store_buf + 8, &v.data.u128.high, sizeof(v.data.u128.high));
+            break;
+        }
+        store_data = store_buf;
+#else
+        if (!g_system_mode)
+            store_data = reinterpret_cast<const uint8_t*>(
+                static_cast<uintptr_t>(vaddr));
+#endif
+    }
 
     write_cmd(vcpu_index,
               is_store ? QUETZ_CMD_WRITE : QUETZ_CMD_READ,
