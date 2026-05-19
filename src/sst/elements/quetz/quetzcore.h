@@ -108,8 +108,9 @@ public:
     // Response handler — wired up as the StandardMem callback.
     void handleMemResponse(SST::Interfaces::StandardMem::Request* resp);
 
-    bool isCoreHalted()  const { return halted_;  }
-    bool isCoreStalled() const { return stalled_; }
+    bool     isCoreHalted()  const { return halted_;  }
+    bool     isCoreStalled() const { return stalled_; }
+    uint32_t pendingCount()  const { return pending_count_; }
 
     void finishCore();
 

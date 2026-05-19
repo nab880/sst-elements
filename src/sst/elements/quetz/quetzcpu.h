@@ -365,8 +365,9 @@ private:
     SST::Core::Interprocess::SHMParent<QuetzTunnel>* tunnelmgr_;
     QuetzTunnel*                                      tunnel_;
 
-    pid_t  child_pid_;
-    bool   stop_ticking_;
+    pid_t    child_pid_;
+    bool     stop_ticking_;
+    uint32_t halted_count_;
 
     std::vector<QuetzCore*>                     cores_;
     std::vector<SST::Interfaces::StandardMem*>  mem_ifaces_;
