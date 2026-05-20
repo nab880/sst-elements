@@ -19,9 +19,19 @@ comp_LTLIBRARIES = libquetz.la
 
 libquetz_la_SOURCES = \
     quetzcpu.cc \
-    quetzcpu.h  \
+    quetzcpu.h \
     quetzcore.cc \
-    quetzcore.h  \
+    quetzcore.h \
+    quetz_config.cc \
+    quetz_config.h \
+    quetz_launcher.cc \
+    quetz_launcher.h \
+    quetz_memmap.cc \
+    quetz_memmap.h \
+    quetz_mem_issue.cc \
+    quetz_mem_issue.h \
+    quetz_stats.cc \
+    quetz_stats.h \
     quetz_shmem.h
 
 libquetz_la_LDFLAGS = \
@@ -35,19 +45,19 @@ libquetz_la_CPPFLAGS = \
 
 # ---------------------------------------------------------------------------
 # QEMU TCG plugin shared library
-#
-# Compiled as a plain shared library (not a libtool module) so that QEMU
-# can dlopen() it.  The plugin uses only SST's header-only interprocess
-# templates — no link-time dependency on libsst.
-#
-# qemu-plugin.h is NOT shipped in-tree; it is found from the QEMU
-# installation via QEMU_PLUGIN_H_DIR (set by configure.m4).
 # ---------------------------------------------------------------------------
 plugindir = $(libexecdir)
 plugin_LTLIBRARIES = libqemu_sst_plugin.la
 
 libqemu_sst_plugin_la_SOURCES = \
-    qemu_plugin/qemu_sst_plugin.cpp \
+    qemu_plugin/plugin_main.cpp \
+    qemu_plugin/plugin_state.cpp \
+    qemu_plugin/plugin_state.h \
+    qemu_plugin/instrument.cpp \
+    qemu_plugin/instrument.h \
+    qemu_plugin/decoder_riscv.h \
+    qemu_plugin/decoder_aarch64.h \
+    qemu_plugin/decoder_generic.h \
     quetz_shmem.h
 
 libqemu_sst_plugin_la_LDFLAGS = \
