@@ -24,10 +24,17 @@ libquetz_la_SOURCES = \
     quetzcore.h \
     quetz_config.cc \
     quetz_config.h \
+    quetz_core_backend.cc \
+    quetz_core_backend.h \
+    quetz_frontend.h \
+    quetz_qemu_frontend.cc \
+    quetz_qemu_frontend.h \
     quetz_launcher.cc \
     quetz_launcher.h \
     quetz_memmap.cc \
     quetz_memmap.h \
+    quetz_mem_access.cc \
+    quetz_mem_access.h \
     quetz_mem_issue.cc \
     quetz_mem_issue.h \
     quetz_stats.cc \
@@ -55,6 +62,10 @@ libqemu_sst_plugin_la_SOURCES = \
     qemu_plugin/plugin_state.h \
     qemu_plugin/instrument.cpp \
     qemu_plugin/instrument.h \
+    qemu_plugin/insn_classifier.cpp \
+    qemu_plugin/insn_classifier.h \
+    qemu_plugin/mem_access_handler.cpp \
+    qemu_plugin/mem_access_handler.h \
     qemu_plugin/decoder_riscv.h \
     qemu_plugin/decoder_aarch64.h \
     qemu_plugin/decoder_generic.h \

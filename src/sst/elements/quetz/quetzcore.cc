@@ -19,7 +19,7 @@ using namespace SST::Quetz;
 
 QuetzCore::QuetzCore(
         ComponentId_t                id,
-        QuetzTunnel*                 tunnel,
+        QuetzCoreBackend*            backend,
         uint32_t                     coreID,
         uint32_t                     maxPendTrans,
         SST::Output*                 out,
@@ -35,7 +35,7 @@ QuetzCore::QuetzCore(
         uint32_t                     checkAddresses,
         bool                         detailedTracking)
     : ComponentExtension(id),
-      tunnel_(tunnel),
+      backend_(backend),
       output_(out),
       tc_(tc),
       core_id_(coreID),
@@ -47,7 +47,7 @@ QuetzCore::QuetzCore(
       detailed_tracking_(detailedTracking),
       halted_(false),
       stalled_(false),
-      memmap_(memmap),
+      mem_access_(memmap),
       emitter_(this, out, coreID, tc, cacheLineSize, checkAddresses, stats_)
 {
     for (int c = 0; c < QUETZ_INSN_CLASS_COUNT; c++) {
@@ -69,7 +69,7 @@ QuetzCore::QuetzCore(
         exec_latency_[QUETZ_INSN_INT_MEM],
         exec_latency_[QUETZ_INSN_FP_MEM],
         exec_latency_[QUETZ_INSN_VEC_MEM],
-        memmap_.regionCount());
+        mem_access_.regionCount());
 }
 
 QuetzCore::~QuetzCore() {}
@@ -83,7 +83,7 @@ void QuetzCore::finishCore() {
         "QuetzCore %" PRIu32 " finishing, %" PRIu32
         " transactions still pending.\n",
         core_id_, emitter_.pendingCount());
-    memmap_.flushUart(output_, core_id_);
+    mem_access_.finish(output_, core_id_);
 }
 
 void QuetzCore::handleMemResponse(SST::Interfaces::StandardMem::Request* resp) {
@@ -100,7 +100,7 @@ void QuetzCore::handleMemResponse(SST::Interfaces::StandardMem::Request* resp) {
 void QuetzCore::refillQueue() {
     while (coreQ_.size() < max_queue_len_) {
         QuetzCommand cmd;
-        if (!tunnel_->readMessageNB((size_t)core_id_, &cmd))
+        if (!backend_->readCommandNB(core_id_, &cmd))
             break;
 
         uint32_t stall = 0;
@@ -148,15 +148,8 @@ void QuetzCore::processQueue() {
         }
 
         if ((cmd.cmd == QUETZ_CMD_READ || cmd.cmd == QUETZ_CMD_WRITE) &&
-            memmap_.isFiltered(cmd.addr))
+            mem_access_.handleMemoryAccess(cmd, stats_))
         {
-            if (cmd.cmd == QUETZ_CMD_WRITE) {
-                if (cmd.size >= 1)
-                    memmap_.captureUartByte(cmd.addr, cmd.data[0]);
-                stats_.filtered_writes->addData(1);
-            } else {
-                stats_.filtered_reads->addData(1);
-            }
             stats_.insn_count->addData(1);
             coreQ_.pop();
             inst_count_++;

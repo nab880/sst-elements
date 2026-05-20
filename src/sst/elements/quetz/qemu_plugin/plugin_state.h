@@ -33,6 +33,9 @@ extern std::atomic<bool>    g_mem_seen[PLUGIN_MAX_VCPUS];
 extern QuetzInsnClass       g_prev_cls[PLUGIN_MAX_VCPUS];
 extern QuetzISA             g_isa;
 
+class InsnClassifier;
+extern InsnClassifier*      g_insn_classifier;
+
 void write_cmd(unsigned vcpu, QuetzShmemCmd type,
                uint32_t size, uint64_t pc, uint64_t addr,
                QuetzInsnClass cls = QUETZ_INSN_OTHER,

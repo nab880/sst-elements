@@ -22,9 +22,7 @@ QuetzCPU::QuetzCPU(ComponentId_t id, Params& params)
     : Component(id),
       output_(new SST::Output(
           "QuetzComponent[@f:@l:@p] ", 0, 0, SST::Output::STDOUT)),
-      tunnelmgr_(nullptr),
-      tunnel_(nullptr),
-      launcher_(output_),
+      frontend_(nullptr),
       stop_ticking_(true),
       halted_count_(0)
 {
@@ -35,13 +33,11 @@ QuetzCPU::QuetzCPU(ComponentId_t id, Params& params)
     output_->verbose(CALL_INFO, 1, 0,
         "Configuring for %" PRIu32 " vCPU(s).\n", cfg_.vcpu_count);
 
-    tunnelmgr_ = new SST::Core::Interprocess::SHMParent<QuetzTunnel>(
-        id, cfg_.vcpu_count, cfg_.max_core_queue);
-    tunnel_ = tunnelmgr_->getTunnel();
+    frontend_ = new QemuFrontend(id, cfg_.vcpu_count, cfg_.max_core_queue, output_);
 
     output_->verbose(CALL_INFO, 1, 0,
         "Shared-memory region: %s\n",
-        tunnelmgr_->getRegionName().c_str());
+        frontend_->shmemRegionName().c_str());
 
     output_->verbose(CALL_INFO, 1, 0,
         "Registering clock at %s.\n", cfg_.cpu_clock.c_str());
@@ -54,7 +50,7 @@ QuetzCPU::QuetzCPU(ComponentId_t id, Params& params)
 
     for (uint32_t i = 0; i < cfg_.vcpu_count; i++) {
         cores_.push_back(loadComponentExtension<QuetzCore>(
-            tunnel_, i, cfg_.max_pend_trans, output_,
+            frontend_->coreBackend(), i, cfg_.max_pend_trans, output_,
             cfg_.max_issue_cyc, cfg_.max_core_queue,
             cfg_.cache_line_sz, tc, params,
             cfg_.exec_latency, cfg_.compute_latency, cfg_.memmap,
@@ -103,7 +99,7 @@ QuetzCPU::QuetzCPU(ComponentId_t id, Params& params)
 }
 
 QuetzCPU::~QuetzCPU() {
-    delete tunnelmgr_;
+    delete frontend_;
     delete output_;
 }
 
@@ -111,10 +107,10 @@ void QuetzCPU::init(unsigned int phase) {
     if (phase == 0) {
         output_->verbose(CALL_INFO, 1, 0,
             "Phase 0 init: launching QEMU child process.\n");
-        launcher_.spawn(cfg_, tunnelmgr_->getRegionName(), cfg_.detailed_tracking);
+        frontend_->spawn(cfg_, cfg_.detailed_tracking);
         output_->verbose(CALL_INFO, 1, 0,
             "Waiting for QEMU plugin to attach...\n");
-        tunnel_->waitForChild();
+        frontend_->waitForChildAttach();
         output_->verbose(CALL_INFO, 1, 0, "Plugin attached!\n");
         stop_ticking_ = false;
     }
@@ -131,18 +127,19 @@ void QuetzCPU::finish() {
     for (uint32_t i = 0; i < cfg_.vcpu_count; i++)
         cores_[i]->finishCore();
 
-    launcher_.terminate();
+    frontend_->terminate();
 }
 
 void QuetzCPU::emergencyShutdown() {
-    launcher_.forceKill();
-    delete tunnelmgr_;
-    tunnelmgr_ = nullptr;
+    frontend_->forceKill();
+    delete frontend_;
+    frontend_ = nullptr;
 }
 
 bool QuetzCPU::tick(SST::Cycle_t /*cycle*/) {
-    tunnel_->updateTime(getCurrentSimTimeNano());
-    tunnel_->incrementCycles();
+    QuetzCoreBackend* backend = frontend_->coreBackend();
+    backend->updateSimTime(getCurrentSimTimeNano());
+    backend->incrementCycles();
 
     for (uint32_t i = 0; i < cfg_.vcpu_count; i++) {
         bool was_halted = cores_[i]->isCoreHalted();
