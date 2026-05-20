@@ -32,51 +32,24 @@
 
 #include <stdint.h>
 #include <queue>
-#include <unordered_map>
 #include <vector>
 
+#include "quetz_mem_issue.h"
+#include "quetz_memmap.h"
 #include "quetz_shmem.h"
+#include "quetz_stats.h"
 
 namespace SST {
 namespace Quetz {
 
-// ---------------------------------------------------------------------------
-// Named address-range region
-// ---------------------------------------------------------------------------
-enum class MemRegionType {
-    MEMORY,    // forward to memory hierarchy (default)
-    FILTERED,  // count only, do not forward
-    UART,      // capture TX bytes; do not forward to hierarchy
-};
-
-struct MemRegion {
-    std::string    name;
-    uint64_t       start;
-    uint64_t       end;           // inclusive
-    MemRegionType  type;
-    uint32_t       uart_tx_offset; // byte offset of TX data register within region
-};
-
-// ---------------------------------------------------------------------------
-// Pending-transaction bookkeeping (mirrors Ariel's RequestInfo)
-// ---------------------------------------------------------------------------
-struct QuetzPendingReq {
-    SST::Interfaces::StandardMem::Request* req;
-    uint64_t issue_cycle;
-};
-
-// ---------------------------------------------------------------------------
-// Queue entry: wraps a plugin command with an execution-stall countdown
-// ---------------------------------------------------------------------------
 struct StagedCmd {
     QuetzCommand cmd;
     uint32_t    remaining_stall;
 };
 
-// ---------------------------------------------------------------------------
-// QuetzCore — one instance per guest vCPU
-// ---------------------------------------------------------------------------
 class QuetzCore : public SST::ComponentExtension {
+    friend struct QuetzCoreStats;
+
 public:
     QuetzCore(
         ComponentId_t                   id,
@@ -98,19 +71,14 @@ public:
 
     ~QuetzCore();
 
-    void setMemLink(SST::Interfaces::StandardMem* link) {
-        mem_link_ = link;
-    }
+    void setMemLink(SST::Interfaces::StandardMem* link);
 
-    // Called each SST clock cycle by QuetzCPU::tick().
     void tick();
-
-    // Response handler — wired up as the StandardMem callback.
     void handleMemResponse(SST::Interfaces::StandardMem::Request* resp);
 
     bool     isCoreHalted()  const { return halted_;  }
     bool     isCoreStalled() const { return stalled_; }
-    uint32_t pendingCount()  const { return pending_count_; }
+    uint32_t pendingCount()  const { return emitter_.pendingCount(); }
 
     void finishCore();
 
@@ -118,70 +86,30 @@ private:
     void refillQueue();
     void processQueue();
 
-    void issueRead (uint64_t vaddr, uint32_t size, uint64_t pc);
-    void issueWrite(uint64_t vaddr, uint32_t size, uint64_t pc,
-                    const uint8_t* raw_data = nullptr);
-    uint32_t          slotsNeeded(uint64_t vaddr, uint32_t size) const;
-    const MemRegion*  findRegion (uint64_t vaddr) const;
-    bool              isFiltered (uint64_t vaddr) const;
-
-    // -----------------------------------------------------------------------
-    // State
-    // -----------------------------------------------------------------------
-    QuetzTunnel*                         tunnel_;
-    SST::Interfaces::StandardMem*        mem_link_;
-    SST::Output*                         output_;
-    TimeConverter                        tc_;
+    QuetzTunnel*                  tunnel_;
+    SST::Output*                  output_;
+    TimeConverter                 tc_;
 
     uint32_t core_id_;
     uint32_t max_pending_;
-    uint32_t pending_count_;
     uint32_t max_issue_per_cycle_;
     uint32_t max_queue_len_;
-    uint64_t cache_line_size_;
 
     uint64_t max_insts_;
     uint64_t inst_count_;
-    uint32_t check_addresses_;
     bool     detailed_tracking_;
 
-    bool        halted_;
-    bool        stalled_;
-
-    std::string uart_tx_buf_;     // accumulated guest UART TX bytes
+    bool halted_;
+    bool stalled_;
 
     std::queue<StagedCmd> coreQ_;
 
-    std::unordered_map<SST::Interfaces::StandardMem::Request::id_t,
-                       QuetzPendingReq> pending_txns_;
+    uint32_t exec_latency_[QUETZ_INSN_CLASS_COUNT];
+    uint32_t compute_latency_[QUETZ_INSN_CLASS_COUNT];
 
-    uint32_t               exec_latency_[QUETZ_INSN_CLASS_COUNT];
-    uint32_t               compute_latency_[QUETZ_INSN_CLASS_COUNT];
-    std::vector<MemRegion> memmap_;
-
-    // -----------------------------------------------------------------------
-    // Statistics
-    // -----------------------------------------------------------------------
-    SST::Statistics::Statistic<uint64_t>* stat_read_reqs_;
-    SST::Statistics::Statistic<uint64_t>* stat_write_reqs_;
-    SST::Statistics::Statistic<uint64_t>* stat_read_lat_;
-    SST::Statistics::Statistic<uint64_t>* stat_write_lat_;
-    SST::Statistics::Statistic<uint64_t>* stat_read_req_sizes_;
-    SST::Statistics::Statistic<uint64_t>* stat_write_req_sizes_;
-    SST::Statistics::Statistic<uint64_t>* stat_split_reads_;
-    SST::Statistics::Statistic<uint64_t>* stat_split_writes_;
-    SST::Statistics::Statistic<uint64_t>* stat_noop_count_;
-    SST::Statistics::Statistic<uint64_t>* stat_insn_count_;
-    SST::Statistics::Statistic<uint64_t>* stat_cycles_;
-    SST::Statistics::Statistic<uint64_t>* stat_active_cycles_;
-    SST::Statistics::Statistic<uint64_t>* stat_filtered_reads_;
-    SST::Statistics::Statistic<uint64_t>* stat_filtered_writes_;
-    SST::Statistics::Statistic<uint64_t>* stat_stall_cycles_;
-    SST::Statistics::Statistic<uint64_t>* stat_compute_stall_cycles_;
-    SST::Statistics::Statistic<uint64_t>* stat_int_compute_;
-    SST::Statistics::Statistic<uint64_t>* stat_fp_compute_;
-    SST::Statistics::Statistic<uint64_t>* stat_vec_compute_;
-    SST::Statistics::Statistic<uint64_t>* stat_branch_;
+    MemMap             memmap_;
+    MemRequestEmitter  emitter_;
+    QuetzCoreStats     stats_;
 };
 
 } // namespace Quetz

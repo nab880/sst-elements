@@ -12,16 +12,11 @@
 #include <sst_config.h>
 #include "quetzcore.h"
 
-#include <algorithm>
-#include <cstring>
 #include <inttypes.h>
-#include <vector>
 
 using namespace SST;
 using namespace SST::Quetz;
-using namespace SST::Interfaces;
 
-// ---------------------------------------------------------------------------
 QuetzCore::QuetzCore(
         ComponentId_t                id,
         QuetzTunnel*                 tunnel,
@@ -41,51 +36,28 @@ QuetzCore::QuetzCore(
         bool                         detailedTracking)
     : ComponentExtension(id),
       tunnel_(tunnel),
-      mem_link_(nullptr),
       output_(out),
       tc_(tc),
       core_id_(coreID),
       max_pending_(maxPendTrans),
-      pending_count_(0),
       max_issue_per_cycle_(maxIssuePerCycle),
       max_queue_len_(maxQueueLen),
-      cache_line_size_(cacheLineSize),
       max_insts_(maxInsts),
       inst_count_(0),
-      check_addresses_(checkAddresses),
       detailed_tracking_(detailedTracking),
-      memmap_(memmap),
       halted_(false),
-      stalled_(false)
+      stalled_(false),
+      memmap_(memmap),
+      emitter_(this, out, coreID, tc, cacheLineSize, checkAddresses, stats_)
 {
     for (int c = 0; c < QUETZ_INSN_CLASS_COUNT; c++) {
-        exec_latency_[c]     = execLatency[c];
-        compute_latency_[c]  = computeLatency[c];
+        exec_latency_[c]    = execLatency[c];
+        compute_latency_[c] = computeLatency[c];
     }
 
     char sub_id[32];
     snprintf(sub_id, sizeof(sub_id), "%" PRIu32, coreID);
-
-    stat_read_reqs_        = registerStatistic<uint64_t>("read_requests",       sub_id);
-    stat_write_reqs_       = registerStatistic<uint64_t>("write_requests",      sub_id);
-    stat_read_lat_         = registerStatistic<uint64_t>("read_latency",        sub_id);
-    stat_write_lat_        = registerStatistic<uint64_t>("write_latency",       sub_id);
-    stat_read_req_sizes_   = registerStatistic<uint64_t>("read_request_sizes",  sub_id);
-    stat_write_req_sizes_  = registerStatistic<uint64_t>("write_request_sizes", sub_id);
-    stat_split_reads_      = registerStatistic<uint64_t>("split_read_requests", sub_id);
-    stat_split_writes_     = registerStatistic<uint64_t>("split_write_requests",sub_id);
-    stat_noop_count_       = registerStatistic<uint64_t>("no_ops",              sub_id);
-    stat_insn_count_       = registerStatistic<uint64_t>("instruction_count",   sub_id);
-    stat_cycles_           = registerStatistic<uint64_t>("cycles",              sub_id);
-    stat_active_cycles_    = registerStatistic<uint64_t>("active_cycles",       sub_id);
-    stat_filtered_reads_   = registerStatistic<uint64_t>("filtered_reads",      sub_id);
-    stat_filtered_writes_  = registerStatistic<uint64_t>("filtered_writes",     sub_id);
-    stat_stall_cycles_         = registerStatistic<uint64_t>("stall_cycles",         sub_id);
-    stat_compute_stall_cycles_ = registerStatistic<uint64_t>("compute_stall_cycles", sub_id);
-    stat_int_compute_      = registerStatistic<uint64_t>("int_compute",         sub_id);
-    stat_fp_compute_       = registerStatistic<uint64_t>("fp_compute",          sub_id);
-    stat_vec_compute_      = registerStatistic<uint64_t>("vec_compute",         sub_id);
-    stat_branch_           = registerStatistic<uint64_t>("branch",              sub_id);
+    stats_.registerAll(this, sub_id);
 
     output_->verbose(CALL_INFO, 1, 0,
         "QuetzCore %" PRIu32 " created: maxPend=%" PRIu32
@@ -93,56 +65,38 @@ QuetzCore::QuetzCore(
         " latency[int/fp/vec]=%" PRIu32 "/%" PRIu32 "/%" PRIu32
         " memmap_regions=%zu\n",
         core_id_, max_pending_, max_issue_per_cycle_,
-        max_queue_len_, cache_line_size_,
+        max_queue_len_, cacheLineSize,
         exec_latency_[QUETZ_INSN_INT_MEM],
         exec_latency_[QUETZ_INSN_FP_MEM],
         exec_latency_[QUETZ_INSN_VEC_MEM],
-        memmap_.size());
+        memmap_.regionCount());
 }
 
 QuetzCore::~QuetzCore() {}
 
-// ---------------------------------------------------------------------------
+void QuetzCore::setMemLink(SST::Interfaces::StandardMem* link) {
+    emitter_.setLink(link);
+}
+
 void QuetzCore::finishCore() {
     output_->verbose(CALL_INFO, 1, 0,
         "QuetzCore %" PRIu32 " finishing, %" PRIu32
         " transactions still pending.\n",
-        core_id_, pending_count_);
-
-    if (!uart_tx_buf_.empty())
-        output_->output("UART[%" PRIu32 "]: %s\n",
-            core_id_, uart_tx_buf_.c_str());
+        core_id_, emitter_.pendingCount());
+    memmap_.flushUart(output_, core_id_);
 }
 
-// ---------------------------------------------------------------------------
-void QuetzCore::handleMemResponse(StandardMem::Request* resp) {
-    auto it = pending_txns_.find(resp->getID());
-    if (it == pending_txns_.end()) {
-        // Untracked: post-halt drain or posted write ack.
-        output_->verbose(CALL_INFO, 4, 0,
-            "QuetzCore %" PRIu32 ": ignoring untracked response id %" PRIu64 "\n",
-            core_id_, (uint64_t)resp->getID());
-        delete resp;
+void QuetzCore::handleMemResponse(SST::Interfaces::StandardMem::Request* resp) {
+    uint64_t lat = 0;
+    bool was_read = false;
+    if (!emitter_.handleResponse(resp, lat, was_read))
         return;
-    }
-
-    uint64_t issue = it->second.issue_cycle;
-    uint64_t now   = getCurrentSimTime(tc_);
-    uint64_t lat   = (now >= issue) ? (now - issue) : 0;
-
-    if (dynamic_cast<StandardMem::ReadResp*>(resp))
-        stat_read_lat_->addData(lat);
+    if (was_read)
+        stats_.read_lat->addData(lat);
     else
-        stat_write_lat_->addData(lat);
-
-    pending_txns_.erase(it);
-    pending_count_--;
-    delete resp;
+        stats_.write_lat->addData(lat);
 }
 
-// ---------------------------------------------------------------------------
-// Drain commands from the shared-memory ring buffer into coreQ_
-// ---------------------------------------------------------------------------
 void QuetzCore::refillQueue() {
     while (coreQ_.size() < max_queue_len_) {
         QuetzCommand cmd;
@@ -167,13 +121,9 @@ void QuetzCore::refillQueue() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Issue memory requests from coreQ_ up to the per-cycle limit.
-// ---------------------------------------------------------------------------
 void QuetzCore::processQueue() {
     uint32_t issued = 0;
 
-    // Returns true and sets halted_ when the max-instruction limit is reached.
     auto checkMaxInsts = [&]() -> bool {
         if (max_insts_ > 0 && inst_count_ >= max_insts_) {
             output_->verbose(CALL_INFO, 1, 0,
@@ -189,7 +139,6 @@ void QuetzCore::processQueue() {
         StagedCmd& sc     = coreQ_.front();
         QuetzCommand& cmd = sc.cmd;
 
-        // EXIT is never stalled — drain immediately.
         if (cmd.cmd == QUETZ_CMD_EXIT) {
             output_->verbose(CALL_INFO, 1, 0,
                 "QuetzCore %" PRIu32 " processing EXIT — halting.\n", core_id_);
@@ -198,50 +147,41 @@ void QuetzCore::processQueue() {
             return;
         }
 
-        // Filtered/UART accesses are dropped before the stall check: they
-        // don't consume issue bandwidth, stall cycles, or pending slots.
         if ((cmd.cmd == QUETZ_CMD_READ || cmd.cmd == QUETZ_CMD_WRITE) &&
-            isFiltered(cmd.addr))
+            memmap_.isFiltered(cmd.addr))
         {
             if (cmd.cmd == QUETZ_CMD_WRITE) {
-                // Capture byte written to a UART TX data register.
-                const MemRegion* r = findRegion(cmd.addr);
-                if (r && r->type == MemRegionType::UART) {
-                    uint64_t offset = cmd.addr - r->start;
-                    if (offset == r->uart_tx_offset && cmd.size >= 1)
-                        uart_tx_buf_ += static_cast<char>(cmd.data[0]);
-                }
-                stat_filtered_writes_->addData(1);
+                if (cmd.size >= 1)
+                    memmap_.captureUartByte(cmd.addr, cmd.data[0]);
+                stats_.filtered_writes->addData(1);
             } else {
-                stat_filtered_reads_->addData(1);
+                stats_.filtered_reads->addData(1);
             }
-            stat_insn_count_->addData(1);
+            stats_.insn_count->addData(1);
             coreQ_.pop();
             inst_count_++;
             if (checkMaxInsts()) return;
             continue;
         }
 
-        // Stall check applies to both memory instructions (exec_latency) and
-        // compute NOPs (compute_latency).
         if (sc.remaining_stall > 0) {
             sc.remaining_stall--;
             if (cmd.cmd == QUETZ_CMD_NOP)
-                stat_compute_stall_cycles_->addData(1);
+                stats_.compute_stall_cycles->addData(1);
             else
-                stat_stall_cycles_->addData(1);
+                stats_.stall_cycles->addData(1);
             break;
         }
 
         if (cmd.cmd == QUETZ_CMD_NOP) {
-            stat_noop_count_->addData(1);
-            stat_insn_count_->addData(1);
+            stats_.noop_count->addData(1);
+            stats_.insn_count->addData(1);
             if (detailed_tracking_) {
                 switch (static_cast<QuetzInsnClass>(cmd.insn_class)) {
-                case QUETZ_INSN_INT_COMPUTE: stat_int_compute_->addData(1); break;
-                case QUETZ_INSN_FP_COMPUTE:  stat_fp_compute_->addData(1);  break;
-                case QUETZ_INSN_VEC_COMPUTE: stat_vec_compute_->addData(1); break;
-                case QUETZ_INSN_BRANCH:      stat_branch_->addData(1);      break;
+                case QUETZ_INSN_INT_COMPUTE: stats_.int_compute->addData(1); break;
+                case QUETZ_INSN_FP_COMPUTE:  stats_.fp_compute->addData(1);  break;
+                case QUETZ_INSN_VEC_COMPUTE: stats_.vec_compute->addData(1); break;
+                case QUETZ_INSN_BRANCH:      stats_.branch->addData(1);      break;
                 default: break;
                 }
             }
@@ -251,17 +191,17 @@ void QuetzCore::processQueue() {
             continue;
         }
 
-        uint32_t slots_needed = slotsNeeded(cmd.addr, cmd.size);
+        uint32_t slots_needed = emitter_.slotsNeeded(cmd.addr, cmd.size);
 
         if (issued + slots_needed > max_issue_per_cycle_)
             break;
-        if (pending_count_ + slots_needed > max_pending_)
+        if (emitter_.pendingCount() + slots_needed > max_pending_)
             break;
 
         switch (cmd.cmd) {
         case QUETZ_CMD_READ:
-            issueRead(cmd.addr, cmd.size, cmd.pc);
-            stat_insn_count_->addData(1);
+            emitter_.issueRead(cmd.addr, cmd.size, cmd.pc);
+            stats_.insn_count->addData(1);
             issued += slots_needed;
             coreQ_.pop();
             inst_count_++;
@@ -269,8 +209,8 @@ void QuetzCore::processQueue() {
             break;
 
         case QUETZ_CMD_WRITE:
-            issueWrite(cmd.addr, cmd.size, cmd.pc, cmd.data);
-            stat_insn_count_->addData(1);
+            emitter_.issueWrite(cmd.addr, cmd.size, cmd.pc, cmd.data);
+            stats_.insn_count->addData(1);
             issued += slots_needed;
             coreQ_.pop();
             inst_count_++;
@@ -285,144 +225,13 @@ void QuetzCore::processQueue() {
     }
 
     if (issued > 0)
-        stat_active_cycles_->addData(1);
-    stat_cycles_->addData(1);
+        stats_.active_cycles->addData(1);
+    stats_.cycles->addData(1);
 }
 
-// ---------------------------------------------------------------------------
 void QuetzCore::tick() {
     if (halted_)
         return;
-
     refillQueue();
     processQueue();
-}
-
-// ---------------------------------------------------------------------------
-// Compute the number of cache-line-sized sub-requests an access of (vaddr, size)
-// produces.  An access wholly contained in one line takes 1 slot; an access
-// that spans N cache lines takes N slots.  Required for wide RVV (LMUL=8 can
-// produce up to 512-byte segment accesses spanning 8 lines on a 64B-line host).
-uint32_t QuetzCore::slotsNeeded(uint64_t vaddr, uint32_t size) const {
-    if (size == 0) return 1;
-    uint64_t first_line = vaddr / cache_line_size_;
-    uint64_t last_line  = (vaddr + size - 1) / cache_line_size_;
-    return (uint32_t)(last_line - first_line + 1);
-}
-
-// ---------------------------------------------------------------------------
-const MemRegion* QuetzCore::findRegion(uint64_t vaddr) const {
-    for (const auto& r : memmap_)
-        if (vaddr >= r.start && vaddr <= r.end)
-            return &r;
-    return nullptr;
-}
-
-// ---------------------------------------------------------------------------
-bool QuetzCore::isFiltered(uint64_t vaddr) const {
-    const MemRegion* r = findRegion(vaddr);
-    return r && r->type != MemRegionType::MEMORY;
-}
-
-// ---------------------------------------------------------------------------
-// Walk an access (vaddr, size) one cache line at a time, emitting one
-// StandardMem::Read per chunk.  Accesses contained in a single line emit one
-// request; accesses spanning N lines emit N requests.  The split_*_requests
-// statistic records the number of EXTRA parts beyond the first (so a single
-// 2-line access counts as 1 split, a 4-line access as 3 splits, etc.).
-void QuetzCore::issueRead(uint64_t vaddr, uint32_t size, uint64_t /*pc*/) {
-    output_->verbose(CALL_INFO, 8, 0,
-        "QuetzCore %" PRIu32 " READ  vaddr=0x%016" PRIx64 " size=%" PRIu32 "\n",
-        core_id_, vaddr, size);
-
-    stat_read_req_sizes_->addData(size);
-
-    if (size == 0) return;
-
-    uint64_t addr      = vaddr;
-    uint32_t remaining = size;
-    uint32_t parts     = 0;
-
-    while (remaining > 0) {
-        uint64_t line_end = (addr & ~(cache_line_size_ - 1)) + cache_line_size_;
-        uint32_t chunk    = (uint32_t)std::min<uint64_t>(line_end - addr,
-                                                          (uint64_t)remaining);
-
-        auto* req = new StandardMem::Read(addr, chunk, 0, addr);
-        pending_txns_[req->getID()] = { req, getCurrentSimTime(tc_) };
-        pending_count_++;
-        stat_read_reqs_->addData(1);
-        mem_link_->send(req);
-
-        addr      += chunk;
-        remaining -= chunk;
-        parts++;
-    }
-
-    if (parts > 1)
-        stat_split_reads_->addData(parts - 1);
-
-    if (check_addresses_ && size > (uint32_t)cache_line_size_)
-        output_->verbose(CALL_INFO, 1, 0,
-            "QuetzCore %" PRIu32 " READ vaddr=0x%016" PRIx64 " size=%" PRIu32
-            " exceeds cache line size %" PRIu64 " (issued %" PRIu32 " sub-requests)\n",
-            core_id_, vaddr, size, cache_line_size_, parts);
-}
-
-// ---------------------------------------------------------------------------
-// As issueRead, but additionally threads raw_data through each chunk.
-// QuetzCommand::data carries at most 16 bytes; chunks past the 16-byte cap
-// are zero-filled.  This matches the existing protocol — wide RVV stores
-// have the full address footprint accounted in StandardMem requests, but
-// only the first 16 bytes of payload data are forwarded.  Widening the
-// shared-memory protocol to carry more data is out of scope for PR 1.
-void QuetzCore::issueWrite(uint64_t vaddr, uint32_t size, uint64_t /*pc*/,
-                           const uint8_t* raw_data) {
-    output_->verbose(CALL_INFO, 8, 0,
-        "QuetzCore %" PRIu32 " WRITE vaddr=0x%016" PRIx64 " size=%" PRIu32 "\n",
-        core_id_, vaddr, size);
-
-    stat_write_req_sizes_->addData(size);
-
-    if (size == 0) return;
-
-    static constexpr uint32_t kDataCap = (uint32_t)sizeof(QuetzCommand::data);
-
-    uint64_t addr        = vaddr;
-    uint32_t remaining   = size;
-    uint32_t data_offset = 0;  // running offset into raw_data
-    uint32_t parts       = 0;
-
-    while (remaining > 0) {
-        uint64_t line_end = (addr & ~(cache_line_size_ - 1)) + cache_line_size_;
-        uint32_t chunk    = (uint32_t)std::min<uint64_t>(line_end - addr,
-                                                          (uint64_t)remaining);
-
-        std::vector<uint8_t> data(chunk, 0);
-        if (raw_data && data_offset < kDataCap) {
-            uint32_t avail  = kDataCap - data_offset;
-            uint32_t copy_n = (chunk < avail) ? chunk : avail;
-            memcpy(data.data(), raw_data + data_offset, copy_n);
-        }
-
-        auto* req = new StandardMem::Write(addr, chunk, data, false, 0, addr);
-        pending_txns_[req->getID()] = { req, getCurrentSimTime(tc_) };
-        pending_count_++;
-        stat_write_reqs_->addData(1);
-        mem_link_->send(req);
-
-        addr        += chunk;
-        data_offset += chunk;
-        remaining   -= chunk;
-        parts++;
-    }
-
-    if (parts > 1)
-        stat_split_writes_->addData(parts - 1);
-
-    if (check_addresses_ && size > (uint32_t)cache_line_size_)
-        output_->verbose(CALL_INFO, 1, 0,
-            "QuetzCore %" PRIu32 " WRITE vaddr=0x%016" PRIx64 " size=%" PRIu32
-            " exceeds cache line size %" PRIu64 " (issued %" PRIu32 " sub-requests)\n",
-            core_id_, vaddr, size, cache_line_size_, parts);
 }
