@@ -7,9 +7,8 @@
 
 #include "instrument.h"
 
-#include "decoder_aarch64.h"
-#include "decoder_generic.h"
-#include "decoder_riscv.h"
+#include "insn_classifier.h"
+#include "mem_access_handler.h"
 #include "plugin_state.h"
 
 #include <cstdint>
@@ -17,71 +16,23 @@
 
 using namespace SST::Quetz;
 
-static inline void handle_mem(unsigned int vcpu_index,
-                               qemu_plugin_meminfo_t info,
-                               uint64_t vaddr,
-                               void* userdata,
-                               QuetzInsnClass cls)
-{
-    if (vcpu_index >= PLUGIN_MAX_VCPUS) return;
-
-    bool     is_store = qemu_plugin_mem_is_store(info);
-    uint32_t shift    = qemu_plugin_mem_size_shift(info);
-    uint32_t size     = (shift < 8) ? (1u << shift) : 128u;
-    uint64_t pc       = (uint64_t)(uintptr_t)userdata;
-
-    g_mem_seen[vcpu_index].store(true, std::memory_order_relaxed);
-
-    if (g_isa == QUETZ_ISA_GENERIC)
-        cls = classify_by_size(size);
-
-    const uint8_t* store_data = nullptr;
-    uint8_t        store_buf[sizeof(QuetzCommand::data)] = {0};
-    if (is_store && size <= sizeof(QuetzCommand::data)) {
-#if QEMU_PLUGIN_VERSION >= 4
-        qemu_plugin_mem_value v = qemu_plugin_mem_get_value(info);
-        switch (v.type) {
-        case QEMU_PLUGIN_MEM_VALUE_U8:
-            store_buf[0] = v.data.u8;
-            break;
-        case QEMU_PLUGIN_MEM_VALUE_U16:
-            memcpy(store_buf, &v.data.u16, sizeof(v.data.u16));
-            break;
-        case QEMU_PLUGIN_MEM_VALUE_U32:
-            memcpy(store_buf, &v.data.u32, sizeof(v.data.u32));
-            break;
-        case QEMU_PLUGIN_MEM_VALUE_U64:
-            memcpy(store_buf, &v.data.u64, sizeof(v.data.u64));
-            break;
-        case QEMU_PLUGIN_MEM_VALUE_U128:
-            memcpy(store_buf,     &v.data.u128.low,  sizeof(v.data.u128.low));
-            memcpy(store_buf + 8, &v.data.u128.high, sizeof(v.data.u128.high));
-            break;
-        }
-        store_data = store_buf;
-#else
-        if (!g_system_mode)
-            store_data = reinterpret_cast<const uint8_t*>(
-                static_cast<uintptr_t>(vaddr));
-#endif
-    }
-
-    write_cmd(vcpu_index,
-              is_store ? QUETZ_CMD_WRITE : QUETZ_CMD_READ,
-              size, pc, vaddr, cls, store_data);
-}
-
 static void cb_mem_int(unsigned int vi, qemu_plugin_meminfo_t info,
                        uint64_t va, void* ud)
-{ handle_mem(vi, info, va, ud, QUETZ_INSN_INT_MEM); }
+{
+    get_mem_access_handler()->handle(vi, info, va, ud, QUETZ_INSN_INT_MEM);
+}
 
 static void cb_mem_fp(unsigned int vi, qemu_plugin_meminfo_t info,
                       uint64_t va, void* ud)
-{ handle_mem(vi, info, va, ud, QUETZ_INSN_FP_MEM); }
+{
+    get_mem_access_handler()->handle(vi, info, va, ud, QUETZ_INSN_FP_MEM);
+}
 
 static void cb_mem_vec(unsigned int vi, qemu_plugin_meminfo_t info,
                        uint64_t va, void* ud)
-{ handle_mem(vi, info, va, ud, QUETZ_INSN_VEC_MEM); }
+{
+    get_mem_access_handler()->handle(vi, info, va, ud, QUETZ_INSN_VEC_MEM);
+}
 
 static inline void emit_nop_now(unsigned int vcpu_index, void* userdata,
                                  QuetzInsnClass cls)
@@ -152,7 +103,7 @@ static void cb_tb_trans(qemu_plugin_id_t /*id*/, struct qemu_plugin_tb* tb)
 #endif
         }
 
-        if (g_isa == QUETZ_ISA_GENERIC) {
+        if (!g_insn_classifier->usesPreciseMemCallbacks()) {
             qemu_plugin_register_vcpu_mem_cb(insn, cb_mem_int,
                                               QEMU_PLUGIN_CB_NO_REGS,
                                               QEMU_PLUGIN_MEM_RW, pc_ptr);
@@ -162,9 +113,7 @@ static void cb_tb_trans(qemu_plugin_id_t /*id*/, struct qemu_plugin_tb* tb)
             continue;
         }
 
-        QuetzInsnClass cls = (g_isa == QUETZ_ISA_RISCV)
-            ? classify_riscv_insn(enc)
-            : classify_aarch64_insn(enc);
+        QuetzInsnClass cls = g_insn_classifier->classify(enc);
 
         bool is_mem = (cls == QUETZ_INSN_INT_MEM ||
                        cls == QUETZ_INSN_FP_MEM  ||

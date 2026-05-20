@@ -35,7 +35,8 @@
 #include <vector>
 
 #include "quetz_mem_issue.h"
-#include "quetz_memmap.h"
+#include "quetz_mem_access.h"
+#include "quetz_core_backend.h"
 #include "quetz_shmem.h"
 #include "quetz_stats.h"
 
@@ -53,7 +54,7 @@ class QuetzCore : public SST::ComponentExtension {
 public:
     QuetzCore(
         ComponentId_t                   id,
-        QuetzTunnel*                    tunnel,
+        QuetzCoreBackend*               backend,
         uint32_t                        coreID,
         uint32_t                        maxPendTrans,
         SST::Output*                    out,
@@ -86,7 +87,7 @@ private:
     void refillQueue();
     void processQueue();
 
-    QuetzTunnel*                  tunnel_;
+    QuetzCoreBackend*             backend_;
     SST::Output*                  output_;
     TimeConverter                 tc_;
 
@@ -107,8 +108,8 @@ private:
     uint32_t exec_latency_[QUETZ_INSN_CLASS_COUNT];
     uint32_t compute_latency_[QUETZ_INSN_CLASS_COUNT];
 
-    MemMap             memmap_;
-    MemRequestEmitter  emitter_;
+    MemMapMemAccessStrategy       mem_access_;
+    MemRequestEmitter             emitter_;
     QuetzCoreStats     stats_;
 };
 

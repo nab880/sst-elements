@@ -11,6 +11,7 @@ extern "C" {
 }
 
 #include "instrument.h"
+#include "insn_classifier.h"
 #include "plugin_state.h"
 
 #include <cstdio>
@@ -56,6 +57,7 @@ int qemu_plugin_install(qemu_plugin_id_t id,
             (g_isa == QUETZ_ISA_AARCH64) ? "aarch64" : "generic",
             (int)g_system_mode);
     }
+    g_insn_classifier = create_insn_classifier(g_isa);
 
     for (unsigned i = 0; i < PLUGIN_MAX_VCPUS; i++) {
         g_mem_seen[i].store(false, std::memory_order_relaxed);
