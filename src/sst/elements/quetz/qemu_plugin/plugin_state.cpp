@@ -7,6 +7,8 @@
 
 #include "plugin_state.h"
 
+#include "insn_classifier.h"
+
 #include <cstring>
 
 namespace SST {
@@ -20,6 +22,7 @@ bool                g_system_mode = false;
 std::atomic<bool>   g_mem_seen[PLUGIN_MAX_VCPUS];
 QuetzInsnClass      g_prev_cls[PLUGIN_MAX_VCPUS];
 QuetzISA            g_isa = QUETZ_ISA_GENERIC;
+InsnClassifier*     g_insn_classifier = nullptr;
 
 void write_cmd(unsigned vcpu, QuetzShmemCmd type,
                uint32_t size, uint64_t pc, uint64_t addr,

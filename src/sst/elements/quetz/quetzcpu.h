@@ -25,8 +25,7 @@
 #include <vector>
 
 #include "quetz_config.h"
-#include "quetz_launcher.h"
-#include "quetz_shmem.h"
+#include "quetz_qemu_frontend.h"
 #include "quetzcore.h"
 
 namespace SST {
@@ -288,11 +287,8 @@ private:
     QuetzConfig cfg_;
     SST::Output* output_;
 
-    SST::Core::Interprocess::SHMParent<QuetzTunnel>* tunnelmgr_;
-    QuetzTunnel*                                      tunnel_;
-
-    QemuLauncher launcher_;
-    bool         stop_ticking_;
+    QemuFrontend* frontend_;
+    bool          stop_ticking_;
     uint32_t     halted_count_;
 
     std::vector<QuetzCore*>                    cores_;
