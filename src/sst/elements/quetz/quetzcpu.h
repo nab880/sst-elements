@@ -22,10 +22,10 @@
 #include <sst/core/interprocess/shmparent.h>
 
 #include <stdint.h>
-#include <sys/types.h>
-#include <string>
 #include <vector>
 
+#include "quetz_config.h"
+#include "quetz_launcher.h"
 #include "quetz_shmem.h"
 #include "quetzcore.h"
 
@@ -35,7 +35,6 @@ namespace Quetz {
 class QuetzCPU : public SST::Component {
 public:
 
-    // SST Element Library Interface (ELI)
     SST_ELI_REGISTER_COMPONENT(
         QuetzCPU,
         "quetz",
@@ -145,8 +144,6 @@ public:
           "Maximum vector element width in bits (RISC-V ELEN). "
           "Logged at startup.", "64" },
 
-        // Extra cycles a memory command waits at the head of the issue queue
-        // before the request is forwarded to the cache.  0 = no extra delay.
         { "exec_latency_int",
           "Extra pipeline cycles before an integer load/store issues to cache.",
           "0" },
@@ -157,8 +154,6 @@ public:
           "Extra pipeline cycles before a vector load/store issues to cache.",
           "0" },
 
-        // Extra cycles a non-memory instruction occupies at the head of the
-        // issue queue before it is retired.  Models functional-unit execution
         { "compute_latency_int",
           "Extra cycles an integer compute instruction occupies the issue queue.",
           "0" },
@@ -176,8 +171,6 @@ public:
           "the issue queue.  Applies to all ISAs including GENERIC targets.",
           "0" },
 
-        // Regions partition the guest address space.  Accesses to 'filtered'
-        // regions are counted but NOT forwarded to the memory hierarchy —
         { "memmap_count",
           "Number of named address-range regions (0 = all addresses forwarded).",
           "0" },
@@ -282,7 +275,6 @@ public:
           "SST::Interfaces::StandardMem" }
     )
 
-    // Lifecycle
     QuetzCPU(ComponentId_t id, Params& params);
     ~QuetzCPU();
 
@@ -293,51 +285,18 @@ public:
     bool tick(SST::Cycle_t cycle);
 
 private:
-    void launchQEMU();
-
-    // Configuration
-    bool        system_mode_;
-    std::string system_mode_loader_;
-    uint32_t    vcpu_count_;
-    std::string qemu_bin_;
-    std::string qemu_plugin_;
-    std::string executable_;
-    uint32_t    appargcount_;
-    std::vector<std::string> app_args_;
-    std::vector<std::string> qemu_extra_args_;
-
-    std::string stdin_file_;
-    std::string stdout_file_;
-    std::string stderr_file_;
-
-    uint64_t    max_insts_;
-    uint32_t    check_addresses_;
-    bool        detailed_tracking_;
-
-    std::string isa_str_;
-    bool        has_fpu_;
-    bool        has_vector_;
-    uint32_t    vector_vlen_;
-    uint32_t    vector_elen_;
-
-    uint32_t    exec_latency_[QUETZ_INSN_CLASS_COUNT];
-    uint32_t    compute_latency_[QUETZ_INSN_CLASS_COUNT];
-
-    std::vector<MemRegion>                            memmap_;
-    std::vector<std::pair<std::string,std::string>>   extra_env_;
-
-    // Runtime state
+    QuetzConfig cfg_;
     SST::Output* output_;
 
     SST::Core::Interprocess::SHMParent<QuetzTunnel>* tunnelmgr_;
     QuetzTunnel*                                      tunnel_;
 
-    pid_t    child_pid_;
-    bool     stop_ticking_;
-    uint32_t halted_count_;
+    QemuLauncher launcher_;
+    bool         stop_ticking_;
+    uint32_t     halted_count_;
 
-    std::vector<QuetzCore*>                     cores_;
-    std::vector<SST::Interfaces::StandardMem*>  mem_ifaces_;
+    std::vector<QuetzCore*>                    cores_;
+    std::vector<SST::Interfaces::StandardMem*> mem_ifaces_;
 };
 
 } // namespace Quetz
