@@ -15,14 +15,12 @@
 #ifndef _QUETZ_INSN_CLASSIFIER_H
 #define _QUETZ_INSN_CLASSIFIER_H
 
-#include "../quetz_shmem.h"
+#include "plugin_state.h"
 
 #include <cstdint>
 
 namespace SST {
 namespace Quetz {
-
-enum QuetzISA;
 
 class InsnClassifier {
 public:
