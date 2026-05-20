@@ -1,0 +1,53 @@
+// Copyright 2009-2026 NTESS. Under the terms
+// of Contract DE-NA0003525 with NTESS, the U.S.
+// Government retains certain rights in this software.
+//
+// Copyright (c) 2026, NTESS
+// All rights reserved.
+//
+// This file is part of the SST software package. For license
+// information, see the LICENSE file in the top level directory of the
+// distribution.
+
+
+
+#ifndef _H_SST_QUETZ_CORE_BACKEND
+#define _H_SST_QUETZ_CORE_BACKEND
+
+#include <stdint.h>
+
+#include "quetz_shmem.h"
+
+namespace SST {
+namespace Quetz {
+
+class QuetzCoreBackend {
+public:
+    virtual ~QuetzCoreBackend() = default;
+
+    
+    virtual bool readCommandNB(uint32_t core_id, QuetzCommand* cmd) = 0;
+
+    
+    virtual void updateSimTime(uint64_t sim_time_ns) = 0;
+
+    
+    virtual void incrementCycles() = 0;
+};
+
+class QuetzTunnelBackend : public QuetzCoreBackend {
+public:
+    explicit QuetzTunnelBackend(QuetzTunnel* tunnel);
+
+    bool readCommandNB(uint32_t core_id, QuetzCommand* cmd) override;
+    void updateSimTime(uint64_t sim_time_ns) override;
+    void incrementCycles() override;
+
+private:
+    QuetzTunnel* tunnel_;
+};
+
+} // namespace Quetz
+} // namespace SST
+
+#endif // _H_SST_QUETZ_CORE_BACKEND
