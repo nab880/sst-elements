@@ -1,13 +1,27 @@
 #!/usr/bin/env bash
-# Section 4 case-study driver: deterministic campaign injection on ACTUATE /
-# action_queue with CriticalActionWatcher + scheme/latency Pareto slice.
+# Phase-1 case-study driver: real vla_cpu + vla_gpu binaries through
+# testCarcosaVLA_GPUCPU.py with deterministic campaign-mode injection on
+# ACTUATE / action_queue, CriticalActionWatcher, and ActionScorer.
 #
-# Usage (from VLA-Example/tests, with VLA_BASELINE_* set):
+# Matrix (default): 5 cases (C0..C4) x 3 schemes (none, secded, chipkill) x
+# 1 seed = 15 runs. All on the manifest's default latency profile and the
+# manifest's vla_max_cycles (=8 today). C0 emits the per-scheme golden
+# action checksum trace on first run; subsequent injected cases score
+# against that golden via ActionScorer.
+#
+# Phase-2 plumbing (Synth harness, PILOT Goldilocks grid, fast/strict Pareto
+# slice, seeds 2-3) was removed when this branch pivoted off synthetic delay
+# agents; see git history for the Phase-2 driver if you need to bring those
+# sweeps back.
+#
+# Usage (from VLA-Example/tests):
 #   ../scripts/run_case_studies.sh
-#   PILOT=1 ../scripts/run_case_studies.sh          # Goldilocks grid (C1/none)
-#   PREFLIGHT=1 ../scripts/run_case_studies.sh      # seed=1 acceptance only
-#   ../scripts/run_case_studies.sh && \
-#     python3 ../scripts/analyze_ecc_results.py ../case_studies --case-studies
+#   PREFLIGHT=1 ../scripts/run_case_studies.sh          # alias: same matrix today
+#   RESUME=1   ../scripts/run_case_studies.sh           # skip cases with non-empty log
+#   SCHEMES="none secded" SEEDS="1 2" ../scripts/run_case_studies.sh
+#
+# After the run:
+#   python3 ../scripts/analyze_ecc_results.py ../case_studies --case-studies
 
 set -u
 
@@ -17,11 +31,12 @@ MANIFEST="$VLA_EX/case_studies/manifest.yaml"
 OUT_DIR="${OUT_DIR:-$VLA_EX/case_studies}"
 mkdir -p "$OUT_DIR/goldens"
 
-SST_CFG="${SST_CFG:-testCarcosaVLA_GPUCPU_Synth.py}"
-SEEDS="${SEEDS:-1 2 3}"
+# Phase 1: real vla_cpu + vla_gpu. The Phase-2 Synth harness is intentionally
+# not the default on this branch.
+SST_CFG="${SST_CFG:-testCarcosaVLA_GPUCPU.py}"
+SEEDS="${SEEDS:-1}"
 SCHEMES="${SCHEMES:-none secded chipkill}"
 PREFLIGHT="${PREFLIGHT:-0}"
-PILOT="${PILOT:-0}"
 RESUME="${RESUME:-0}"
 
 export VLA_DECODE_EXIT_PROB="${VLA_DECODE_EXIT_PROB:-0.0}"
@@ -34,14 +49,23 @@ export CRITICAL_WATCHER_LEN=64
 export ACTION_SCORER=1
 export ACTION_SCORER_GOLDEN_REQUIRED=1
 
-REGIONS_CSV="${REGIONS_CSV:-weights:0x10000000:0x4000000,kv_cache:0x14000000:0x100000,activations:0x14100000:0x200000,action_queue:0x14300000:0x1000}"
+# Phase-1 region CSV. The vla_cpu binary registers slot 1..4 at startup with
+# the actual virtual addresses of its labeled buffers (see
+# tests/vla_cpu.c::hyades_register_region). The base/size literals here are
+# placeholders the VLACpuAgent overwrites on the binary's COMMIT writes; what
+# matters is the symbolic name per slot, which EccGuard uses to route the
+# addr_filter_region match.
+REGIONS_CSV="${REGIONS_CSV:-weights:0x10000000:0x4000,kv_cache:0x10010000:0x4000,activations:0x10020000:0x4000,action_queue:0x10030000:0x1000}"
 KERNEL_POLICY_AWARE="${KERNEL_POLICY_AWARE:-KV_CACHE_ATTN:chipkill:0:8000:30000:0,DECODE_FFN:secded:0:5000:20000:0,GEMV_PROJECT:secded:0:5000:20000:0,LM_HEAD:none:0:0:0:0}"
 export VLA_REGIONS="$REGIONS_CSV"
 export ECC_KERNEL_POLICY="$KERNEL_POLICY_AWARE"
 
+# load_case_manifest.py --shell-defaults emits unconditional
+# `export VLA_MAX_CYCLES=...` (and the ECC_CAMPAIGN_* defaults) sourced from
+# manifest.yaml's `defaults` block. The manifest is the single source of
+# truth for pipeline depth + campaign defaults; edit manifest.yaml (or pass
+# overrides explicitly below) rather than mutating the script.
 eval "$(python3 "$SCRIPT_DIR/load_case_manifest.py" --shell-defaults 2>/dev/null)" || true
-VLA_PHASE2_MAX_CYCLES="${VLA_PHASE2_MAX_CYCLES:-8}"
-export VLA_MAX_CYCLES="${VLA_MAX_CYCLES:-$VLA_PHASE2_MAX_CYCLES}"
 
 export ECC_CAMPAIGN_TARGET_KERNEL="${ECC_CAMPAIGN_TARGET_KERNEL:-ACTUATE}"
 export ECC_ADDR_FILTER_REGION="${ECC_ADDR_FILTER_REGION:-action_queue}"
@@ -60,15 +84,6 @@ golden_path_for() {
     [ -s "$p" ] && printf '%s' "$p"
 }
 
-case_params() {
-    python3 - "$1" "$MANIFEST" <<'PY'
-import json, subprocess, sys
-case_id, manifest = sys.argv[1], sys.argv[2]
-subprocess.check_call([sys.executable, "-c", "pass"])  # placeholder
-PY
-}
-
-# Read one case block from manifest via inline python
 read_case() {
     local cid="$1"
     python3 "$SCRIPT_DIR/load_case_manifest.py" --case "$cid" | python3 -c "
@@ -156,27 +171,21 @@ cd "$VLA_EX/tests" 2>/dev/null || cd "$(dirname "$SST_CFG")" 2>/dev/null || true
 TESTS_DIR="$(pwd)"
 export SST_LIB_PATH="${SST_LIB_PATH:-}"
 
-if [ "$PILOT" = "1" ]; then
-    echo "Pilot Goldilocks grid (C1, scheme=none, seed=1)"
-    for budget in 4 8 12; do
-        for rate in 0.25 0.5 1.0; do
-            run_one C1 none kernel_aware default 1 "$budget" "$rate"
-        done
-    done
-    echo "Pilot done. Inspect logs under $OUT_DIR and unsafe_action_rate in summaries."
-    exit 0
-fi
-
 if [ "$PREFLIGHT" = "1" ]; then
     SEEDS="1"
 fi
 
-# C0 golden for each scheme
+# C0 golden first: needed so C1..C4 scoring has a per-scheme baseline.
 for scheme in $SCHEMES; do
     [ "$scheme" = "none" ] && pol=uniform || pol=kernel_aware
     run_one C0 "$scheme" "$pol" default 1
 done
 
+# Injected cases on the manifest default latency profile only. With
+# SEEDS="1" and 3 schemes this is 4 cases * 3 schemes = 12 runs (plus the
+# 3 C0 runs above = 15 total). To restore Phase-2 multi-seed sweeps or the
+# fast/strict Pareto slice, layer those on top via additional driver
+# scripts; this branch only runs the headline Phase-1 matrix.
 for case_id in C1 C2 C3 C4; do
     for scheme in $SCHEMES; do
         if [ "$scheme" = "none" ]; then pol=uniform; else pol=kernel_aware; fi
@@ -186,13 +195,15 @@ for case_id in C1 C2 C3 C4; do
     done
 done
 
-# Pareto slice: C2 x secded x latency profiles
-for lat in fast default strict; do
-    for seed in $SEEDS; do
-        run_one C2 secded kernel_aware "$lat" "$seed"
-    done
-done
-
 echo "Case studies done. OUT_DIR=$OUT_DIR"
 echo "  python3 $SCRIPT_DIR/analyze_ecc_results.py $OUT_DIR --case-studies"
+echo "  python3 $SCRIPT_DIR/propagation_analyzer.py $OUT_DIR"
 echo "  python3 $SCRIPT_DIR/make_figures.py $OUT_DIR/analysis --case-studies"
+
+# Auto-run the two CSV producers so the user always has analysis/ populated
+# even if they forget the manual step. Failures are non-fatal: partial runs
+# still produce per-case logs, and the analyzers print their own errors.
+python3 "$SCRIPT_DIR/analyze_ecc_results.py" "$OUT_DIR" --case-studies 2>&1 \
+    | sed 's/^/[analyze_ecc] /' || true
+python3 "$SCRIPT_DIR/propagation_analyzer.py" "$OUT_DIR" 2>&1 \
+    | sed 's/^/[propagation] /' || true

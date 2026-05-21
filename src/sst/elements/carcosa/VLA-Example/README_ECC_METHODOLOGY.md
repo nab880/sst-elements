@@ -1,5 +1,23 @@
 # Carcosa + VLA: ECC Cost-Benefit Study Methodology
 
+> **Branch scope: `ecc_all_p1`.** This branch focuses the case-study
+> driver on **Phase 1 only** (real `vla_cpu` + `vla_gpu` RISC-V binaries
+> through `testCarcosaVLA_GPUCPU.py`). The headline matrix is 5 cases
+> (C0..C4) x 3 schemes (`none`, `secded`, `chipkill`) x 1 seed = 15 runs
+> on the manifest default latency profile, 8 pipeline cycles each. The
+> Phase-2 synthetic-delay-agent sweeps (`run_ecc_sweep.sh`,
+> `pilot_case_goldilocks.sh`, the fast/strict Pareto slice) are still
+> present in the repo but are not invoked by the case-study or preflight
+> drivers on this branch; see git history (`ecc-vla`) for the Phase-2
+> driver.
+>
+> Phase 1 also runs a **propagation analyzer** that joins ECC events
+> with per-frame ActionScorer outcomes to produce
+> `propagation_trace.csv` + `propagation_summary.csv` under
+> `case_studies/analysis/`, so a single CSV row tells the
+> "fault landed here -> ended up over there" story without log
+> grepping.
+
 This document describes the SST-Elements / Carcosa pipeline used to study
 ECC schemes and placement policies on a representative workload. The
 contribution of this artifact is the *framework* and the *metric set*,

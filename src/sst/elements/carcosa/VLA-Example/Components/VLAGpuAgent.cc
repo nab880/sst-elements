@@ -70,6 +70,19 @@ bool VLAGpuAgent::handleInterceptedEvent(MemEvent* ev, Link* highlink)
         return true;
     }
 
+    // Region-publish (0x20/0x24/0x28/0x2C) and action-checksum (0x30) ABI
+    // offsets are CPU-side; vla_gpu does not call hyades_register_region /
+    // hyades_action_checksum_write. Vanadis still occasionally issues
+    // speculative MMIO writes here (compiler/codegen artifacts on the GPU
+    // binary), so silently ack instead of dropping without a response: a
+    // dropped Write would leave the LSQ waiting and stall the GPU forever.
+    if ((offset == 0x0020 || offset == 0x0024 || offset == 0x0028 ||
+         offset == 0x002C || offset == 0x0030) &&
+        (ev->getCmd() == Command::Write || ev->getCmd() == Command::GetX)) {
+        sendWriteAck(ev);
+        return true;
+    }
+
     return warnAndDropUnknownIntercept(ev, controlAddrBase_);
 }
 

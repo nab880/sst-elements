@@ -81,6 +81,11 @@ private:
     void dispatchToGpu();
     void publishKernel(int kernel);
     void publishMmioRegion();
+    // Region-publish ABI handler (HYADES_REGION_* offsets 0x20/0x24/0x28/0x2C).
+    // The workload binary writes base_lo/base_hi/size/commit-slot at these
+    // offsets so EccGuard's region-aware policy sees the same virtual
+    // addresses Vanadis touches. Mirrors VLACpuDelayAgent::applyRegionPublish.
+    void applyRegionPublish(uint64_t offset, uint32_t value);
 
     SST::Output* out_;
     SST::Link* highlink_ = nullptr;

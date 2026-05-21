@@ -86,6 +86,21 @@ bool VLACpuAgent::handleInterceptedEvent(MemEvent* ev, Link* highlink)
         return true;
     }
 
+    // Workload region-publish ABI: write base_lo / base_hi / size / commit-slot
+    // into staging and apply to PipelineStateBase::regions[slot] on commit so
+    // EccGuard's region-aware policy sees the binary's actual virtual
+    // addresses. Mirrors the Phase-2 delay agent's handler.
+    if ((offset == 0x0020 || offset == 0x0024 || offset == 0x0028 || offset == 0x002C) &&
+        (ev->getCmd() == Command::Write || ev->getCmd() == Command::GetX)) {
+        uint32_t value = 0;
+        const auto& payload = ev->getPayload();
+        if (payload.size() >= sizeof(uint32_t))
+            std::memcpy(&value, payload.data(), sizeof(uint32_t));
+        sendWriteAck(ev);
+        applyRegionPublish(offset, value);
+        return true;
+    }
+
     if (offset == 0x0030 &&
         (ev->getCmd() == Command::Write || ev->getCmd() == Command::GetX)) {
         uint32_t value = 0;
@@ -176,6 +191,59 @@ void VLACpuAgent::publishKernel(int kernel)
     s->pipelineCycle = fsm_.pipelineCycles();
 }
 
+// Implements the workload region-publish ABI declared in hyades.h. The binary
+// writes base_lo/base_hi/size/commit-slot to MMIO offsets 0x20/0x24/0x28/0x2C;
+// stage each into PipelineStateBase::stagedBase/stagedSize and commit on the
+// COMMIT write. The committed (base, size) is the workload-virtual address
+// range EccGuard then matches against the MemEvent's preserved virtual
+// address. Identical semantics to VLACpuDelayAgent::applyRegionPublish.
+void VLACpuAgent::applyRegionPublish(uint64_t offset, uint32_t value)
+{
+    if (stateKey_.empty()) return;
+    PipelineStateBase* s =
+        PipelineStateRegistry<PipelineStateBase>::getMutable(stateKey_);
+    if (!s) s = PipelineStateRegistry<PipelineStateBase>::getOrCreate(stateKey_);
+    switch (offset) {
+    case 0x0020:
+        s->stagedBase = (s->stagedBase & 0xFFFFFFFF00000000ull) |
+                        static_cast<uint64_t>(value);
+        break;
+    case 0x0024:
+        s->stagedBase = (s->stagedBase & 0x00000000FFFFFFFFull) |
+                        (static_cast<uint64_t>(value) << 32);
+        break;
+    case 0x0028:
+        s->stagedSize = static_cast<uint64_t>(value);
+        break;
+    case 0x002C: {
+        size_t slot = static_cast<size_t>(value);
+        // Slot 0 is reserved for mmio_control; refuse to overwrite it.
+        if (slot == 0) {
+            if (verbose_)
+                out_->output("VLACpuAgent: ignoring region commit to reserved slot 0\n");
+            s->stagedBase = 0;
+            s->stagedSize = 0;
+            break;
+        }
+        // Preserve any symbolic name that came from the `regions` CSV.
+        std::string preservedName;
+        if (slot < s->regions.size())
+            preservedName = s->regions[slot].name;
+        s->commitStagedRegion(slot);
+        if (!preservedName.empty())
+            s->regions[slot].name = preservedName;
+        if (verbose_)
+            out_->output("VLACpuAgent: region slot %zu '%s' published base=0x%" PRIx64 " size=0x%" PRIx64 "\n",
+                         slot,
+                         (slot < s->regions.size() ? s->regions[slot].name.c_str() : ""),
+                         s->regions[slot].base, s->regions[slot].size);
+        break;
+    }
+    default:
+        break;
+    }
+}
+
 void VLACpuAgent::checkBothDone()
 {
     if (!localDone_ || !partnerDone_) return;
@@ -237,7 +305,20 @@ void VLACpuAgent::advanceFSM()
                 fr.attributingKernel = (attr >= 0) ? attr : static_cast<int>(prev);
                 s->resetEccPerFrameEscapesByKernel();
             }
-            if (latestActionChecksumSet_) {
+            // Source priority for the per-frame action checksum:
+            //   1) CriticalActionWatcher snapshot (hashed action_queue bytes
+            //      captured at frame close; most direct view of any escape
+            //      that reached the labeled action region).
+            //   2) Workload-published HYADES_ACTION_CHECKSUM (covers escapes
+            //      on any byte the binary folded into its own hash,
+            //      including weights/kv_cache/activations via the per-frame
+            //      read fold).
+            //   3) Fallback synthetic hash that mixes ECC cumulative counters
+            //      so any frame with an escape diverges from the golden.
+            if (s->watcherActionChecksumValid) {
+                fr.actionChecksum = s->watcherActionChecksum;
+                s->watcherActionChecksumValid = false;
+            } else if (latestActionChecksumSet_) {
                 fr.actionChecksum = static_cast<uint64_t>(latestActionChecksum_);
                 latestActionChecksumSet_ = false;
                 latestActionChecksum_    = 0;

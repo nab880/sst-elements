@@ -104,6 +104,39 @@ ecc_escape_latency_ps     = os.getenv("ECC_ESCAPE_LATENCY_PS", "0")
 ecc_kernel_policy         = os.getenv("ECC_KERNEL_POLICY", "")
 ecc_seed                  = os.getenv("ECC_SEED", "0")
 ecc_apply_on_responses_only = os.getenv("ECC_RESPONSES_ONLY", "true")
+# Campaign / region / watcher / scorer / DUE knobs mirrored from the Phase 2
+# harness so Phase-1 case studies can drive the same fault models, region
+# routing, action checksum capture, and outcome classification end-to-end.
+ecc_fault_model           = os.getenv("ECC_FAULT_MODEL", "poisson")
+ecc_fault_mode_weights    = os.getenv("ECC_FAULT_MODE_WEIGHTS", "")
+ecc_fault_event_rate      = os.getenv("ECC_FAULT_EVENT_RATE", "0.0")
+ecc_campaign_target_kernel = os.getenv("ECC_CAMPAIGN_TARGET_KERNEL", "any")
+ecc_campaign_mode          = os.getenv("ECC_CAMPAIGN_MODE",          "row")
+ecc_campaign_event_budget  = os.getenv("ECC_CAMPAIGN_EVENT_BUDGET",  "0")
+ecc_campaign_event_rate    = os.getenv("ECC_CAMPAIGN_EVENT_RATE",    "0.0")
+ecc_campaign_max_per_entry = os.getenv("ECC_CAMPAIGN_MAX_PER_KERNEL_ENTRY", "0")
+ecc_campaign_errors_fixed  = os.getenv("ECC_CAMPAIGN_ERRORS_FIXED",  "0")
+ecc_campaign_force_multi_chip = os.getenv("ECC_CAMPAIGN_FORCE_MULTI_CHIP", "0")
+ecc_addr_filter_region     = os.getenv("ECC_ADDR_FILTER_REGION", "")
+ecc_addr_filter_len        = os.getenv("ECC_ADDR_FILTER_LEN", "0")
+critical_watcher_enabled   = os.getenv("CRITICAL_ACTION_WATCHER", "1") not in ("0", "false", "False", "")
+critical_watcher_region    = os.getenv("CRITICAL_WATCHER_REGION", "action_queue")
+critical_watcher_len       = os.getenv("CRITICAL_WATCHER_LEN", "64")
+ecc_payload_dtype          = os.getenv("ECC_PAYLOAD_DTYPE", "bytes")
+ecc_due_action             = os.getenv("ECC_DUE_ACTION", "latency_only")
+ecc_fit_per_mbit_per_hour  = os.getenv("ECC_FIT_PER_MBIT_PER_HOUR", "0.0")
+ecc_dram_capacity_mb       = os.getenv("ECC_DRAM_CAPACITY_MB", "1024")
+ecc_sim_time_per_event_ns  = os.getenv("ECC_SIM_TIME_PER_EVENT_NS", "100")
+# Region CSV consumed by VLACpuAgent::publishUserRegions to attach symbolic
+# names to the slots the binary publishes via HYADES_REGION_*. EccGuard's
+# region-aware policies (addr_filter_region, region_bers, region_kernel_bers)
+# match on these names. Leave empty to disable region routing.
+vla_regions                = os.getenv("VLA_REGIONS", "")
+action_scorer_enabled      = os.getenv("ACTION_SCORER", "1") not in ("0", "false", "False", "")
+action_scorer_golden       = os.getenv("ACTION_SCORER_GOLDEN", "")
+action_scorer_emit_golden  = os.getenv("ACTION_SCORER_EMIT_GOLDEN", "0") in ("1", "true", "True")
+action_scorer_golden_required = os.getenv(
+    "ACTION_SCORER_GOLDEN_REQUIRED", "1") not in ("0", "false", "False", "")
 
 numCpus = 2
 numThreads = 1
@@ -179,6 +212,14 @@ cpu_l2cacheParams = {
     "associativity": "16", "cache_line_size": "64", "cache_size": "1MB",
     "mshr_latency_cycles": 3, "debug": mh_debug, "debug_level": mh_debug_level,
 }
+# Case-study ACTUATE readbacks (vla_cpu actuate() sweeps a 64 KB buffer >> L2
+# and cold-reads action_queue) must miss below L2 so every refill traverses
+# EccGuard. With the default 1 MB CPU L2 the 4 KB action_queue stays cached
+# and campaign-mode faults never get a chance to inject. Shrink to 32 KB
+# when the watcher or campaign mode is on; sweeps that just measure timing
+# under poisson at the default 1 MB are unaffected.
+if critical_watcher_enabled or ecc_fault_model == "campaign":
+    cpu_l2cacheParams = dict(cpu_l2cacheParams, cache_size="32 KB")
 gpu_l2cacheParams = {
     "access_latency_cycles": "14", "cache_frequency": gpu_clock,
     "replacement_policy": "lru", "coherence_protocol": protocol,
@@ -335,13 +376,63 @@ ecc_guard.addParams({
     "escape_latency_ps":       ecc_escape_latency_ps,
     "kernel_policy":           ecc_kernel_policy,
     "apply_on_responses_only": ecc_apply_on_responses_only,
+    "fault_model":             ecc_fault_model,
+    "fault_mode_weights":      ecc_fault_mode_weights,
+    "fault_event_rate":        ecc_fault_event_rate,
+    "campaign_target_kernel":  ecc_campaign_target_kernel,
+    "campaign_mode":           ecc_campaign_mode,
+    "campaign_event_budget":   ecc_campaign_event_budget,
+    "campaign_event_rate":     ecc_campaign_event_rate,
+    "campaign_max_events_per_kernel_entry": ecc_campaign_max_per_entry,
+    "campaign_errors_fixed":   ecc_campaign_errors_fixed,
+    "campaign_force_multi_chip": ecc_campaign_force_multi_chip,
+    "addr_filter_region":      ecc_addr_filter_region,
+    "addr_filter_len":         ecc_addr_filter_len,
+    "payload_dtype":           ecc_payload_dtype,
+    "due_action":              ecc_due_action,
+    "fit_per_mbit_per_hour":   ecc_fit_per_mbit_per_hour,
+    "dram_capacity_mb":        ecc_dram_capacity_mb,
+    "sim_time_per_event_ns":   ecc_sim_time_per_event_ns,
     "seed":                    ecc_seed,
 })
 ecc_guard.enableAllStatistics()
 
-link_dir_2_ecc = sst.Link("link_dir_2_ecc")
-link_dir_2_ecc.connect((dirctrl, "lowlink", "1ns"), (ecc_guard, "highlink", "1ns"))
-link_dir_2_ecc.setNoCut()
+if action_scorer_enabled:
+    scorer = sst.Component("action_scorer", "Carcosa.ActionScorer")
+    scorer.addParams({
+        "state_key":       vla_state_key,
+        "golden_log":      action_scorer_golden,
+        "emit_golden":     "true" if action_scorer_emit_golden else "false",
+        "golden_required": "true" if action_scorer_golden_required else "false",
+        "verbose":         "false",
+    })
+    scorer.enableAllStatistics()
+
+# CriticalActionWatcher sits between dirctrl and ecc_guard: it snapshots
+# write payloads to the labeled critical region (default action_queue), then
+# on the cold readback recomputes the checksum and stamps it / a
+# corrupted-flag into PipelineStateBase for ActionScorer to consume. When
+# disabled, dirctrl links directly to ecc_guard.
+if critical_watcher_enabled:
+    crit_watcher = sst.Component("crit_watcher", "Carcosa.CriticalActionWatcher")
+    crit_watcher.addParams({
+        "state_key":               vla_state_key,
+        "critical_region":         critical_watcher_region,
+        "critical_len":            critical_watcher_len,
+        "apply_on_responses_only": "true",
+        "verbose":                 "false",
+    })
+    crit_watcher.enableAllStatistics()
+    link_dir_2_watcher = sst.Link("link_dir_2_watcher")
+    link_dir_2_watcher.connect((dirctrl, "lowlink", "1ns"), (crit_watcher, "highlink", "1ns"))
+    link_dir_2_watcher.setNoCut()
+    link_watcher_2_ecc = sst.Link("link_watcher_2_ecc")
+    link_watcher_2_ecc.connect((crit_watcher, "lowlink", "1ns"), (ecc_guard, "highlink", "1ns"))
+    link_watcher_2_ecc.setNoCut()
+else:
+    link_dir_2_ecc = sst.Link("link_dir_2_ecc")
+    link_dir_2_ecc.connect((dirctrl, "lowlink", "1ns"), (ecc_guard, "highlink", "1ns"))
+    link_dir_2_ecc.setNoCut()
 link_ecc_2_mem = sst.Link("link_ecc_2_mem")
 link_ecc_2_mem.connect((ecc_guard, "lowlink", "1ns"), (memctrl, "highlink", "1ns"))
 link_ecc_2_mem.setNoCut()
@@ -362,6 +453,7 @@ cpuAgentParams = {
     "max_seq_len":       vla_max_seq_len,
     "num_action_tokens": vla_num_action_tokens,
     "state_key":         vla_state_key,
+    "regions":           vla_regions,
     "verbose":           "true",
 }
 gpuAgentParams = {
