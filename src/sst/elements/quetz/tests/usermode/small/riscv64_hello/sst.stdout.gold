@@ -1,12 +1,40 @@
- cpu.read_requests.0 : Accumulator : Sum.u64 = 441; SumSQ.u64 = 441; Count.u64 = 441; Min.u64 = 1; Max.u64 = 1; 
- cpu.write_requests.0 : Accumulator : Sum.u64 = 204; SumSQ.u64 = 204; Count.u64 = 204; Min.u64 = 1; Max.u64 = 1; 
- cpu.read_request_sizes.0 : Accumulator : Sum.u64 = 2414; SumSQ.u64 = 17922; Count.u64 = 441; Min.u64 = 1; Max.u64 = 8; 
- cpu.write_request_sizes.0 : Accumulator : Sum.u64 = 1459; SumSQ.u64 = 11211; Count.u64 = 204; Min.u64 = 1; Max.u64 = 8; 
+Hello World from Vanadis
+QuetzComponent[/src/sst-elements/src/sst/elements/quetz/quetzcpu.cc:34:QuetzCPU] Creating QuetzComponent...
+QuetzComponent[/src/sst-elements/src/sst/elements/quetz/quetzcpu.cc:35:QuetzCPU] Configuring for 1 vCPU(s).
+QuetzComponent[/src/sst-elements/src/sst/elements/quetz/quetzcpu.cc:43:QuetzCPU] Shared-memory region: /sst_shmem_160-0-1804289383
+QuetzComponent[/src/sst-elements/src/sst/elements/quetz/quetzcpu.cc:47:QuetzCPU] Registering clock at 1GHz.
+QuetzComponent[/src/sst-elements/src/sst/elements/quetz/quetzcpu.cc:54:QuetzCPU] Creating per-vCPU cores...
+QuetzComponent[/src/sst-elements/src/sst/elements/quetz/quetz_pipeline.cc:35:QuetzEventPipeline] QuetzEventPipeline 0 created: maxQ=64 maxIssue=2 maxPend=16
+QuetzComponent[/src/sst-elements/src/sst/elements/quetz/quetzcore.cc:88:QuetzCore] QuetzCore 0 created: maxPend=16 maxIssue=2 maxQ=64 clineSize=64 latency[int/fp/vec]=0/0/0
+QuetzComponent[/src/sst-elements/src/sst/elements/quetz/quetzcpu.cc:102:QuetzCPU] QuetzComponent initialization complete.
+memory, WARNING: Could not MMAP backing store (likely, simulated memory exceeds available memory space). Creating malloc based store instead.
+QuetzComponent[/src/sst-elements/src/sst/elements/quetz/quetzcpu.cc:145:init] Phase 0 init: launching QEMU child process.
+QuetzComponent[/src/sst-elements/src/sst/elements/quetz/quetz_launcher.cc:70:spawn] QEMU command: /opt/sst/bin/qemu-riscv64 -plugin /opt/sst/libexec/libqemu_sst_plugin.so,shmname=/sst_shmem_160-0-1804289383,detailed=1 /src/sst-elements/src/sst/elements/vanadis/tests/small/basic-io/hello-world/riscv64/hello-world
+QuetzComponent[/src/sst-elements/src/sst/elements/quetz/quetzcpu.cc:148:init] Waiting for QEMU plugin to attach...
+QuetzComponent[/src/sst-elements/src/sst/elements/quetz/quetzcpu.cc:151:init] Plugin attached!
+QuetzComponent[/src/sst-elements/src/sst/elements/quetz/quetz_pipeline_input.cc:64:refill] QuetzCore 0 received EXIT from plugin.
+QuetzComponent[/src/sst-elements/src/sst/elements/quetz/quetz_pipeline.cc:77:tick] QuetzCore 0 processing EXIT — halting.
+QuetzComponent[/src/sst-elements/src/sst/elements/quetz/quetzcpu.cc:195:tick] All 1 vCPUs halted and drained — ending simulation.
+QuetzComponent[/src/sst-elements/src/sst/elements/quetz/quetzcpu.cc:160:finish] QuetzComponent finishing at 99942 ns.
+QuetzComponent[/src/sst-elements/src/sst/elements/quetz/quetz_pipeline.cc:116:finish] QuetzEventPipeline 0 finishing, 0 transactions still pending.
+ cpu.read_requests.0 : Accumulator : Sum.u64 = 372; SumSQ.u64 = 372; Count.u64 = 372; Min.u64 = 1; Max.u64 = 1; 
+ cpu.write_requests.0 : Accumulator : Sum.u64 = 201; SumSQ.u64 = 201; Count.u64 = 201; Min.u64 = 1; Max.u64 = 1; 
+ cpu.read_latency.0 : Accumulator : Sum.u64 = 38577; SumSQ.u64 = 4001275; Count.u64 = 372; Min.u64 = 103; Max.u64 = 111; 
+ cpu.write_latency.0 : Accumulator : Sum.u64 = 20990; SumSQ.u64 = 2192602; Count.u64 = 201; Min.u64 = 103; Max.u64 = 111; 
+ cpu.read_request_sizes.0 : Accumulator : Sum.u64 = 2009; SumSQ.u64 = 14829; Count.u64 = 372; Min.u64 = 1; Max.u64 = 8; 
+ cpu.write_request_sizes.0 : Accumulator : Sum.u64 = 1435; SumSQ.u64 = 11019; Count.u64 = 201; Min.u64 = 1; Max.u64 = 8; 
  cpu.split_read_requests.0 : Accumulator : Sum.u64 = 0; SumSQ.u64 = 0; Count.u64 = 0; Min.u64 = 0; Max.u64 = 0; 
  cpu.split_write_requests.0 : Accumulator : Sum.u64 = 0; SumSQ.u64 = 0; Count.u64 = 0; Min.u64 = 0; Max.u64 = 0; 
+ cpu.no_ops.0 : Accumulator : Sum.u64 = 1372; SumSQ.u64 = 1372; Count.u64 = 1372; Min.u64 = 1; Max.u64 = 1; 
+ cpu.instruction_count.0 : Accumulator : Sum.u64 = 1945; SumSQ.u64 = 1945; Count.u64 = 1945; Min.u64 = 1; Max.u64 = 1; 
+ cpu.cycles.0 : Accumulator : Sum.u64 = 99842; SumSQ.u64 = 99842; Count.u64 = 99842; Min.u64 = 1; Max.u64 = 1; 
+ cpu.active_cycles.0 : Accumulator : Sum.u64 = 458; SumSQ.u64 = 458; Count.u64 = 458; Min.u64 = 1; Max.u64 = 1; 
  cpu.filtered_reads.0 : Accumulator : Sum.u64 = 0; SumSQ.u64 = 0; Count.u64 = 0; Min.u64 = 0; Max.u64 = 0; 
  cpu.filtered_writes.0 : Accumulator : Sum.u64 = 0; SumSQ.u64 = 0; Count.u64 = 0; Min.u64 = 0; Max.u64 = 0; 
- cpu.int_compute.0 : Accumulator : Sum.u64 = 0; SumSQ.u64 = 0; Count.u64 = 0; Min.u64 = 0; Max.u64 = 0; 
+ cpu.stall_cycles.0 : Accumulator : Sum.u64 = 0; SumSQ.u64 = 0; Count.u64 = 0; Min.u64 = 0; Max.u64 = 0; 
+ cpu.compute_stall_cycles.0 : Accumulator : Sum.u64 = 0; SumSQ.u64 = 0; Count.u64 = 0; Min.u64 = 0; Max.u64 = 0; 
+ cpu.int_compute.0 : Accumulator : Sum.u64 = 744; SumSQ.u64 = 744; Count.u64 = 744; Min.u64 = 1; Max.u64 = 1; 
  cpu.fp_compute.0 : Accumulator : Sum.u64 = 0; SumSQ.u64 = 0; Count.u64 = 0; Min.u64 = 0; Max.u64 = 0; 
  cpu.vec_compute.0 : Accumulator : Sum.u64 = 0; SumSQ.u64 = 0; Count.u64 = 0; Min.u64 = 0; Max.u64 = 0; 
- cpu.branch.0 : Accumulator : Sum.u64 = 0; SumSQ.u64 = 0; Count.u64 = 0; Min.u64 = 0; Max.u64 = 0; 
+ cpu.branch.0 : Accumulator : Sum.u64 = 624; SumSQ.u64 = 624; Count.u64 = 624; Min.u64 = 1; Max.u64 = 1; 
+Simulation is complete, simulated time: 99.942 us
