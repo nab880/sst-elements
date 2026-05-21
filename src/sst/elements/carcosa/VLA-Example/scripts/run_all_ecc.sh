@@ -125,12 +125,43 @@ command -v sst >/dev/null 2>&1 || die "'sst' not on PATH after sourcing mysstcon
 command -v "$PYTHON" >/dev/null 2>&1 || die "'$PYTHON' not on PATH"
 
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
-OUT_ROOT="${OUT_ROOT:-${TESTS_DIR}/ecc_all_out_${TIMESTAMP}}"
+
+# Resolve relative OUT_ROOT / OUT_DIR against EXAMPLE_DIR (not the caller's
+# cwd). run_ecc_sweep.sh is launched from TESTS_DIR; a relative OUT_DIR like
+# tests/ecc_all_out_.../ecc_sweep_out would otherwise become tests/tests/...
+# while run_analyze still reads the un-prefixed path -> empty index.csv.
+resolve_under_example() {
+    local p="$1"
+    if [[ "$p" = /* ]]; then
+        printf '%s' "$p"
+        return
+    fi
+    p="${p#./}"
+    if [[ "$p" == tests/* ]]; then
+        printf '%s/%s' "$EXAMPLE_DIR" "$p"
+    else
+        printf '%s/%s' "$TESTS_DIR" "$p"
+    fi
+}
+
+# When OUT_DIR points at an existing sweep tree, anchor OUT_ROOT at its parent
+# unless the caller set OUT_ROOT explicitly (SKIP_SWEEP reuse path).
+if [[ -n "${OUT_DIR:-}" ]]; then
+    SWEEP_DIR="$(resolve_under_example "$OUT_DIR")"
+    if [[ -z "${OUT_ROOT:-}" ]]; then
+        OUT_ROOT="$(dirname "$SWEEP_DIR")"
+    else
+        OUT_ROOT="$(resolve_under_example "$OUT_ROOT")"
+    fi
+else
+    OUT_ROOT="${OUT_ROOT:-${TESTS_DIR}/ecc_all_out_${TIMESTAMP}}"
+    OUT_ROOT="$(resolve_under_example "$OUT_ROOT")"
+    SWEEP_DIR="${OUT_ROOT}/ecc_sweep_out"
+fi
 mkdir -p "$OUT_ROOT"
 log "OUT_ROOT=$OUT_ROOT"
 
 PHASE1_LOG="${PHASE1_LOG:-${OUT_ROOT}/phase1.log}"
-SWEEP_DIR="${OUT_DIR:-${OUT_ROOT}/ecc_sweep_out}"
 ANALYSIS_DIR="${SWEEP_DIR}/analysis"
 mkdir -p "$SWEEP_DIR"
 

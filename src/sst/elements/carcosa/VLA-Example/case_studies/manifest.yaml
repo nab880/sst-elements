@@ -1,0 +1,61 @@
+# Canonical Section 4 case-study injection knobs (Goldilocks-calibrated).
+defaults:
+  vla_max_cycles: 8
+  campaign_target_kernel: ACTUATE
+  addr_filter_region: action_queue
+  addr_filter_len: 64
+  campaign_max_events_per_kernel_entry: 1
+  campaign_event_budget: 8
+  campaign_event_rate: 1.0
+  due_action: drop_frame
+  policy: kernel_aware
+  correctable_ps_default: 5000
+  due_ps_default: 20000
+
+latency_profiles:
+  fast:
+    correctable_ps: 2000
+    due_ps: 8000
+  default:
+    correctable_ps: 5000
+    due_ps: 60000
+  strict:
+    correctable_ps: 5000
+    due_ps: 50000
+
+cases:
+  C0:
+    description: Golden reference (no injection)
+    campaign_event_budget: 0
+    campaign_mode: cell
+    campaign_errors_fixed: 0
+    campaign_force_multi_chip: false
+  C1:
+    description: Single-bit SECDED-correctable
+    campaign_mode: cell
+    campaign_errors_fixed: 1
+    campaign_force_multi_chip: false
+  C2:
+    description: Double-bit SECDED-DUE / chipkill-correct
+    campaign_mode: word
+    campaign_errors_fixed: 2
+    campaign_force_multi_chip: false
+  C3:
+    description: Single-device chipkill-absorbing burst
+    campaign_mode: device
+    campaign_errors_fixed: 4
+    campaign_force_multi_chip: false
+  C4:
+    description: Multi-chip chipkill-defeating ceiling
+    campaign_mode: multi_chip
+    campaign_errors_fixed: 8
+    campaign_force_multi_chip: true
+
+acceptance:
+  goldilocks_unsafe_min: 0.30
+  goldilocks_unsafe_max: 0.80
+  c1_none_unsafe_min: 0.30
+  c1_secded_unsafe_max: 0.10
+  c2_secded_o2_min: 0.25
+  c2_chipkill_unsafe_max: 0.10
+  c4_all_unsafe_min: 0.30

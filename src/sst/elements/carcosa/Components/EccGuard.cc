@@ -88,7 +88,12 @@ EccGuard::FaultMode parseCampaignMode(const std::string& s) {
     if (s == "column" || s == "single_column" || s == "SingleColumn") return EccGuard::FaultMode::SingleColumn;
     if (s == "bank"   || s == "single_bank"   || s == "SingleBank")   return EccGuard::FaultMode::SingleBank;
     if (s == "device" || s == "single_device" || s == "SingleDevice") return EccGuard::FaultMode::SingleDevice;
+    if (s == "multi_chip" || s == "MULTI_CHIP") return EccGuard::FaultMode::SingleWord;
     return EccGuard::FaultMode::SingleRow;
+}
+
+bool isMultiChipCampaignAlias(const std::string& s) {
+    return s == "multi_chip" || s == "MULTI_CHIP";
 }
 
 // Resolve a campaign_target_kernel string. Accepts either a small integer
@@ -248,10 +253,18 @@ EccGuard::EccGuard(ComponentId_t id, Params& params) : Component(id) {
                           "resolve to a known kernel; defaulting to 'any'.\n",
                           raw_target.c_str());
         }
-        campaign_mode_          = parseCampaignMode(
-            params.find<std::string>("campaign_mode", "row"));
         campaign_event_budget_  = params.find<uint64_t>("campaign_event_budget", 0);
         campaign_event_rate_    = params.find<double>  ("campaign_event_rate",   0.0);
+        campaign_max_per_kernel_entry_ =
+            params.find<uint64_t>("campaign_max_events_per_kernel_entry", 0);
+        campaign_errors_fixed_ = params.find<unsigned>("campaign_errors_fixed", 0);
+        std::string raw_cmode = params.find<std::string>("campaign_mode", "row");
+        campaign_force_multi_chip_ =
+            params.find<bool>("campaign_force_multi_chip", false)
+            || isMultiChipCampaignAlias(raw_cmode);
+        campaign_mode_ = parseCampaignMode(raw_cmode);
+        addr_filter_region_ = params.find<std::string>("addr_filter_region", "");
+        addr_filter_len_    = params.find<uint64_t>("addr_filter_len", 0);
         if (fault_model_ == FaultModel::Campaign && verbose_) {
             out_->output("EccGuard: campaign mode active: target=%s mode=%d budget=%" PRIu64
                           " rate=%.3e\n",
@@ -475,6 +488,60 @@ const std::string& EccGuard::regionNameForId(int region_id) const {
     return state_ptr_->regions[region_id].name;
 }
 
+bool EccGuard::resolveAddrFilterBounds(uint64_t& base_out, uint64_t& len_out) const {
+    base_out = 0;
+    len_out  = 0;
+    if (addr_filter_region_.empty()) return false;
+    if (!state_ptr_) return false;
+    for (const auto& r : state_ptr_->regions) {
+        if (!r.valid || r.name != addr_filter_region_) continue;
+        base_out = r.base;
+        len_out  = r.size;
+        if (addr_filter_len_ > 0 && addr_filter_len_ < len_out)
+            len_out = addr_filter_len_;
+        return len_out > 0;
+    }
+    return false;
+}
+
+bool EccGuard::shouldApplyPolicy(MemEvent* mev) {
+    if (!mev) return false;
+    resolveStateLazy();
+    if (!applyOnResponsesOnly_) return true;
+    if (mev->isResponse()) return true;
+    if (fault_model_ != FaultModel::Campaign || addr_filter_region_.empty())
+        return false;
+    return eventOverlapsAddrFilter(mev) && !mev->getPayload().empty();
+}
+
+bool EccGuard::eventOverlapsAddrFilter(MemEvent* mev) const {
+    if (addr_filter_region_.empty() || !mev) return true;
+    if (state_ptr_) {
+        int rid = resolveRegionIdForEvent(mev);
+        if (rid >= 0 && regionNameForId(rid) == addr_filter_region_) return true;
+    }
+    uint64_t fbase = 0, flen = 0;
+    if (!resolveAddrFilterBounds(fbase, flen)) return false;
+    uint64_t vaddr = mev->getVirtualAddress();
+    uint64_t addr  = (vaddr != 0) ? vaddr : mev->getAddr();
+    uint64_t size  = mev->getPayload().empty() ? 64u : mev->getPayload().size();
+    uint64_t end   = addr + size;
+    uint64_t fend  = fbase + flen;
+    return addr < fend && end > fbase;
+}
+
+void EccGuard::noteCampaignKernelEntry(int kernel_id) {
+    if (campaign_max_per_kernel_entry_ == 0) return;
+    const int track = (campaign_target_kernel_ >= 0)
+                          ? campaign_target_kernel_
+                          : kernel_id;
+    if (kernel_id != track) return;
+    if (kernel_id != campaign_entry_kernel_) {
+        campaign_entry_kernel_       = kernel_id;
+        campaign_events_this_entry_  = 0;
+    }
+}
+
 void EccGuard::requestFrameAbort() {
     if (state_key_.empty()) return;
     PipelineStateBase* s =
@@ -517,7 +584,7 @@ void publishPerFrameEscape(const std::string& state_key, int kidx) {
 
 void EccGuard::handleHighlink(SST::Event* ev) {
     auto* mev = dynamic_cast<MemEvent*>(ev);
-    if (!mev || (applyOnResponsesOnly_ && !mev->isResponse())) {
+    if (!mev || !shouldApplyPolicy(mev)) {
         if (lowlink_) lowlink_->send(ev); else delete ev;
         return;
     }
@@ -537,7 +604,7 @@ void EccGuard::handleLowlink(SST::Event* ev) {
         if (highlink_) highlink_->send(ev); else delete ev;
         return;
     }
-    if (applyOnResponsesOnly_ && !mev->isResponse()) {
+    if (!shouldApplyPolicy(mev)) {
         highlink_->send(ev);
         return;
     }
@@ -613,6 +680,25 @@ void EccGuard::distributeErrorsToChips(
     unsigned nchips = chipsPerEccWord(scheme);
     if (nchips == 0 || errs == 0) return;
     chip_counts.assign(nchips, 0);
+    if (campaign_force_multi_chip_ && nchips >= 3) {
+        unsigned need = std::min<unsigned>(3u, nchips);
+        std::vector<unsigned> picks;
+        picks.reserve(need);
+        std::uniform_int_distribution<unsigned> cpick(0, nchips - 1);
+        while (picks.size() < need) {
+            unsigned c = cpick(stdRng_);
+            if (std::find(picks.begin(), picks.end(), c) == picks.end())
+                picks.push_back(c);
+        }
+        unsigned per = std::max(1u, errs / need);
+        unsigned rem = errs;
+        for (size_t i = 0; i < picks.size(); ++i) {
+            unsigned put = (i + 1 == picks.size()) ? rem : std::min(rem, per);
+            chip_counts[picks[i]] = static_cast<uint8_t>(std::min<unsigned>(put, 255));
+            rem -= put;
+        }
+        return;
+    }
     if (mode == FaultMode::SingleDevice) {
         std::uniform_int_distribution<unsigned> cpick(0, nchips - 1);
         unsigned c = cpick(stdRng_);
@@ -763,7 +849,26 @@ EccGuard::FaultDraw EccGuard::drawFaultCampaign(uint32_t payload_bytes,
 
     if (campaign_event_budget_ == 0) return d;
     if (campaign_events_fired_ >= campaign_event_budget_) return d;
-    if (campaign_target_kernel_ >= 0 && kernel_id != campaign_target_kernel_) return d;
+    // Addr-filtered campaign: action_queue traffic is the temporal proxy.
+    // ReadResp often returns after publishKernel(IDLE), so do not gate on FSM.
+    const bool addr_filtered = !addr_filter_region_.empty();
+    if (!addr_filtered && campaign_target_kernel_ >= 0
+        && kernel_id != campaign_target_kernel_) {
+        return d;
+    }
+    if (addr_filtered && campaign_max_per_kernel_entry_ > 0 && state_ptr_) {
+        const int pc = state_ptr_->pipelineCycle;
+        if (pc != campaign_entry_pipeline_cycle_) {
+            campaign_entry_pipeline_cycle_ = pc;
+            campaign_events_this_entry_    = 0;
+        }
+    } else {
+        noteCampaignKernelEntry(kernel_id);
+    }
+    if (campaign_max_per_kernel_entry_ > 0
+        && campaign_events_this_entry_ >= campaign_max_per_kernel_entry_) {
+        return d;
+    }
     if (campaign_event_rate_ <= 0.0) return d;
     std::bernoulli_distribution gate(std::min(campaign_event_rate_, 1.0));
     if (!gate(stdRng_)) return d;
@@ -774,8 +879,13 @@ EccGuard::FaultDraw EccGuard::drawFaultCampaign(uint32_t payload_bytes,
     unsigned lo = kFaultModeBitsLow [chosen];
     unsigned hi = kFaultModeBitsHigh[chosen];
     if (hi < lo) hi = lo;
-    std::uniform_int_distribution<unsigned> nbits(lo, hi);
-    unsigned errs = nbits(stdRng_);
+    unsigned errs = 0;
+    if (campaign_errors_fixed_ > 0) {
+        errs = campaign_errors_fixed_;
+    } else {
+        std::uniform_int_distribution<unsigned> nbits(lo, hi);
+        errs = nbits(stdRng_);
+    }
     unsigned cap  = payload_bytes * 8;
     if (cap > 0 && errs > cap) errs = cap;
     d.num_errors = errs;
@@ -823,6 +933,7 @@ EccGuard::FaultDraw EccGuard::drawFaultCampaign(uint32_t payload_bytes,
     }
 
     ++campaign_events_fired_;
+    ++campaign_events_this_entry_;
     ++per_mode_draws_[chosen];
     if (chosen == static_cast<int>(FaultMode::SingleRow)    && stat_correlated_row_)    stat_correlated_row_->addData(1);
     if (chosen == static_cast<int>(FaultMode::SingleBank)   && stat_correlated_bank_)   stat_correlated_bank_->addData(1);
@@ -853,6 +964,12 @@ uint64_t EccGuard::applyPolicy(MemEvent* mev) {
 
     int kernel_id = -1;
     if (state_ptr_) kernel_id = state_ptr_->currentKernel;
+
+    if (!addr_filter_region_.empty() && !eventOverlapsAddrFilter(mev)) {
+        if (stat_total_) stat_total_->addData(1);
+        if (stat_clean_) stat_clean_->addData(1);
+        return 0;
+    }
 
     int region_id = resolveRegionIdForEvent(mev);
     const std::string& region_name = regionNameForId(region_id);

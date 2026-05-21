@@ -1,37 +1,56 @@
-# Carcosa + VLA: Publication-Worthy ECC Methodology
+# Carcosa + VLA: ECC Cost-Benefit Study Methodology
 
-This document describes the SST-Elements / Carcosa pipeline used to characterize
-fault tolerance of a Vision-Language-Action (VLA) policy on an autonomous-vehicle
-control stack. It exists to make the ECC results in
-`run_ecc_sweep.sh` -> `analyze_ecc_results.py` -> `make_figures.py` reproducible.
+This document describes the SST-Elements / Carcosa pipeline used to study
+ECC schemes and placement policies on a representative workload. The
+contribution of this artifact is the *framework* and the *metric set*,
+not a deployment-calibrated BER or FIT threshold. It exists to make the
+results in
+`run_ecc_sweep.sh` -> `analyze_ecc_results.py` -> `make_figures.py`
+(plus `run_case_studies.sh` -> `make_figures.py --case-studies`)
+reproducible. See the paper for the full framing; this README is the
+operational companion.
 
 ## 1. What the pipeline measures
 
 For each combination of `(scheme, kernel/region policy, BER (or FIT),
-fault_model, due_action, payload_dtype, seed)` we measure:
+fault_model, due_action, payload_dtype, seed)` we measure benefit and
+cost on the same metric axes (paper Sec. "Cost-Benefit Metrics"):
 
-| Quantity                | Source                                           | Used by         |
-| ----------------------- | ------------------------------------------------ | --------------- |
-| `events_clean/correctable/due/escape` | EccGuard per-kernel block          | Fig. 1, Fig. 4  |
-| Per-region split        | EccGuard per-kernel-per-region block             | Fig. 3          |
-| Fault-mode mix          | EccGuard fault-mode draws block                  | Fig. 4          |
-| `escape_high_blast/low_blast`, `frames_aborted` | EccGuard escape/abort summary | Fig. 5      |
-| End-to-end pipeline ps  | VLA per-kernel profile                           | Fig. 2          |
-| Frame drops             | VLA frame-drops summary                          | Fig. 5, Table 1 |
-| `unsafe_action_rate` / `argmax_change_rate` | Action Scorer per-frame summary | Fig. 1, Table 1 |
+| Quantity                | Source                                           | Used by                              |
+| ----------------------- | ------------------------------------------------ | ------------------------------------ |
+| `events_clean/correctable/due/escape` | EccGuard per-kernel block          | `fig_ber_sensitivity`, `fig_fault_mode_mix` |
+| Per-region split        | EccGuard per-kernel-per-region block             | `fig_attr`                           |
+| Fault-mode mix          | EccGuard fault-mode draws block                  | `fig_fault_mode_mix`                 |
+| `escape_high_blast/low_blast`, `frames_aborted` | EccGuard escape/abort summary | `fig_due`                       |
+| End-to-end pipeline ps  | VLA per-kernel profile                           | calibration, `fig_pareto` (cost axis) |
+| Frame drops             | VLA frame-drops summary                          | `fig_due`, Table 1                   |
+| `unsafe_action_rate` / `argmax_change_rate` | Action Scorer per-frame summary | `fig_pareto`, `fig_ber_sensitivity`, Table 1 |
+| Outcome classes O1..O4  | CriticalActionWatcher + Action Scorer (campaigns)| `fig_sanity`                         |
 
-These map to the publication claims:
+These map to the paper's experimental narrative:
 
-- **Fig. 1**: How does each ECC scheme x policy combination push the
-  pressure point at which `unsafe_action_rate` exceeds the safety budget?
-- **Fig. 2**: At iso-safety, what is the *mean ECC latency overhead per
-  cycle*?
-- **Fig. 3**: Where in the VLA pipeline (`kernel x region`) do escapes
-  produce safety violations?
-- **Fig. 4**: How does the JEDEC-style mode mix evolve with BER?
-- **Fig. 5**: With `due_action=drop_frame`, how does the frame-drop rate
-  trade off against the deadline-miss rate?
-- **Table 1**: Headline numbers per `(scheme, policy, FIT)`.
+- **`fig_sanity`** (Case Study A): on deterministic single-bit, double-bit,
+  and multi-chip campaigns C0-C4, does each ECC scheme produce the
+  expected outcome distribution? This is the framework's behavioural
+  sanity check.
+- **`fig_pareto`** (Case Study A): cost-benefit Pareto frontier from
+  campaign C2 with three latency profiles per scheme. Headline cost vs
+  benefit plot.
+- **`fig_policy`** (Case Study B): policy granularity at fixed scheme
+  (`uniform` vs `kernel_aware` vs `region_aware` vs `full`) - currently
+  a placeholder; renderer pending.
+- **`fig_attr`** (Case Study B): workload-visible escape attribution
+  by `(kernel, region)`. Localises remaining escapes so a finer-grained
+  policy entry can target them.
+- **`fig_due`** (Case Study B): DUE-response trade-off
+  (`drop_frame` vs `latency_only`).
+- **`fig_ber_sensitivity`** (Case Study B, sensitivity): unsafe-action
+  rate vs BER per `(scheme, policy)`. BER is treated as a controlled
+  stress dimension, not a deployment threshold.
+- **`fig_fault_mode_mix`** (supplementary): JEDEC fault-mode mix vs
+  BER, reported for transparency on what the sampler is producing.
+- **Table 1**: Headline metrics per `(scheme, policy)` on the canonical
+  slice with Wilson 95% CIs.
 
 ## 2. Two-phase simulation
 
@@ -57,13 +76,23 @@ $ python3 ../scripts/make_figures.py ./ecc_sweep_out/analysis
 ```
 
 The sweep iterates over a configurable set of axes; `run_all_ecc.sh`
-exposes three named profiles:
+exposes three named profiles. BER and FIT are treated as controlled
+stress dimensions (sensitivity analysis), not deployment thresholds:
 
 | Profile | When to use | Axes |
 |---------|-------------|------|
 | `FAST=1` | Smoke test the pipeline. ~1 minute. | `BERS=1e-4`, `SEEDS=1`, `FAULT_MODELS=poisson`, `VLA_MAX_CYCLES=1`. |
-| `HEADLINE=1` | Publication-grade main-text figures and Table 1. | `BERS="0 1e-7 1e-5 1e-4"`, `SCHEMES="none secded chipkill"`, `POLICIES="uniform kernel_aware region_aware"`, `FAULT_MODELS="jedec_mix"`, `DUE_ACTIONS="drop_frame"`, `SEEDS="1 2 3"`, `VLA_MAX_CYCLES=8`. ~84 cells (21 BER=0 goldens + 63 BER>0). |
-| `FULL_CUBE=1` | Supplement / artifact only. ~1k+ Phase-2 cells, hours of wall-clock. | `BERS="0 1e-12 ... 1e-6"`, `SCHEMES="none secded chipkill"`, `POLICIES="uniform kernel_aware region_aware full"`, `FAULT_MODELS="poisson jedec_mix"`, `DUE_ACTIONS="latency_only drop_frame"`, `SEEDS="1..5"`. |
+| `HEADLINE=1` | Main-text Case Study B figures (`fig_attr`, `fig_due`, `fig_ber_sensitivity`) and Table 1. | `BERS="0 1e-7 1e-5 1e-4"`, `SCHEMES="none secded chipkill"`, `POLICIES="uniform kernel_aware region_aware"`, `FAULT_MODELS="jedec_mix"`, `DUE_ACTIONS="drop_frame"`, `SEEDS="1 2 3"`, `VLA_MAX_CYCLES=8`. ~84 cells (21 BER=0 goldens + 63 BER>0). |
+| `FULL_CUBE=1` | Full design-space cube; required for both `due_actions` to feed `fig_due`. ~1k+ Phase-2 cells, hours of wall-clock. | `BERS="0 1e-12 ... 1e-6"`, `SCHEMES="none secded chipkill"`, `POLICIES="uniform kernel_aware region_aware full"`, `FAULT_MODELS="poisson jedec_mix"`, `DUE_ACTIONS="latency_only drop_frame"`, `SEEDS="1..5"`. |
+
+Case Study A (sanity campaigns + Pareto plot) is produced by a
+separate driver, `run_case_studies.sh`, which fires deterministic
+fault campaigns (C0-C4) with `EccGuard`'s
+`campaign_target_kernel=ACTUATE` /
+`addr_filter_region=action_queue` /
+`campaign_max_events_per_kernel_entry=1` parameters and feeds
+`make_figures.py --case-studies` to produce `fig_sanity` and
+`fig_pareto`.
 
 Any individual axis exported in the environment overrides the profile
 default; e.g. `HEADLINE=1 SEEDS="1 2 3 4 5"` keeps the headline slice
@@ -157,12 +186,26 @@ therefore agree row-for-row on `frames_dropped`, `frames_unsafe`, and
 ## 5. Reproducing each figure
 
 ```
-# headline figures
+# Case Study B figures from the sweep CSVs
 $ ../scripts/make_figures.py ./ecc_sweep_out/analysis
 
-# unsafe-action budget for the iso-safety latency figure
+# Optional: change the unsafe-action budget reference line on
+# fig_ber_sensitivity (must match the analyzer's --unsafe-budget so
+# the preflight crossing check uses the same threshold)
 $ ../scripts/make_figures.py ./ecc_sweep_out/analysis --unsafe-budget 1e-7
+
+# Case Study A figures (sanity campaigns + Pareto plot from C2)
+$ ../scripts/run_case_studies.sh
+$ ../scripts/analyze_ecc_results.py ./case_studies_out --case-studies
+$ ../scripts/make_figures.py ./case_studies_out/analysis --case-studies
 ```
+
+When `make_figures.py` is invoked without `--case-studies` and the
+case-study artifact has not yet been produced, the renderer emits
+blank placeholder PDFs for `fig_sanity.pdf` and `fig_pareto.pdf` so
+the LaTeX paper still compiles. The `fig_policy.pdf` is currently a
+permanent placeholder until the policy-comparison renderer is wired
+up; the underlying data is already in `pressure_points.csv`.
 
 Output paths:
 
@@ -171,18 +214,28 @@ ecc_sweep_out/
   analysis/
     per_run_summary.csv
     per_kernel_overhead.csv
-    per_region_overhead.csv         # Phase 1
-    per_frame_safety.csv            # Phase 4
-    fault_mode_mix.csv              # Phase 2
+    per_region_overhead.csv
+    per_frame_safety.csv
+    fault_mode_mix.csv
     pressure_points.csv
+    pressure_points_full.csv         # full factorial; feeds fig_due
     summary.txt
     table1_headline.csv
     figs/
-      fig1_pressure_point.pdf
-      fig2_iso_safety_latency.pdf
-      fig3_kernel_region_blame.pdf
-      fig4_fault_mode_mix.pdf
-      fig5_drop_vs_deadline.pdf
+      # Case Study A (from `make_figures.py --case-studies`):
+      fig_sanity.pdf                 # outcome distribution C0-C4 x scheme
+      fig_pareto.pdf                 # cost-benefit Pareto from C2
+
+      # Case Study B (from `make_figures.py`):
+      fig_policy.pdf                 # placeholder (renderer pending)
+      fig_attr.pdf                   # (kernel, region) attribution
+      fig_due.pdf                    # drop_frame vs latency_only
+      fig_ber_sensitivity.pdf        # unsafe-action vs BER sensitivity
+      fig_fault_mode_mix.pdf         # supplementary: JEDEC mix vs BER
+
+      # Supplementary (from `make_figures.py`):
+      fig_attr_kernel.pdf            # kernel-only attribution bars
+      fig6_campaign_attribution.pdf  # campaign-mode bars (when present)
 ```
 
 ## 6. Known modelling limitations
@@ -230,19 +283,27 @@ can flag the fraction.
 
 ## 7. Threats to validity (future work)
 
-The plan deliberately stays out of the following tiers; these are the most
-likely reviewer-asked extensions:
+The framework deliberately stays out of the following tiers. Each is
+also a natural extension on the framework's extensibility surface
+(scheme, policy, fault model, DUE response, workload):
 
 - **Cache/SRAM ECC**: would need a new SST element wrapping
   `memHierarchy.Cache` to install per-line ECC.
 - **Lockstep DMR**: a parallel guard component cross-checking redundant
-  copies of each access.
+  copies of each access; adds a new "consensus" benefit metric.
 - **Real OpenVLA / Pi0 / RT-2 dimensions**: rebuild `vla_cpu.c` /
-  `vla_gpu.c` with realistic layer counts and tile sizes.
+  `vla_gpu.c` with realistic layer counts and tile sizes; absolute
+  latencies in the framework's outputs become more meaningful, but the
+  cross-design-point ordering is what is claimed today regardless.
 - **On-die + rank-level layered ECC stack**: cascade two `EccGuard`
   instances with different schemes.
 - **CXL poison forwarding**: add a new memEvent flag and have EccGuard
-  propagate "poisoned" reads to the consumer.
+  propagate "poisoned" reads to the consumer; becomes a third value
+  of the `due_action` axis.
+- **Deployment-grade FIT calibration**: pin
+  `fit_per_mbit_per_hour` against validated field FIT data for a
+  specific DRAM technology. The framework supports it; the
+  calibration itself is downstream work.
 
 These are deliberately out of scope so the paper's threats-to-validity
 section has a clear list to point at.

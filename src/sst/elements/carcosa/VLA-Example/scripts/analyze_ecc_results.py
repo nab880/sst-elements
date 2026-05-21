@@ -17,9 +17,11 @@ from __future__ import annotations
 
 import argparse
 import csv
+import glob
 import math
 import os
 import re
+import shutil
 import sys
 from collections import defaultdict
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -70,6 +72,9 @@ def _scorer_header_match(line: str) -> bool:
 SCORER_SUMMARY_BLOCK_START = re.compile(r"=== Action Scorer .* Summary ===")
 SCORER_SUMMARY_BLOCK_END   = re.compile(r"=== End Action Scorer .* Summary ===")
 SCORER_SUMMARY_HEADER      = ("frames_total,frames_dropped,frames_argmax_diff,frames_unsafe,"
+                              "drop_rate,argmax_change_rate,unsafe_action_rate")
+SCORER_SUMMARY_HEADER_O    = ("frames_total,frames_dropped,frames_argmax_diff,frames_unsafe,"
+                              "frames_outcome_O1,frames_outcome_O2,frames_outcome_O3,frames_outcome_O4,"
                               "drop_rate,argmax_change_rate,unsafe_action_rate")
 
 
@@ -254,17 +259,13 @@ def parse_run_log(path: str) -> Dict:
                     "safety_violated":         int(parts[11]),
                     "sim_time_ps":             int(parts[12]),
                 })
-            elif len(parts) == 11:
+            elif len(parts) == 12:
                 kac   = int(parts[1])
                 kname = parts[2]
                 frame_rows.append({
                     "pipeline_cycle":          int(parts[0]),
                     "kernel_at_close":         kac,
                     "kernel_name":             kname,
-                    # Legacy artifact: no per-frame attribution available;
-                    # fall back to kernel_at_close (always ACTUATE on the
-                    # synthetic FSM). Tier B Fig. 3a will render a single-
-                    # bar fallback chart with the appropriate caption.
                     "attributing_kernel_id":   kac,
                     "attributing_kernel_name": kname,
                     "dropped":                 int(parts[3]),
@@ -274,29 +275,89 @@ def parse_run_log(path: str) -> Dict:
                     "golden_checksum":         int(parts[7]),
                     "argmax_changed":          int(parts[8]),
                     "safety_violated":         int(parts[9]),
+                    "outcome_class":           parts[10],
+                    "sim_time_ps":             int(parts[11]),
+                })
+            elif len(parts) == 11:
+                kac   = int(parts[1])
+                kname = parts[2]
+                frame_rows.append({
+                    "pipeline_cycle":          int(parts[0]),
+                    "kernel_at_close":         kac,
+                    "kernel_name":             kname,
+                    "attributing_kernel_id":   kac,
+                    "attributing_kernel_name": kname,
+                    "dropped":                 int(parts[3]),
+                    "escapes_in_frame":        int(parts[4]),
+                    "flips_in_frame":          int(parts[5]),
+                    "action_checksum":         int(parts[6]),
+                    "golden_checksum":         int(parts[7]),
+                    "argmax_changed":          int(parts[8]),
+                    "safety_violated":         int(parts[9]),
+                    "outcome_class":           "",
                     "sim_time_ps":             int(parts[10]),
+                })
+            elif len(parts) == 14:
+                frame_rows.append({
+                    "pipeline_cycle":          int(parts[0]),
+                    "kernel_at_close":         int(parts[1]),
+                    "kernel_name":             parts[2],
+                    "attributing_kernel_id":   int(parts[3]),
+                    "attributing_kernel_name": parts[4],
+                    "dropped":                 int(parts[5]),
+                    "escapes_in_frame":        int(parts[6]),
+                    "flips_in_frame":          int(parts[7]),
+                    "action_checksum":         int(parts[8]),
+                    "golden_checksum":         int(parts[9]),
+                    "argmax_changed":          int(parts[10]),
+                    "safety_violated":         int(parts[11]),
+                    "outcome_class":           parts[12],
+                    "sim_time_ps":             int(parts[13]),
                 })
         except ValueError:
             continue
 
     # Action Scorer summary line (Phase 4).
+    def _scorer_summary_header(line: str) -> bool:
+        return line == SCORER_SUMMARY_HEADER or line == SCORER_SUMMARY_HEADER_O
+
     ss_rows = _scan_block(lines, SCORER_SUMMARY_BLOCK_START, SCORER_SUMMARY_BLOCK_END,
-                          SCORER_SUMMARY_HEADER)
+                          _scorer_summary_header)
     if ss_rows:
         parts = ss_rows[0]
-        if len(parts) == 7:
-            try:
+        try:
+            if len(parts) == 11:
                 scorer_summary = {
                     "frames_total":         int(parts[0]),
                     "frames_dropped":       int(parts[1]),
                     "frames_argmax_diff":   int(parts[2]),
                     "frames_unsafe":        int(parts[3]),
+                    "frames_outcome_O1":    int(parts[4]),
+                    "frames_outcome_O2":    int(parts[5]),
+                    "frames_outcome_O3":    int(parts[6]),
+                    "frames_outcome_O4":    int(parts[7]),
+                    "drop_rate":            float(parts[8]),
+                    "argmax_change_rate":   float(parts[9]),
+                    "unsafe_action_rate":   float(parts[10]),
+                }
+            elif len(parts) == 7:
+                scorer_summary = {
+                    "frames_total":         int(parts[0]),
+                    "frames_dropped":       int(parts[1]),
+                    "frames_argmax_diff":   int(parts[2]),
+                    "frames_unsafe":        int(parts[3]),
+                    "frames_outcome_O1":    0,
+                    "frames_outcome_O2":    0,
+                    "frames_outcome_O3":    0,
+                    "frames_outcome_O4":    0,
                     "drop_rate":            float(parts[4]),
                     "argmax_change_rate":   float(parts[5]),
                     "unsafe_action_rate":   float(parts[6]),
                 }
-            except ValueError:
+            else:
                 scorer_summary = None
+        except ValueError:
+            scorer_summary = None
 
     return {
         "ecc":                  ecc_rows,
@@ -318,9 +379,40 @@ def end_to_end_ps(vla_rows: List[Dict]) -> Optional[int]:
     return max(ends) - min(starts)
 
 
+def _merge_index_parts(run_dir: str) -> None:
+    """Fold .index_parts/*.csv into index.csv when the sweep died before merge."""
+    idx = os.path.join(run_dir, "index.csv")
+    parts_dir = os.path.join(run_dir, ".index_parts")
+    if not os.path.isdir(parts_dir):
+        return
+    parts = sorted(glob.glob(os.path.join(parts_dir, "*.csv")))
+    if not parts:
+        return
+    header = ("ber,scheme,policy,seed,fault_model,due_action,log,exit,"
+              "golden,emitted_golden\n")
+    n_existing = 0
+    if os.path.isfile(idx) and os.path.getsize(idx) > 0:
+        with open(idx, "r") as f:
+            n_existing = max(0, sum(1 for _ in f) - 1)
+    if n_existing == 0:
+        with open(idx, "w") as f:
+            f.write(header)
+    with open(idx, "a") as out:
+        for part in parts:
+            with open(part, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("ber,"):
+                        out.write(line + "\n")
+    shutil.rmtree(parts_dir)
+
+
 def index_runs(out_dir: str, run_dir: str) -> List[Dict]:
     runs: List[Dict] = []
     idx = os.path.join(run_dir, "index.csv")
+    if os.path.isfile(idx) and os.path.getsize(idx) <= len(
+            "ber,scheme,policy,seed,fault_model,due_action,log,exit,golden,emitted_golden\n"):
+        _merge_index_parts(run_dir)
     if os.path.exists(idx):
         with open(idx, "r") as f:
             reader = csv.DictReader(f)
@@ -343,6 +435,8 @@ def index_runs(out_dir: str, run_dir: str) -> List[Dict]:
                     "campaign_mode": row.get("campaign_mode", ""),
                     "event_budget":  row.get("event_budget",  ""),
                     "event_rate":    row.get("event_rate",    ""),
+                    "case_id":       row.get("case_id", ""),
+                    "latency_profile": row.get("latency_profile", "default"),
                 })
     else:
         for name in sorted(os.listdir(run_dir)):
@@ -657,9 +751,101 @@ def _write_preflight_report(out_dir: str, *,
     print(f"Wrote {path}")
 
 
+def analyze_case_studies(run_dir: str, out_dir: Optional[str] = None) -> int:
+    """Aggregate case_studies/index.csv into case_study_table.csv + per_run_summary."""
+    out_dir = out_dir or os.path.join(run_dir, "analysis")
+    os.makedirs(out_dir, exist_ok=True)
+
+    runs = index_runs(out_dir, run_dir)
+    if not runs:
+        print("ERROR: no case-study runs found.", file=sys.stderr)
+        return 2
+
+    parse_cache: Dict[str, Dict] = {}
+    table_rows: List[Dict] = []
+    per_run_rows: List[Dict] = []
+
+    for run in runs:
+        if run["exit"] != 0 or not os.path.exists(run["log"]):
+            continue
+        log_path = os.path.realpath(run["log"])
+        parsed = parse_cache.get(log_path) or parse_run_log(log_path)
+        parse_cache[log_path] = parsed
+        scorer = parsed.get("scorer") or {}
+        ecc = parsed.get("ecc") or []
+        events_total = sum(int(r.get("clean", 0)) + int(r.get("correctable", 0))
+                           + int(r.get("due", 0)) + int(r.get("escape", 0)) for r in ecc)
+        lat_ps = sum(int(r.get("latency_ps", 0)) for r in ecc)
+
+        ft = int(scorer.get("frames_total", 0) or 0)
+        fu = int(scorer.get("frames_unsafe", 0) or 0)
+        ur = float(scorer.get("unsafe_action_rate", 0) or 0)
+        o1 = int(scorer.get("frames_outcome_O1", 0) or 0)
+        o2 = int(scorer.get("frames_outcome_O2", 0) or 0)
+        o3 = int(scorer.get("frames_outcome_O3", 0) or 0)
+        o4 = int(scorer.get("frames_outcome_O4", 0) or 0)
+        u_p, u_lo, u_hi = wilson_ci(fu, ft)
+
+        row = {
+            "case_id": run.get("case_id", ""),
+            "scheme": run.get("scheme", ""),
+            "policy": run.get("policy", ""),
+            "latency_profile": run.get("latency_profile", "default"),
+            "seed": run.get("seed", ""),
+            "frames_total": ft,
+            "frames_unsafe": fu,
+            "unsafe_action_rate": ur,
+            "unsafe_lo": u_lo,
+            "unsafe_hi": u_hi,
+            "fraction_O1": (o1 / ft) if ft else 0.0,
+            "fraction_O2": (o2 / ft) if ft else 0.0,
+            "fraction_O3": (o3 / ft) if ft else 0.0,
+            "fraction_O4": (o4 / ft) if ft else 0.0,
+            "ecc_latency_ps": lat_ps,
+            "events_total": events_total,
+            "log": run["log"],
+        }
+        table_rows.append(row)
+        per_run_rows.append({**row, "ber": "0", "fault_model": "campaign",
+                             "due_action": run.get("due_action", "drop_frame")})
+
+    table_path = os.path.join(out_dir, "case_study_table.csv")
+    if table_rows:
+        fields = list(table_rows[0].keys())
+        with open(table_path, "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=fields)
+            w.writeheader()
+            w.writerows(table_rows)
+        print(f"Wrote {table_path}")
+
+    pr_path = os.path.join(out_dir, "per_run_summary.csv")
+    if per_run_rows:
+        with open(pr_path, "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=list(per_run_rows[0].keys()))
+            w.writeheader()
+            w.writerows(per_run_rows)
+        print(f"Wrote {pr_path}")
+
+    # Outcome consistency gate
+    for fr in []:
+        pass
+    for run in runs:
+        if run["exit"] != 0:
+            continue
+        parsed = parse_cache.get(os.path.realpath(run["log"]), {})
+        for fr in parsed.get("frames", []):
+            oc = fr.get("outcome_class", "")
+            if oc == "O1" and int(fr.get("argmax_changed", 0)) == 1:
+                print(f"WARNING: inconsistent O1+argmax in {run['log']}", file=sys.stderr)
+
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("run_dir", help="Directory containing per-run logs (and index.csv).")
+    ap.add_argument("--case-studies", action="store_true",
+                    help="Case-study mode: emit case_study_table.csv from case_studies/index.csv.")
     ap.add_argument("--out", default=None, help="Output directory (default: <run_dir>/analysis).")
     ap.add_argument("--deadline-ms", type=float, default=33.0,
                     help="Actuation deadline in ms; latencies above this count as violations.")
@@ -709,12 +895,15 @@ def main() -> int:
     ap.add_argument("--policy-contrasts", action="store_true",
                     help=("Also emit policy_contrasts.csv: per (scheme, ber) "
                           "the pooled unsafe_action_rate difference for each "
-                          "non-uniform policy vs uniform, with a Wald 95% CI."))
+                          "non-uniform policy vs uniform, with a Wald 95%% CI."))
     args = ap.parse_args()
 
     if not os.path.isdir(args.run_dir):
         print(f"ERROR: run_dir '{args.run_dir}' not found.", file=sys.stderr)
         return 2
+
+    if args.case_studies:
+        return analyze_case_studies(args.run_dir, args.out)
 
     out_dir = args.out or os.path.join(args.run_dir, "analysis")
     os.makedirs(out_dir, exist_ok=True)

@@ -13,8 +13,12 @@ libcarcosa_la_SOURCES =                     \
     Components/Hali.h                       \
     Components/EccGuard.cc                  \
     Components/EccGuard.h                   \
+    Components/CriticalActionWatcher.cc     \
+    Components/CriticalActionWatcher.h      \
     Components/EccScheme.h                  \
     Components/EccPolicy.h                  \
+    Components/ActionScorer.cc              \
+    Components/ActionScorer.h               \
     Components/FaultInjManager.cc           \
     Components/FaultInjManager.h            \
     injectors/faultInjectorBase.cc          \
@@ -66,6 +70,7 @@ libcarcosa_la_SOURCES =                     \
     VLA-Example/Components/VLAAgent.cc      \
     VLA-Example/Components/VLAAgent.h       \
     VLA-Example/Components/VLAKernelComplexity.h \
+    VLA-Example/Components/VlaRegions.h     \
     VLA-Example/Components/VLACpuAgent.cc   \
     VLA-Example/Components/VLACpuAgent.h    \
     VLA-Example/Components/VLAGpuAgent.cc   \
@@ -102,6 +107,11 @@ EXTRA_DIST = \
     VLA-Example/tests/stub_gpu.c                  \
     VLA-Example/tests/testCarcosaVLA_GPUCPU.py    \
     VLA-Example/tests/testCarcosaVLA_GPUCPU_Synth.py \
+    VLA-Example/tests/testCarcosaVLA_CaseStudy.py \
+    VLA-Example/scripts/run_case_studies.sh \
+    VLA-Example/scripts/preflight_case_studies.sh \
+    VLA-Example/scripts/load_case_manifest.py \
+    VLA-Example/case_studies/manifest.yaml \
     VLA-Example/scripts/extract_baselines.py      \
     VLA-Example/scripts/run_phase2_from_phase1.sh \
     tests/testCorruptMemBasic.py                  \
@@ -140,6 +150,8 @@ nobase_sst_HEADERS =                        \
     Components/EccScheme.h                  \
     Components/EccPolicy.h                  \
     Components/EccGuard.h                   \
+    Components/CriticalActionWatcher.h      \
+    Components/ActionScorer.h               \
     Components/FaultInjManagerAPI.h        \
     Components/InterceptionAgentAPI.h      \
     Components/PipelineStateRegistry.h     \
@@ -149,6 +161,7 @@ nobase_sst_HEADERS =                        \
     VLA-Example/Components/vla-fsm.h        \
     VLA-Example/Components/VLAAgent.h       \
     VLA-Example/Components/VLAKernelComplexity.h \
+    VLA-Example/Components/VlaRegions.h     \
     VLA-Example/Components/VLACpuAgent.h    \
     VLA-Example/Components/VLAGpuAgent.h    \
     VLA-Example/Components/VLACpuDelayAgent.h \

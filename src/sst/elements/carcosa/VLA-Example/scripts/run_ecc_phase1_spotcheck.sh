@@ -54,6 +54,7 @@ run_one() {
 
     echo "=== $label (ber=$ber scheme=$scheme policy=$policy seed=$seed) ==="
 
+    env -u VLA_SST_STOP_AT \
     ECC_SCHEME="$scheme" \
     ECC_BER="$ber" \
     ECC_CORRECTABLE_LATENCY_PS="$CORRECTABLE_PS" \
@@ -61,6 +62,12 @@ run_one() {
     ECC_ESCAPE_LATENCY_PS="$ESCAPE_PS" \
     ECC_KERNEL_POLICY="$kernel_policy" \
     ECC_SEED="$seed" \
+    VLA_MAX_CYCLES="${VLA_MAX_CYCLES:-${VLA_PHASE2_MAX_CYCLES:-1}}" \
+    VLA_NUM_VIT_LAYERS="${VLA_NUM_VIT_LAYERS:-2}" \
+    VLA_NUM_LLM_LAYERS="${VLA_NUM_LLM_LAYERS:-2}" \
+    VLA_INITIAL_SEQ_LEN="${VLA_INITIAL_SEQ_LEN:-8}" \
+    VLA_MAX_SEQ_LEN="${VLA_MAX_SEQ_LEN:-64}" \
+    VLA_NUM_ACTION_TOKENS="${VLA_NUM_ACTION_TOKENS:-1}" \
     sst "$SST_CFG" >"$logpath" 2>&1
     local rc=$?
 

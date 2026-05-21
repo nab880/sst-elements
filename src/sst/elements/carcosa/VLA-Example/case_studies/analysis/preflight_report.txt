@@ -1,0 +1,33 @@
+=== ECC sweep preflight report ===
+PREFLIGHT: FAIL
+
+canonical slice : (no slice; using full factorial)
+unsafe budget   : 1.000e-06
+min frames/cell : 24
+min attributing : 3
+cells (canonical): 2
+
+Gate 1: frames_total per cell >= min_frames
+  FAIL: 2 cell(s) underpowered:
+    scheme=none     policy=uniform       ber=0          frames=2
+    scheme=secded   policy=kernel_aware  ber=0          frames=2
+
+Gate 2: at least one (scheme, policy) curve crosses unsafe_budget on its Wilson upper bound
+  PASS-LIKE: 2 crossing(s):
+    scheme=none     policy=uniform       ber=0          unsafe_hi=6.576e-01
+    scheme=secded   policy=kernel_aware  ber=0          unsafe_hi=6.576e-01
+  -> paper may lead with a pressure-point claim.
+
+Gate 3: rejected_runs.csv has no unexpected reasons
+  PASS: no rejected runs.
+
+Gate 4: distinct attributing_kernel_name among safety_violated==1
+  source: per_frame_safety is empty.
+  distinct kernels: 0
+  REFRAME: Fig. 3a will show fewer than the requested bars;
+  treat Tier B as informational or re-run with the fix in place.
+
+Gate 5: scorer.frames_dropped == VLA agent's frames_dropped_total
+  rows audited: 2
+  PASS: every audited row agreed.
+

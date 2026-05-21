@@ -1,0 +1,3 @@
+scheme,policy,ber,fit_per_mbit_per_hour_equiv,fault_model,due_action,n_seeds,events_total,frames_total,p50_e2e_ps,p95_e2e_ps,mean_ecc_latency_ps,deadline_viol_rate,deadline_viol_lo,deadline_viol_hi,sdc_rate,sdc_rate_lo,sdc_rate_hi,unsafe_action_rate,unsafe_action_lo,unsafe_action_hi,drop_rate,drop_rate_lo,drop_rate_hi,argmax_change_rate,argmax_change_lo,argmax_change_hi,deadline_ms
+none,uniform,0,,campaign,drop_frame,1,0,2,10553397316,10553397316,0,0.0000,0.0000,0.7935,,,,0.000e+00,0.000e+00,6.576e-01,0.000e+00,0.000e+00,6.576e-01,0.000e+00,0.000e+00,6.576e-01,33.0
+secded,kernel_aware,0,,campaign,drop_frame,1,0,2,10553397316,10553397316,0,0.0000,0.0000,0.7935,,,,0.000e+00,0.000e+00,6.576e-01,0.000e+00,0.000e+00,6.576e-01,0.000e+00,0.000e+00,6.576e-01,33.0

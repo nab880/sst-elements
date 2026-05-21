@@ -20,6 +20,7 @@
 #include <sst/core/link.h>
 #include <sst/elements/memHierarchy/memEvent.h>
 #include <sst/elements/memHierarchy/memTypes.h>
+#include "sst/elements/carcosa/Components/HaliEvent.h"
 #include <cinttypes>
 #include <cstdio>
 #include <cstdint>
@@ -38,7 +39,16 @@ public:
     /** Intercepted MemEvent: respond on highlink; return true if handled (not forwarded). */
     virtual bool handleInterceptedEvent(SST::MemHierarchy::MemEvent* ev, SST::Link* highlink) = 0;
 
-    virtual void notifyPartnerDone(unsigned iteration) {}
+    virtual void notifyPartnerDone(unsigned iteration) { (void)iteration; }
+
+    // Default routes "done" to notifyPartnerDone for PingPong/FourState; VLA agents
+    // override this to consume "cmd"/"seqlen"/"exit"/"done" tags. Hali calls this for
+    // every run-phase HaliEvent when an interceptionAgent is configured.
+    virtual void handleRingEvent(SST::Carcosa::HaliEvent* ev) {
+        if (ev && ev->getStr() == "done") {
+            notifyPartnerDone(ev->getNum());
+        }
+    }
 
     virtual void agentSetup() {}
 

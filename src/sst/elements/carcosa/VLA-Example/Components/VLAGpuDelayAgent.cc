@@ -1,6 +1,7 @@
 #include "sst_config.h"
 #include "sst/elements/carcosa/VLA-Example/Components/VLAGpuDelayAgent.h"
 #include "sst/elements/carcosa/VLA-Example/Components/VLAKernelComplexity.h"
+#include "sst/elements/carcosa/VLA-Example/Components/VlaRegions.h"
 #include "sst/elements/carcosa/Components/HaliEvent.h"
 #include "sst/elements/memHierarchy/memEvent.h"
 #include "sst/elements/memHierarchy/memTypes.h"
@@ -26,6 +27,7 @@ VLAGpuDelayAgent::VLAGpuDelayAgent(ComponentId_t id, Params& params)
     maxSeqLen_      = params.find<int>("max_seq_len",      64);
     stateKey_       = params.find<std::string>("state_key", "");
     regionSize_     = params.find<uint64_t>("region_size", 4096);
+    regionsCsv_     = params.find<std::string>("regions", "");
 
     bool anyPerDim = (scaleSeq_ != 1.0) || (scaleDim_ != 1.0) || (scaleVocab_ != 1.0);
     legacyScaling_ = !anyPerDim && (scaleFactor_ != 1.0);
@@ -83,6 +85,31 @@ bool VLAGpuDelayAgent::handleInterceptedEvent(MemEvent* ev, Link* highlink)
         return true;
     }
 
+    // Workload region-publish ABI; see hyades.h. Mirrors the CPU agent path
+    // so a stub_gpu (or future real GPU binary) can declare its own labeled
+    // tensor base/size at startup.
+    if ((offset == 0x0020 || offset == 0x0024 || offset == 0x0028 || offset == 0x002C) &&
+        (ev->getCmd() == Command::Write || ev->getCmd() == Command::GetX)) {
+        uint32_t value = 0;
+        const auto& payload = ev->getPayload();
+        if (payload.size() >= sizeof(uint32_t))
+            std::memcpy(&value, payload.data(), sizeof(uint32_t));
+        sendWriteAck(ev);
+        applyRegionPublish(offset, value);
+        return true;
+    }
+
+    // Per-frame action checksum publish (HYADES_ACTION_CHECKSUM_OFFSET).
+    // The GPU agent doesn't push FrameRecords - only the CPU agent's
+    // ActionScorer-visible value matters - so we just ack the write so the
+    // store retires; symmetric stub binaries can call the helper on both
+    // sides without stalling the GPU pipe.
+    if (offset == 0x0030 &&
+        (ev->getCmd() == Command::Write || ev->getCmd() == Command::GetX)) {
+        sendWriteAck(ev);
+        return true;
+    }
+
     if (offset == 0x0004 &&
         (ev->getCmd() == Command::Write || ev->getCmd() == Command::GetX)) {
         sendWriteAck(ev);
@@ -97,6 +124,10 @@ bool VLAGpuDelayAgent::handleInterceptedEvent(MemEvent* ev, Link* highlink)
         uint64_t delayPs = computeScaledDelay(activeKernelId_);
         if (delayPs > 0) {
             delayPending_ = true;
+            // Re-affirm currentKernel for the full modeled delay window so
+            // EccGuard attributes any GPU-side traffic during the delay (cache
+            // evictions, region walks from stub_gpu) to this kernel.
+            publishKernel(activeKernelId_);
             selfLink_->send(static_cast<SimTime_t>(delayPs), nullptr);
         } else {
             if (activeKernelId_ == ACTUATE) gpuPipelineCycle_++;
@@ -177,6 +208,10 @@ void VLAGpuDelayAgent::agentSetup()
         s->currentKernel = KERNEL_IDLE;
         s->pipelineCycle = 0;
         publishMmioRegion();
+        int n = publishUserRegions(stateKey_, regionsCsv_, out_, "VLAGpuDelayAgent");
+        if (verbose_ && n > 0)
+            out_->output("VLAGpuDelayAgent: published %d user region(s) into '%s'\n",
+                         n, stateKey_.c_str());
     }
 
     if (verbose_) {
@@ -216,6 +251,53 @@ void VLAGpuDelayAgent::publishMmioRegion()
     s->regions[0].valid = regionSize_ > 0;
     s->regions[0].id    = 0;
     s->regions[0].name  = "mmio_control";
+}
+
+// Implements the workload region-publish ABI declared in hyades.h. See the
+// CPU agent's applyRegionPublish for the protocol; the GPU agent typically has
+// an empty state_key (only the CPU agent publishes into the shared registry),
+// in which case this path is a no-op.
+void VLAGpuDelayAgent::applyRegionPublish(uint64_t offset, uint32_t value)
+{
+    if (stateKey_.empty()) return;
+    PipelineStateBase* s =
+        PipelineStateRegistry<PipelineStateBase>::getMutable(stateKey_);
+    if (!s) s = PipelineStateRegistry<PipelineStateBase>::getOrCreate(stateKey_);
+    switch (offset) {
+    case 0x0020:
+        s->stagedBase = (s->stagedBase & 0xFFFFFFFF00000000ull) |
+                        static_cast<uint64_t>(value);
+        break;
+    case 0x0024:
+        s->stagedBase = (s->stagedBase & 0x00000000FFFFFFFFull) |
+                        (static_cast<uint64_t>(value) << 32);
+        break;
+    case 0x0028:
+        s->stagedSize = static_cast<uint64_t>(value);
+        break;
+    case 0x002C: {
+        size_t slot = static_cast<size_t>(value);
+        if (slot == 0) {
+            s->stagedBase = 0;
+            s->stagedSize = 0;
+            break;
+        }
+        std::string preservedName;
+        if (slot < s->regions.size())
+            preservedName = s->regions[slot].name;
+        s->commitStagedRegion(slot);
+        if (!preservedName.empty())
+            s->regions[slot].name = preservedName;
+        if (verbose_)
+            out_->output("VLAGpuDelayAgent: region slot %zu '%s' published base=0x%" PRIx64 " size=0x%" PRIx64 "\n",
+                         slot,
+                         (slot < s->regions.size() ? s->regions[slot].name.c_str() : ""),
+                         s->regions[slot].base, s->regions[slot].size);
+        break;
+    }
+    default:
+        break;
+    }
 }
 
 void VLAGpuDelayAgent::publishKernel(int kernel)

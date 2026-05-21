@@ -1,33 +1,49 @@
 #!/usr/bin/env python3
-"""Render publication-grade figures from the CSVs emitted by analyze_ecc_results.py.
+"""Render the cost--benefit study figures from the CSVs emitted by
+analyze_ecc_results.py.
+
+The figure layout matches the paper's Case Study A (sanity campaigns +
+Pareto) and Case Study B (scheme/policy design-space study + sensitivity).
 
 Inputs (in <analysis_dir>):
   - pressure_points.csv          (canonical slice if --canonical-slice was set)
-  - pressure_points_full.csv     (full factorial; used for the appendix Fig. 5)
+  - pressure_points_full.csv     (full factorial; used for fig_due)
   - per_run_summary.csv
   - per_kernel_overhead.csv
   - per_region_overhead.csv
   - per_frame_safety.csv
   - fault_mode_mix.csv
+  - case_study_table.csv         (only with --case-studies)
 
 Outputs (under <analysis_dir>/figs/):
-  fig1_pressure_point.pdf            Unsafe-action rate vs BER per (scheme, policy),
-                                     faceted by scheme, with the unsafe-action budget
-                                     drawn as a horizontal reference line.
-  fig2_iso_safety_latency.pdf        Mean ECC latency at the iso-safety BER (one BER
-                                     per (scheme, policy) chosen by select_iso_ber()).
-  fig3a_violation_attribution.pdf    Tier B: safety_violated frames grouped by
-                                     attributing_kernel_name (falls back to
-                                     kernel_at_close when the simulator hasn't
-                                     been rebuilt with attribution yet).
-  fig3b_escape_geography.pdf         Tier A (optional): EccGuard escape stack by
-                                     (kernel, region). Labeled as escape
-                                     classification, NOT violation origin.
-  fig4_fault_mode_mix.pdf            Fraction of JEDEC fault modes vs BER.
-  appendix_fig5_drop_vs_deadline.pdf Frame-drop vs deadline-miss; uses the FULL
-                                     factorial so both due_actions are visible.
-  table1_headline.csv                One row per (scheme, policy) on the canonical
-                                     slice, with Wilson CIs.
+  fig_sanity.pdf            Case Study A: stacked outcome distribution (O1--O4)
+                            per (scheme, campaign). Emitted by --case-studies.
+  fig_pareto.pdf            Case Study A: cost--benefit Pareto frontier from
+                            campaign C2 (mean ECC latency vs unsafe-action
+                            rate). Emitted by --case-studies.
+  fig_policy.pdf            Case Study B: policy granularity at fixed scheme.
+                            Currently a blank placeholder; renderer pending.
+  fig_attr.pdf              Case Study B: workload-visible escape attribution
+                            by (kernel, region). Drawn from per_region_overhead
+                            as the closest available proxy until a true
+                            kernel x region heatmap renderer is wired up.
+  fig_due.pdf               Case Study B: DUE-response trade-off, drop vs
+                            deadline-miss across due_actions.
+  fig_ber_sensitivity.pdf   Sensitivity: unsafe-action rate vs BER per
+                            (scheme, policy). Demoted from headline; reported
+                            for completeness, NOT as a deployment threshold.
+  fig_fault_mode_mix.pdf    Supplementary: fraction of JEDEC fault modes vs BER.
+  fig_attr_kernel.pdf       Supplementary: bar histogram of attributing_kernel
+                            for safety-violated frames (legacy fig3a content).
+  fig6_campaign_attribution.pdf
+                            Supplementary: campaign-mode unsafe rate by target
+                            kernel; only emitted when campaign rows exist.
+  table1_headline.csv       One row per (scheme, policy) on the canonical
+                            slice, with Wilson CIs.
+
+Figures whose data is not yet wired up emit a blank placeholder PDF with a
+title and a `placeholder` watermark so the LaTeX still compiles. The
+placeholder helper is `_blank_placeholder()`.
 
 Requires matplotlib + pandas. Both are intentionally light dependencies; the
 script falls back to a clear error message if either is missing so that a
@@ -75,6 +91,30 @@ def _read_csv(path: str) -> pd.DataFrame:
 def _ensure_dir(p: str) -> str:
     os.makedirs(p, exist_ok=True)
     return p
+
+
+def _blank_placeholder(out_dir: str, filename: str, title: str,
+                        note: str = "") -> None:
+    """Emit a blank placeholder PDF so the LaTeX paper compiles before the
+    real figure-rendering logic for `filename` is wired up.
+
+    The placeholder carries a bold title, an optional note, and a
+    `placeholder` watermark so a reader (or a CI artifact diff) cannot
+    mistake it for a finished figure.
+    """
+    fig, ax = plt.subplots(figsize=(6.0, 4.0))
+    ax.text(0.5, 0.62, title, ha="center", va="center",
+            fontsize=12, fontweight="bold", transform=ax.transAxes)
+    if note:
+        ax.text(0.5, 0.46, note, ha="center", va="center",
+                fontsize=9, wrap=True, transform=ax.transAxes)
+    ax.text(0.5, 0.18, "(placeholder; renderer pending)",
+            ha="center", va="center", fontsize=8, style="italic",
+            color="#888888", transform=ax.transAxes)
+    ax.set_axis_off()
+    fig.tight_layout()
+    fig.savefig(os.path.join(out_dir, filename))
+    plt.close(fig)
 
 
 def _ci_yerr(df: pd.DataFrame, point: str, lo: str, hi: str):
@@ -130,12 +170,15 @@ def select_iso_ber_table(df: pd.DataFrame, budget: float) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def fig1_pressure_point(pp: pd.DataFrame, out_dir: str,
-                          unsafe_budget: float) -> None:
-    """Unsafe-action rate vs BER per (scheme, policy), faceted by scheme,
-    with the safety budget drawn as a horizontal reference line and the
-    iso-safety BER (the rightmost row whose Wilson upper bound stays at
-    or below the budget) called out per curve.
+def fig_ber_sensitivity(pp: pd.DataFrame, out_dir: str,
+                         unsafe_budget: float) -> None:
+    """Sensitivity: unsafe-action rate vs BER per (scheme, policy), faceted
+    by scheme. BER is treated as a controlled stress axis under which the
+    cross-design-point ordering is evaluated; the absolute BER values are
+    NOT interpreted as a deployment threshold (see paper Sec. Case Study B).
+    The chosen unsafe-action budget is drawn as a horizontal reference line
+    and the iso-budget BER per curve is highlighted for traceability into
+    Fig. fig_pareto.
 
     Note: pp is expected to be the canonical slice (one fault_model x
     one due_action). The analyzer's --canonical-slice flag enforces this;
@@ -144,6 +187,9 @@ def fig1_pressure_point(pp: pd.DataFrame, out_dir: str,
     which point.
     """
     if pp.empty:
+        _blank_placeholder(out_dir, "fig_ber_sensitivity.pdf",
+                           "Sensitivity: unsafe-action rate vs BER",
+                           "no pressure_points.csv rows on the canonical slice")
         return
     df = pp.copy()
     df["ber_f"] = pd.to_numeric(df["ber"], errors="coerce")
@@ -212,116 +258,50 @@ def fig1_pressure_point(pp: pd.DataFrame, out_dir: str,
                 "top", functions=(ber_to_fit, fit_to_ber))
             ax2.set_xlabel("FIT / Mbit / hour")
     fig.tight_layout()
-    fig.savefig(os.path.join(out_dir, "fig1_pressure_point.pdf"))
+    fig.savefig(os.path.join(out_dir, "fig_ber_sensitivity.pdf"))
     plt.close(fig)
 
 
-def fig2_iso_safety_latency(pp: pd.DataFrame, out_dir: str,
-                             unsafe_budget: float) -> None:
-    """One bar per (scheme, policy): mean ECC latency at the iso-safety
-    BER as defined by select_iso_ber(). The previous implementation
-    averaged latency over every BER row whose unsafe rate stayed at or
-    below the budget, which (a) over-weighted the low-BER rows where
-    latency is dominated by zero correctable events and (b) silently
-    fell back to sdc_rate when unsafe_action_rate was missing. Both are
-    fixed here: one BER per cell, with a hatched bar when the curve
-    never crosses below the budget so the reader can see it as honest
-    "no safe BER on this grid".
-    """
-    if pp.empty:
-        return
+def fig_attr_kernel(per_frame: pd.DataFrame,
+                     out_dir: str,
+                     canonical_fm: str = "jedec_mix",
+                     canonical_due: str = "drop_frame") -> None:
+    """Supplementary kernel-only attribution: among scorer-flagged
+    safety_violated == 1 frames, group by attributing_kernel_name (the
+    kernel that produced the most escapes in that frame; populated by
+    the simulator). Falls back to kernel_name (== ACTUATE for every
+    frame on the legacy build) so old artifacts still render -- but
+    the caption needs to call out the fallback when only one bar is
+    visible.
 
-    iso_table = select_iso_ber_table(pp, unsafe_budget)
-    if iso_table.empty:
-        return
-
-    df = pp.copy()
-    df["ber_f"] = pd.to_numeric(df["ber"], errors="coerce")
-    df["mean_ecc_latency_us"] = pd.to_numeric(
-        df["mean_ecc_latency_ps"], errors="coerce") / 1e6
-
-    bars: List[Dict[str, object]] = []
-    for _, row in iso_table.iterrows():
-        scheme, policy, iso_ber = row["scheme"], row["policy"], row["iso_ber"]
-        if iso_ber is None or pd.isna(iso_ber):
-            bars.append({
-                "label":     f"{scheme}/{policy}",
-                "mean_us":   0.0,
-                "iso_ber":   None,
-                "no_cross":  True,
-            })
-            continue
-        match = df[(df["scheme"] == scheme) & (df["policy"] == policy)
-                   & (df["ber_f"] == iso_ber)]
-        if match.empty:
-            bars.append({
-                "label":    f"{scheme}/{policy}",
-                "mean_us":  0.0,
-                "iso_ber":  iso_ber,
-                "no_cross": True,
-            })
-            continue
-        bars.append({
-            "label":    f"{scheme}/{policy}",
-            "mean_us":  float(match.iloc[0]["mean_ecc_latency_us"]),
-            "iso_ber":  iso_ber,
-            "no_cross": False,
-        })
-
-    if not bars:
-        return
-
-    fig, ax = plt.subplots(figsize=(6.5, 4.0))
-    xs     = list(range(len(bars)))
-    labels = [b["label"] for b in bars]
-    means  = [b["mean_us"] for b in bars]
-    hatches = ["///" if b["no_cross"] else "" for b in bars]
-    rects = ax.bar(xs, means)
-    for rect, hatch in zip(rects, hatches):
-        if hatch:
-            rect.set_hatch(hatch)
-            rect.set_alpha(0.5)
-    # Annotate each bar with its iso-BER (or "no crossing" footnote).
-    for x, b in zip(xs, bars):
-        if b["no_cross"]:
-            ax.text(x, max(means + [0.0]) * 0.05 + 0.001,
-                    "no crossing", rotation=90, ha="center", va="bottom",
-                    fontsize=7)
-        else:
-            ax.text(x, b["mean_us"] + max(means) * 0.02,
-                    f"BER={b['iso_ber']:.0e}", rotation=0, ha="center",
-                    va="bottom", fontsize=7)
-    ax.set_xticks(xs)
-    ax.set_xticklabels(labels, rotation=30, ha="right")
-    ax.set_ylabel("Mean ECC latency overhead (us / event)")
-    ax.set_title(f"Latency at iso-safety BER (unsafe_action_rate <= {unsafe_budget:g})")
-    ax.grid(True, axis="y", linestyle=":", alpha=0.5)
-    fig.tight_layout()
-    fig.savefig(os.path.join(out_dir, "fig2_iso_safety_latency.pdf"))
-    plt.close(fig)
-
-
-def fig3a_violation_attribution(per_frame: pd.DataFrame,
-                                  out_dir: str,
-                                  canonical_fm: str = "jedec_mix",
-                                  canonical_due: str = "drop_frame") -> None:
-    """Tier B: among scorer-flagged safety_violated == 1 frames, group by
-    attributing_kernel_name (the kernel that produced the most escapes in
-    that frame; populated by the simulator). Falls back to kernel_name
-    (== ACTUATE for every frame on the legacy build) so old artifacts
-    still render -- but the caption needs to call out the fallback when
-    only one bar is visible.
-
-    Filters to the canonical (fault_model, due_action) slice to avoid
-    mixing non-canonical axes into the attribution bars.
+    The headline (kernel x region) attribution figure is fig_attr.pdf
+    (rendered from per_region_overhead via fig_attr); this function
+    is the supplementary kernel-only bar plot, written to
+    fig_attr_kernel.pdf.
     """
     if per_frame.empty:
+        _blank_placeholder(out_dir, "fig_attr_kernel.pdf",
+                           "Supplementary: kernel-only escape attribution",
+                           "no per_frame_safety.csv rows")
         return
     df = per_frame.copy()
     if "fault_model" in df.columns and "due_action" in df.columns:
         df = df[(df["fault_model"] == canonical_fm) & (df["due_action"] == canonical_due)]
-    df = df[df["safety_violated"] == 1]
+    df = df[pd.to_numeric(df["safety_violated"], errors="coerce").fillna(0) == 1]
     if df.empty:
+        fig, ax = plt.subplots(figsize=(7.0, 4.0))
+        ax.text(
+            0.5, 0.5,
+            "No per-frame safety_violated==1 rows\n"
+            "on the canonical slice.\n"
+            "(Run-level deadline_viol_rate may still be 1.0.)",
+            ha="center", va="center", fontsize=10, wrap=True,
+        )
+        ax.set_axis_off()
+        ax.set_title("Supplementary: kernel-only attribution (no rows)")
+        fig.tight_layout()
+        fig.savefig(os.path.join(out_dir, "fig_attr_kernel.pdf"))
+        plt.close(fig)
         return
 
     # Prefer the simulator-emitted attribution column; fall back to
@@ -338,11 +318,11 @@ def fig3a_violation_attribution(per_frame: pd.DataFrame,
     fig, ax = plt.subplots(figsize=(7.0, 4.0))
     ax.bar(counts.index.astype(str), counts.values)
     ax.set_ylabel("Safety-violated frames (count)")
-    ax.set_title("Fig. 3a Violation attribution by VLA kernel\n" + title_suffix)
+    ax.set_title("Supplementary: kernel-only escape attribution\n" + title_suffix)
     plt.setp(ax.get_xticklabels(), rotation=35, ha="right")
     ax.grid(True, axis="y", linestyle=":", alpha=0.5)
     fig.tight_layout()
-    fig.savefig(os.path.join(out_dir, "fig3a_violation_attribution.pdf"))
+    fig.savefig(os.path.join(out_dir, "fig_attr_kernel.pdf"))
     plt.close(fig)
 
 
@@ -365,23 +345,37 @@ def per_region_for_canonical(per_region: pd.DataFrame,
     return per_region
 
 
-def fig3b_escape_geography(per_region: pd.DataFrame, out_dir: str) -> None:
-    """Tier A (optional): EccGuard escape stack by (kernel_name, region).
+def fig_attr(per_region: pd.DataFrame, out_dir: str) -> None:
+    """Headline (kernel x region) escape attribution. Renders a heatmap
+    of EccGuard escape counts indexed by (kernel_name, region) on the
+    canonical slice. Until a true 2-D heatmap renderer is wired up,
+    this falls back to a stacked-bar approximation so the figure still
+    carries the (kernel, region) signal.
 
-    The caption MUST label this as "EccGuard escape classification, NOT
-    safety-violation origin". An escape on a memory response and a frame
-    flagged safety_violated by the scorer are two different layers
-    (DRAM/ECC layer vs behavioral layer); see paper Section 3 / appendix
-    glossary.
+    Caveat: an escape at the EccGuard layer and a frame flagged
+    safety_violated by the scorer are two different layers
+    (DRAM/ECC layer vs behavioral layer). The caption notes this; see
+    paper appendix glossary.
     """
     if per_region.empty:
+        _blank_placeholder(out_dir, "fig_attr.pdf",
+                           "Workload-visible escape attribution",
+                           "no per_region_overhead.csv rows; "
+                           "rerun with VLA_REGIONS configured")
         return
     df = per_region.copy()
     if "escape" not in df.columns:
+        _blank_placeholder(out_dir, "fig_attr.pdf",
+                           "Workload-visible escape attribution",
+                           "per_region_overhead.csv missing 'escape' column")
         return
     df["escape"] = pd.to_numeric(df["escape"], errors="coerce").fillna(0)
     df = df[df["escape"] > 0]
     if df.empty:
+        _blank_placeholder(out_dir, "fig_attr.pdf",
+                           "Workload-visible escape attribution",
+                           "no escape rows on the canonical slice "
+                           "(framework correctly suppressed all events)")
         return
 
     bucket = df.groupby(["kernel_name", "region"])["escape"].sum().reset_index()
@@ -403,20 +397,29 @@ def fig3b_escape_geography(per_region: pd.DataFrame, out_dir: str) -> None:
     fig, ax = plt.subplots(figsize=(7.5, 4.0))
     ax.bar(head["label"], head["escape"])
     ax.set_ylabel("EccGuard escape classifications (count)")
-    ax.set_title("Fig. 3b EccGuard escape geography by (kernel, region)\n"
-                 "(NOT violation origin; see caption / appendix glossary)")
+    ax.set_title("Workload-visible escape attribution by (kernel, region)\n"
+                 "(EccGuard-layer escapes; see paper appendix glossary)")
     plt.setp(ax.get_xticklabels(), rotation=40, ha="right", fontsize=8)
     ax.grid(True, axis="y", linestyle=":", alpha=0.5)
     fig.tight_layout()
-    fig.savefig(os.path.join(out_dir, "fig3b_escape_geography.pdf"))
+    fig.savefig(os.path.join(out_dir, "fig_attr.pdf"))
     plt.close(fig)
 
 
-def fig4_fault_mode_mix(fm: pd.DataFrame, out_dir: str) -> None:
+def fig_fault_mode_mix(fm: pd.DataFrame, out_dir: str) -> None:
+    """Supplementary: fraction of JEDEC fault modes vs BER. Reported for
+    transparency on what the JEDEC sampler is producing at each stress
+    level."""
     if fm.empty:
+        _blank_placeholder(out_dir, "fig_fault_mode_mix.pdf",
+                           "JEDEC fault-mode mix vs BER",
+                           "no fault_mode_mix.csv rows")
         return
     df = fm[fm["fault_model"] == "jedec_mix"].copy()
     if df.empty:
+        _blank_placeholder(out_dir, "fig_fault_mode_mix.pdf",
+                           "JEDEC fault-mode mix vs BER",
+                           "no jedec_mix rows in fault_mode_mix.csv")
         return
     df["ber_f"] = pd.to_numeric(df["ber"], errors="coerce")
     df = df.dropna(subset=["ber_f"])
@@ -435,17 +438,20 @@ def fig4_fault_mode_mix(fm: pd.DataFrame, out_dir: str) -> None:
     ax.set_title("JEDEC fault-mode mix vs BER")
     ax.legend(fontsize=7, loc="upper left", bbox_to_anchor=(1.02, 1.0))
     fig.tight_layout()
-    fig.savefig(os.path.join(out_dir, "fig4_fault_mode_mix.pdf"))
+    fig.savefig(os.path.join(out_dir, "fig_fault_mode_mix.pdf"))
     plt.close(fig)
 
 
-def appendix_fig5_drop_vs_deadline(pp_full: pd.DataFrame, out_dir: str) -> None:
-    """Appendix-only: frame-drop vs deadline-miss split by due_action.
-    HEADLINE locks the main-text axes to drop_frame, so this figure exists
-    only when the FULL_CUBE artifact (or a custom run) carries both
-    `latency_only` and `drop_frame`. Empty input -> no figure.
-    """
+def fig_due(pp_full: pd.DataFrame, out_dir: str) -> None:
+    """DUE-response trade-off: frame-drop vs deadline-miss split by
+    due_action. The headline canonical slice locks the main-text axes
+    to drop_frame, so this figure only carries content when the full
+    factorial (FULL_CUBE artifact, or a custom run) includes both
+    `latency_only` and `drop_frame`."""
     if pp_full.empty:
+        _blank_placeholder(out_dir, "fig_due.pdf",
+                           "DUE-response trade-off (drop vs deadline)",
+                           "no pressure_points_full.csv rows")
         return
     df = pp_full.copy()
     df["ber_f"] = pd.to_numeric(df["ber"], errors="coerce")
@@ -453,6 +459,9 @@ def appendix_fig5_drop_vs_deadline(pp_full: pd.DataFrame, out_dir: str) -> None:
     df["deadline_viol_rate"] = pd.to_numeric(df["deadline_viol_rate"], errors="coerce")
     df = df.dropna(subset=["ber_f"])
     if df.empty:
+        _blank_placeholder(out_dir, "fig_due.pdf",
+                           "DUE-response trade-off (drop vs deadline)",
+                           "no usable rows after BER coercion")
         return
 
     fig, ax = plt.subplots(figsize=(6.5, 4.0))
@@ -470,13 +479,24 @@ def appendix_fig5_drop_vs_deadline(pp_full: pd.DataFrame, out_dir: str) -> None:
     ax.set_xscale("log")
     ax.set_xlabel("BER (per-bit per access)")
     ax.set_ylabel("Rate (Wilson 95% CI)")
-    ax.set_title("Appendix Fig. 5 Frame drop vs deadline-miss by due_action\n"
-                 "(supplement only; HEADLINE main text uses drop_frame only)")
+    ax.set_title("DUE-response trade-off: drop vs deadline-miss by due_action")
     ax.grid(True, which="both", linestyle=":", alpha=0.5)
     ax.legend(fontsize=7, loc="best")
     fig.tight_layout()
-    fig.savefig(os.path.join(out_dir, "appendix_fig5_drop_vs_deadline.pdf"))
+    fig.savefig(os.path.join(out_dir, "fig_due.pdf"))
     plt.close(fig)
+
+
+def fig_policy(pp: pd.DataFrame, out_dir: str) -> None:
+    """Policy granularity at fixed scheme: bars of workload-level
+    benefit and cost across {uniform, kernel_aware, region_aware, full}
+    for each scheme. Currently a blank placeholder; the data lives in
+    pressure_points.csv but the comparison renderer is pending --
+    leaving blank per the framework's stub policy."""
+    _blank_placeholder(out_dir, "fig_policy.pdf",
+                       "Policy granularity at fixed scheme",
+                       ("uniform / kernel_aware / region_aware / full "
+                        "comparison;\nrenderer pending."))
 
 
 def table1_headline(pp: pd.DataFrame, out_dir: str) -> None:
@@ -500,6 +520,94 @@ def table1_headline(pp: pd.DataFrame, out_dir: str) -> None:
     # writing the columns that actually exist.
     cols = [c for c in cols if c in df.columns]
     df[cols].to_csv(os.path.join(out_dir, "table1_headline.csv"), index=False)
+
+
+def fig_sanity(table: pd.DataFrame, out_dir: str) -> None:
+    """Case Study A sanity campaigns: stacked outcome fractions (O1--O4)
+    by campaign, faceted by scheme. The figure is the framework's
+    behavioural sanity check (paper Sec. Case Study A)."""
+    import matplotlib.pyplot as plt
+
+    if table.empty or "case_id" not in table.columns:
+        _blank_placeholder(out_dir, "fig_sanity.pdf",
+                           "Case Study A: sanity campaigns C0--C4",
+                           "no case_study_table.csv rows; "
+                           "rerun with run_case_studies.sh")
+        return
+    df = table[table["latency_profile"].fillna("default") == "default"].copy()
+    if df.empty:
+        df = table.copy()
+    schemes = [s for s in ["none", "secded", "chipkill"] if s in df["scheme"].values]
+    cases = sorted(df["case_id"].unique())
+    fig, axes = plt.subplots(1, len(schemes), figsize=(4 * len(schemes), 4), sharey=True)
+    if len(schemes) == 1:
+        axes = [axes]
+    colors = {"O1": "#2ca02c", "O2": "#ff7f0e", "O3": "#d62728", "O4": "#9467bd"}
+    stacks = [("O1", "fraction_O1"), ("O2", "fraction_O2"),
+              ("O3", "fraction_O3"), ("O4", "fraction_O4")]
+    for ax, sch in zip(axes, schemes):
+        sub = df[df["scheme"] == sch]
+        for i, c in enumerate(cases):
+            m = sub[sub["case_id"] == c]
+            bottom = 0.0
+            for oc, col in stacks:
+                v = float(m[col].mean()) if not m.empty and col in m.columns else 0.0
+                ax.bar(i, v, bottom=bottom, color=colors[oc], width=0.7,
+                       label=oc if (i == 0 and sch == schemes[0]) else "")
+                bottom += v
+        ax.set_xticks(range(len(cases)))
+        ax.set_xticklabels(cases, rotation=25, ha="right")
+        ax.set_title(sch)
+        ax.set_ylim(0, 1.05)
+    axes[0].set_ylabel("fraction of frames")
+    handles, labels = axes[0].get_legend_handles_labels()
+    if handles:
+        fig.legend(handles, labels, loc="upper right", fontsize=7)
+    fig.suptitle("Sanity campaigns C0--C4: outcome mix (default latency)")
+    fig.tight_layout()
+    fig.savefig(os.path.join(out_dir, "fig_sanity.pdf"))
+    plt.close(fig)
+
+
+def fig_pareto(table: pd.DataFrame, out_dir: str) -> None:
+    """Cost--benefit Pareto frontier from campaign C2 (the most
+    informative single campaign because it separates SECDED and
+    ChipKill). x-axis: mean ECC latency (cost). y-axis:
+    unsafe_action_rate (benefit; lower is better). One point per
+    (scheme, latency_profile)."""
+    import matplotlib.pyplot as plt
+
+    df = table[table["case_id"] == "C2"].copy()
+    if df.empty:
+        _blank_placeholder(out_dir, "fig_pareto.pdf",
+                           "Cost--benefit Pareto frontier (C2)",
+                           "no C2 rows in case_study_table.csv; "
+                           "rerun run_case_studies.sh")
+        return
+    fig, ax = plt.subplots(figsize=(5, 4))
+    for _, r in df.iterrows():
+        label = f"{r['scheme']}@{r.get('latency_profile', 'default')}"
+        ax.scatter(float(r["ecc_latency_ps"]) / 1e6,
+                   float(r["unsafe_action_rate"]),
+                   label=label, s=60)
+    ax.set_xlabel("mean ECC latency (ms)")
+    ax.set_ylabel("unsafe_action_rate (lower is better)")
+    ax.set_title("Cost--benefit Pareto frontier (campaign C2)")
+    ax.legend(fontsize=7)
+    ax.grid(True, linestyle=":", alpha=0.5)
+    fig.tight_layout()
+    fig.savefig(os.path.join(out_dir, "fig_pareto.pdf"))
+    plt.close(fig)
+
+
+def table1_case_study(table: pd.DataFrame, analysis_dir: str) -> None:
+    path = os.path.join(analysis_dir, "table1_case_study.csv")
+    cols = ["case_id", "scheme", "policy", "latency_profile", "unsafe_action_rate",
+            "unsafe_lo", "unsafe_hi", "fraction_O1", "fraction_O2", "fraction_O3",
+            "fraction_O4", "ecc_latency_ps"]
+    cols = [c for c in cols if c in table.columns]
+    table[cols].to_csv(path, index=False)
+    print(f"Wrote {path}")
 
 
 def fig6_campaign_attribution(per_run: pd.DataFrame, out_dir: str) -> None:
@@ -583,6 +691,8 @@ def main() -> int:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("analysis_dir", help="Output dir from analyze_ecc_results.py.")
+    ap.add_argument("--case-studies", action="store_true",
+                    help="Render fig_case_study_grid + fig_pareto_case_C2 from case_study_table.csv.")
     ap.add_argument("--unsafe-budget", type=float, default=1e-6,
                     help=("Unsafe-action rate budget for the iso-safety figure "
                           "and the budget reference line on Fig. 1. Same value "
@@ -595,11 +705,25 @@ def main() -> int:
         sys.stderr.write(f"ERROR: {args.analysis_dir} is not a directory.\n")
         return 2
 
+    if args.case_studies:
+        table_path = os.path.join(args.analysis_dir, "case_study_table.csv")
+        if not os.path.isfile(table_path):
+            sys.stderr.write(f"ERROR: missing {table_path}\n")
+            return 2
+        table = _read_csv(table_path)
+        figs_dir = _ensure_dir(os.path.join(args.analysis_dir, "figs"))
+        fig_sanity(table, figs_dir)
+        fig_pareto(table, figs_dir)
+        table1_case_study(table, args.analysis_dir)
+        print(f"Case Study A figures (fig_sanity, fig_pareto) "
+              f"written under {figs_dir}")
+        return 0
+
     # Canonical-slice file layout: when the analyzer received --canonical-slice,
-    # pressure_points.csv carries the slice and pressure_points_full.csv carries
-    # everything. When no slice was set, pressure_points.csv is the full file
-    # and pressure_points_full.csv is absent. Fig. 5 uses the full file when
-    # available so both due_actions are visible in the appendix figure.
+    # pressure_points.csv carries the slice and pressure_points_full.csv
+    # carries everything. When no slice was set, pressure_points.csv is the
+    # full file and pressure_points_full.csv is absent. fig_due uses the full
+    # file when available so both due_actions are visible.
     pp_path      = os.path.join(args.analysis_dir, "pressure_points.csv")
     pp_full_path = os.path.join(args.analysis_dir, "pressure_points_full.csv")
     pp = _read_csv(pp_path)
@@ -613,14 +737,34 @@ def main() -> int:
 
     figs_dir = _ensure_dir(os.path.join(args.analysis_dir, "figs"))
 
-    fig1_pressure_point(pp, figs_dir, args.unsafe_budget)
-    fig2_iso_safety_latency(pp, figs_dir, args.unsafe_budget)
-    fig3a_violation_attribution(per_frame, figs_dir)
-    fig3b_escape_geography(per_region_for_canonical(per_reg, per_frame),
-                           figs_dir)
-    fig4_fault_mode_mix(fm, figs_dir)
-    appendix_fig5_drop_vs_deadline(pp_full, figs_dir)
+    # Case Study B figures (drawn from the sweep CSVs).
+    fig_attr(per_region_for_canonical(per_reg, per_frame), figs_dir)
+    fig_attr_kernel(per_frame, figs_dir)
+    fig_due(pp_full, figs_dir)
+    fig_ber_sensitivity(pp, figs_dir, args.unsafe_budget)
+    fig_fault_mode_mix(fm, figs_dir)
     fig6_campaign_attribution(per_run, figs_dir)
+
+    # Policy-granularity comparison (placeholder; renderer pending).
+    fig_policy(pp, figs_dir)
+
+    # Case Study A figures are produced under --case-studies. Emit
+    # placeholder PDFs here so the LaTeX paper compiles even when the
+    # case-study artifact has not been generated yet.
+    case_study_table = os.path.join(args.analysis_dir,
+                                     "case_study_table.csv")
+    if not os.path.exists(case_study_table):
+        _blank_placeholder(figs_dir, "fig_sanity.pdf",
+                           "Case Study A: sanity campaigns C0--C4",
+                           "case_study_table.csv not present; "
+                           "rerun with run_case_studies.sh + "
+                           "make_figures.py --case-studies")
+        _blank_placeholder(figs_dir, "fig_pareto.pdf",
+                           "Cost--benefit Pareto frontier (C2)",
+                           "case_study_table.csv not present; "
+                           "rerun with run_case_studies.sh + "
+                           "make_figures.py --case-studies")
+
     table1_headline(pp, args.analysis_dir)
 
     print(f"Figures + table1 written under {args.analysis_dir}")

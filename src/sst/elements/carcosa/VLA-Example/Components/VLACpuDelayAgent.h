@@ -61,6 +61,7 @@ public:
         {"baseline_seq_len","Reference sequence length the baseline_ps were calibrated at; denominator for runtime-sequence kernels. Defaults to initial_seq_len if unset.", "0"},
         {"state_key",       "Optional. PipelineStateRegistry<PipelineStateBase> key this agent publishes into so PortModuleStateGate can read currentKernel/pipelineCycle/regions[]. Empty disables publishing.", ""},
         {"region_size",     "Size in bytes of the published MMIO control region (regions[0]).", "4096"},
+        {"regions",         "Optional CSV of workload-labeled DRAM regions for region-aware EccGuard policies. 'name:base:size' triples; slot 0 reserved for mmio_control.", ""},
         {"verbose",         "Enable verbose output.",                        "false"}
     )
 
@@ -89,6 +90,7 @@ private:
     uint64_t computeScaledDelay(int kernelId);
     void publishKernel(int kernel);
     void publishMmioRegion();
+    void applyRegionPublish(uint64_t offset, uint32_t value);
 
     SST::Output* out_;
     SST::Link* highlink_ = nullptr;
@@ -116,6 +118,21 @@ private:
 
     std::string stateKey_;
     uint64_t    regionSize_ = 4096;
+    std::string regionsCsv_;
+
+    // Latest workload-published action checksum (HYADES_ACTION_CHECKSUM_OFFSET).
+    // Stamped onto the next FrameRecord at ACTUATE close and cleared so the
+    // following frame's value can't be silently reused if the stub forgets to
+    // republish; falls back to the synthetic (pipelineCycle ^ seqLen) hash.
+    uint32_t latestActionChecksum_    = 0;
+    bool     latestActionChecksumSet_ = false;
+
+    // Edge-trigger cache for per-frame `dropped`. PipelineStateBase::framesDropped
+    // is a lifetime accumulator incremented by consumeFrameAbort(); we mark a
+    // FrameRecord as `dropped` iff the accumulator advanced since the previous
+    // ACTUATE close. Comparing against frames.size() (the old behavior) mixed
+    // a per-frame-edge metric with a cumulative count.
+    int      lastFramesDroppedSeen_   = 0;
 
     struct KernelRecord {
         std::string core;

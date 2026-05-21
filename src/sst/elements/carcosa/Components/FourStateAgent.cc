@@ -12,6 +12,7 @@
 #include "sst_config.h"
 #include "sst/elements/carcosa/Components/FourStateAgent.h"
 #include "sst/elements/carcosa/Components/HaliEvent.h"
+#include "sst/elements/carcosa/VLA-Example/Components/VlaRegions.h"
 #include "sst/elements/memHierarchy/memEvent.h"
 #include "sst/elements/memHierarchy/memTypes.h"
 
@@ -29,6 +30,7 @@ FourStateAgent::FourStateAgent(ComponentId_t id, Params& params)
 
     stateKey_       = params.find<std::string>("state_key", "");
     regionSize_     = params.find<uint64_t>("region_size", 4096);
+    regionsCsv_     = params.find<std::string>("regions", "");
     initialCommand_ = params.find<int>("initial_command", 0);
     numCommands_    = params.find<int>("num_commands", 4);
     maxIterations_  = params.find<int>("max_iterations", 12);
@@ -71,6 +73,12 @@ void FourStateAgent::agentSetup()
     s->regions[0].valid = regionSize_ > 0;
     s->regions[0].id    = 0;
     s->regions[0].name  = "mmio_control";
+
+    int n_user = publishUserRegions(stateKey_, regionsCsv_, out_, "FourStateAgent");
+    if (verbose_ && n_user > 0) {
+        out_->output("FourStateAgent[%s]: published %d user region(s)\n",
+                     stateKey_.c_str(), n_user);
+    }
 
     if (verbose_) {
         out_->output("FourStateAgent[%s]: setup initial_command=%d num_commands=%d "

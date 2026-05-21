@@ -121,6 +121,11 @@ public:
         {"campaign_mode",            "Campaign mode only: which fault mode to inject ('cell','word','row','column','bank','device').", "row"},
         {"campaign_event_budget",    "Campaign mode only: total number of fault events to inject across the run; once exhausted the guard reverts to clean classification on every subsequent access. 0 disables campaign injection regardless of fault_model.", "0"},
         {"campaign_event_rate",      "Campaign mode only: per-eligible-access probability of firing one campaign event. Eligible accesses are those whose currentKernel matches campaign_target_kernel.", "0.0"},
+        {"campaign_max_events_per_kernel_entry", "Campaign mode only: cap fault events per contiguous visit to campaign_target_kernel (e.g. 1 per ACTUATE frame). 0 disables the per-entry cap.", "0"},
+        {"campaign_errors_fixed",    "Campaign mode only: if >0, inject exactly this many bit errors per event instead of sampling from the mode's [lo,hi] span.", "0"},
+        {"campaign_force_multi_chip", "Campaign mode only: when true (or campaign_mode='multi_chip'), distribute chipkill errors across at least three x4 chips.", "false"},
+        {"addr_filter_region",       "If set (e.g. 'action_queue'), only inject faults on MemEvents whose virtual address overlaps that published region. Empty disables filtering.", ""},
+        {"addr_filter_len",          "When addr_filter_region is set, limit injection to the first N bytes of that region (0 = entire region).", "0"},
         {"fault_mode_weights",       "JEDEC mixture weights as a CSV 'cell:word:row:column:bank:device'; need not sum to 1 (normalized internally). Defaults to '0.55:0.15:0.10:0.08:0.07:0.05'.", ""},
         {"fault_event_rate",         "When fault_model='jedec_mix', per-access probability that a correlated fault event occurs (overrides BER for the mode draw). 0.0 falls back to BER * payload_bits as the event rate (Poisson approximation).", "0.0"},
         {"payload_dtype",            "Data-type-aware flip target for the silent-escape path: 'bytes' (current behavior), 'bf16', 'fp8', 'int8'. High-blast bits (sign/high exponent) are tracked separately in escape_high_blast vs escape_low_blast.", "bytes"},
@@ -218,6 +223,11 @@ private:
     // back to the physical address.
     int  resolveRegionIdForEvent(SST::MemHierarchy::MemEvent* mev) const;
     const std::string& regionNameForId(int region_id) const;
+    bool resolveAddrFilterBounds(uint64_t& base_out, uint64_t& len_out) const;
+    bool eventOverlapsAddrFilter(SST::MemHierarchy::MemEvent* mev) const;
+    /** Campaign + addr_filter: also inject on CPU writes (payload present). */
+    bool shouldApplyPolicy(SST::MemHierarchy::MemEvent* mev);
+    void noteCampaignKernelEntry(int kernel_id);
 
     void requestFrameAbort();
 
@@ -248,6 +258,16 @@ private:
     uint64_t  campaign_event_budget_  = 0;
     double    campaign_event_rate_    = 0.0;
     uint64_t  campaign_events_fired_  = 0;
+    uint64_t  campaign_max_per_kernel_entry_ = 0;
+    uint64_t  campaign_events_this_entry_    = 0;
+    int       campaign_entry_kernel_         = -2;
+    /** When addr_filter_region_ is set, cap per pipeline frame (async ReadResp). */
+    int       campaign_entry_pipeline_cycle_ = -1;
+    unsigned  campaign_errors_fixed_         = 0;
+    bool      campaign_force_multi_chip_     = false;
+
+    std::string addr_filter_region_;
+    uint64_t    addr_filter_len_  = 0;
 
     std::string                state_key_;
     const PipelineStateBase*   state_ptr_ = nullptr;

@@ -375,12 +375,16 @@ void Hali::handleHaliEvent(SST::Event* ev) {
     HaliEvent* event = dynamic_cast<HaliEvent*>(ev);
 
     if (event) {
-        if (interceptionAgent_ && event->getStr() == "done") {
+        // When an interception agent is attached, the ring is being used as a
+        // sideband for that agent (PingPong/FourState/VLA*). Self-named init
+        // tokens never arrive here (init() drains them via recvUntimedData), so
+        // every run-phase HaliEvent should be delivered to the agent.
+        if (interceptionAgent_) {
             if (verbose_) {
-                out_->output("    %" PRIu64 " %s received done (iteration %u)\n",
-                             getCurrentSimCycle(), getName().c_str(), event->getNum());
+                out_->output("    %" PRIu64 " %s received %s\n",
+                             getCurrentSimCycle(), getName().c_str(), event->toString().c_str());
             }
-            interceptionAgent_->notifyPartnerDone(event->getNum());
+            interceptionAgent_->handleRingEvent(event);
             delete event;
             return;
         }

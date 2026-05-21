@@ -1,9 +1,9 @@
-"""Phase2: stub_cpu/gpu + delay agents; VLA_BASELINE_{CPU,GPU}_PS (18 ps values), VLA_SCALE_FACTOR. Build stubs: riscv64-unknown-linux-gnu-gcc -static -I.. -o stub_cpu stub_cpu.c (and stub_gpu)."""
+"""Phase2: stub_cpu/gpu + delay agents; VLA_BASELINE_{CPU,GPU}_PS (18 ps values), VLA_SCALE_FACTOR. Build stubs: cd to this directory and run `make` (uses zig+musl by default; see Makefile for overrides)."""
 import os
 import sst
 
-mh_debug_level = 10
-mh_debug = 0
+mh_debug_level = int(os.getenv("MH_DEBUG_LEVEL", "0"))
+mh_debug = int(os.getenv("MH_DEBUG", "0"))
 checkpointDir = ""
 checkpoint = ""
 pythonDebug = False
@@ -20,7 +20,14 @@ tlbType = "simpleTLB"
 mmuType = "simpleMMU"
 
 sst.setProgramOption("timebase", "1ps")
-sst.setProgramOption("stop-at", "0 ns")
+# Default "0 ns" runs until a component ends the simulation (e.g. delay-agent
+# Hali "exit" after max_cycles). VLA_SST_STOP_AT overrides with a wall-clock
+# cap; run_ecc_sweep.sh clears it so sweeps are not truncated mid-FSM.
+_vla_sst_stop = os.getenv("VLA_SST_STOP_AT", "").strip()
+if _vla_sst_stop and _vla_sst_stop.lower() not in ("0", "0 ns", "none"):
+    sst.setProgramOption("stop-at", _vla_sst_stop)
+else:
+    sst.setProgramOption("stop-at", "0 ns")
 sst.setStatisticLoadLevel(4)
 sst.setStatisticOutput("sst.statOutputConsole")
 
@@ -76,11 +83,21 @@ gpuLsqParams = {
 
 vla_num_vit_layers  = os.getenv("VLA_NUM_VIT_LAYERS", "2")
 vla_num_llm_layers  = os.getenv("VLA_NUM_LLM_LAYERS", "2")
-vla_max_cycles      = os.getenv("VLA_MAX_CYCLES", "1")
+# Pipeline cycles (actuations) before the delay agent signals exit. Prefer
+# VLA_MAX_CYCLES; run_all_ecc.sh sets VLA_PHASE2_MAX_CYCLES for headline/FAST.
+vla_max_cycles      = os.getenv("VLA_MAX_CYCLES") or os.getenv("VLA_PHASE2_MAX_CYCLES") or "1"
 vla_initial_seq_len   = os.getenv("VLA_INITIAL_SEQ_LEN", "8")
 vla_max_seq_len       = os.getenv("VLA_MAX_SEQ_LEN", "64")
 vla_num_action_tokens = os.getenv("VLA_NUM_ACTION_TOKENS", "1")
 vla_scale_factor      = os.getenv("VLA_SCALE_FACTOR", "1.0")
+# FSM RNG: drives the decode early-exit Bernoulli. Falls back to ECC_SEED so
+# the sweep script's `seed` knob varies the FSM trace as well as the fault
+# draws (otherwise the FSM is deterministic across seeds and the only
+# variation is which lines get bit-flipped). Set VLA_DECODE_EXIT_PROB > 0
+# for the FSM seed to actually do anything; at the default 0.0 the FSM is
+# fully deterministic regardless of seed.
+vla_rng_seed          = os.getenv("VLA_RNG_SEED", os.getenv("ECC_SEED", "12345"))
+vla_decode_exit_prob  = os.getenv("VLA_DECODE_EXIT_PROB", "0.0")
 
 # ECC pressure-point knobs (defaults make EccGuard a transparent pass-through).
 vla_state_key             = os.getenv("VLA_STATE_KEY", "cpu0_vla")
@@ -92,6 +109,39 @@ ecc_escape_latency_ps     = os.getenv("ECC_ESCAPE_LATENCY_PS", "0")
 ecc_kernel_policy         = os.getenv("ECC_KERNEL_POLICY", "")
 ecc_seed                  = os.getenv("ECC_SEED", "0")
 ecc_apply_on_responses_only = os.getenv("ECC_RESPONSES_ONLY", "true")
+# Phase 2/3 ECC knobs.
+ecc_fault_model           = os.getenv("ECC_FAULT_MODEL", "poisson")
+ecc_fault_mode_weights    = os.getenv("ECC_FAULT_MODE_WEIGHTS", "")
+ecc_fault_event_rate      = os.getenv("ECC_FAULT_EVENT_RATE", "0.0")
+# Campaign-mode knobs (only consulted when ecc_fault_model == "campaign";
+# inert for poisson / jedec_mix runs, so existing sweeps are unaffected).
+ecc_campaign_target_kernel = os.getenv("ECC_CAMPAIGN_TARGET_KERNEL", "any")
+ecc_campaign_mode          = os.getenv("ECC_CAMPAIGN_MODE",          "row")
+ecc_campaign_event_budget  = os.getenv("ECC_CAMPAIGN_EVENT_BUDGET",  "0")
+ecc_campaign_event_rate    = os.getenv("ECC_CAMPAIGN_EVENT_RATE",    "0.0")
+ecc_campaign_max_per_entry = os.getenv("ECC_CAMPAIGN_MAX_PER_KERNEL_ENTRY", "0")
+ecc_campaign_errors_fixed  = os.getenv("ECC_CAMPAIGN_ERRORS_FIXED",  "0")
+ecc_campaign_force_multi_chip = os.getenv("ECC_CAMPAIGN_FORCE_MULTI_CHIP", "0")
+ecc_addr_filter_region     = os.getenv("ECC_ADDR_FILTER_REGION", "")
+ecc_addr_filter_len        = os.getenv("ECC_ADDR_FILTER_LEN", "0")
+critical_watcher_enabled   = os.getenv("CRITICAL_ACTION_WATCHER", "1") not in ("0", "false", "False", "")
+critical_watcher_region    = os.getenv("CRITICAL_WATCHER_REGION", "action_queue")
+critical_watcher_len       = os.getenv("CRITICAL_WATCHER_LEN", "64")
+ecc_payload_dtype         = os.getenv("ECC_PAYLOAD_DTYPE", "bytes")
+ecc_due_action            = os.getenv("ECC_DUE_ACTION", "latency_only")
+ecc_fit_per_mbit_per_hour = os.getenv("ECC_FIT_PER_MBIT_PER_HOUR", "0.0")
+ecc_dram_capacity_mb      = os.getenv("ECC_DRAM_CAPACITY_MB", "1024")
+ecc_sim_time_per_event_ns = os.getenv("ECC_SIM_TIME_PER_EVENT_NS", "100")
+# Phase 1 region routing + Phase 4 scorer.
+vla_regions               = os.getenv("VLA_REGIONS", "")
+action_scorer_enabled     = os.getenv("ACTION_SCORER", "1") not in ("0", "false", "False", "")
+action_scorer_golden      = os.getenv("ACTION_SCORER_GOLDEN", "")
+action_scorer_emit_golden = os.getenv("ACTION_SCORER_EMIT_GOLDEN", "0") in ("1", "true", "True")
+# Default true: when golden_log is set but cannot be opened or is empty, the
+# scorer fatals instead of silently scoring every frame as not-argmax-changed.
+# Set ACTION_SCORER_GOLDEN_REQUIRED=0 only for self-replay or smoke runs.
+action_scorer_golden_required = os.getenv(
+    "ACTION_SCORER_GOLDEN_REQUIRED", "1") not in ("0", "false", "False", "")
 
 default_zeros = ",".join(["0"] * 18)
 
@@ -182,6 +232,9 @@ cpu_l2cacheParams = {
     "associativity": "16", "cache_line_size": "64", "cache_size": "1MB",
     "mshr_latency_cycles": 3, "debug": mh_debug, "debug_level": mh_debug_level,
 }
+# Case-study ACTUATE readbacks must miss below L2 so EccGuard injects each frame.
+if critical_watcher_enabled or ecc_fault_model == "campaign":
+    cpu_l2cacheParams = dict(cpu_l2cacheParams, cache_size="32 KB")
 gpu_l2cacheParams = {
     "access_latency_cycles": "14", "cache_frequency": gpu_clock,
     "replacement_policy": "lru", "coherence_protocol": protocol,
@@ -338,13 +391,58 @@ ecc_guard.addParams({
     "escape_latency_ps":       ecc_escape_latency_ps,
     "kernel_policy":           ecc_kernel_policy,
     "apply_on_responses_only": ecc_apply_on_responses_only,
+    "fault_model":             ecc_fault_model,
+    "fault_mode_weights":      ecc_fault_mode_weights,
+    "fault_event_rate":        ecc_fault_event_rate,
+    "campaign_target_kernel":  ecc_campaign_target_kernel,
+    "campaign_mode":           ecc_campaign_mode,
+    "campaign_event_budget":   ecc_campaign_event_budget,
+    "campaign_event_rate":     ecc_campaign_event_rate,
+    "campaign_max_events_per_kernel_entry": ecc_campaign_max_per_entry,
+    "campaign_errors_fixed":   ecc_campaign_errors_fixed,
+    "campaign_force_multi_chip": ecc_campaign_force_multi_chip,
+    "addr_filter_region":      ecc_addr_filter_region,
+    "addr_filter_len":         ecc_addr_filter_len,
+    "payload_dtype":           ecc_payload_dtype,
+    "due_action":              ecc_due_action,
+    "fit_per_mbit_per_hour":   ecc_fit_per_mbit_per_hour,
+    "dram_capacity_mb":        ecc_dram_capacity_mb,
+    "sim_time_per_event_ns":   ecc_sim_time_per_event_ns,
     "seed":                    ecc_seed,
 })
 ecc_guard.enableAllStatistics()
 
-link_dir_2_ecc = sst.Link("link_dir_2_ecc")
-link_dir_2_ecc.connect((dirctrl, "lowlink", "1ns"), (ecc_guard, "highlink", "1ns"))
-link_dir_2_ecc.setNoCut()
+if action_scorer_enabled:
+    scorer = sst.Component("action_scorer", "Carcosa.ActionScorer")
+    scorer.addParams({
+        "state_key":       vla_state_key,
+        "golden_log":      action_scorer_golden,
+        "emit_golden":     "true" if action_scorer_emit_golden else "false",
+        "golden_required": "true" if action_scorer_golden_required else "false",
+        "verbose":         "false",
+    })
+    scorer.enableAllStatistics()
+
+if critical_watcher_enabled:
+    crit_watcher = sst.Component("crit_watcher", "Carcosa.CriticalActionWatcher")
+    crit_watcher.addParams({
+        "state_key":               vla_state_key,
+        "critical_region":         critical_watcher_region,
+        "critical_len":            critical_watcher_len,
+        "apply_on_responses_only": "true",
+        "verbose":                 "false",
+    })
+    crit_watcher.enableAllStatistics()
+    link_dir_2_watcher = sst.Link("link_dir_2_watcher")
+    link_dir_2_watcher.connect((dirctrl, "lowlink", "1ns"), (crit_watcher, "highlink", "1ns"))
+    link_dir_2_watcher.setNoCut()
+    link_watcher_2_ecc = sst.Link("link_watcher_2_ecc")
+    link_watcher_2_ecc.connect((crit_watcher, "lowlink", "1ns"), (ecc_guard, "highlink", "1ns"))
+    link_watcher_2_ecc.setNoCut()
+else:
+    link_dir_2_ecc = sst.Link("link_dir_2_ecc")
+    link_dir_2_ecc.connect((dirctrl, "lowlink", "1ns"), (ecc_guard, "highlink", "1ns"))
+    link_dir_2_ecc.setNoCut()
 link_ecc_2_mem = sst.Link("link_ecc_2_mem")
 link_ecc_2_mem.connect((ecc_guard, "lowlink", "1ns"), (memctrl, "highlink", "1ns"))
 link_ecc_2_mem.setNoCut()
@@ -364,9 +462,12 @@ cpuDelayAgentParams = {
     "initial_seq_len":   vla_initial_seq_len,
     "max_seq_len":       vla_max_seq_len,
     "num_action_tokens": vla_num_action_tokens,
+    "decode_exit_prob":  vla_decode_exit_prob,
+    "rng_seed":          vla_rng_seed,
     "baseline_ps":       vla_baseline_cpu_ps,
     "scale_factor":      vla_scale_factor,
     "state_key":         vla_state_key,
+    "regions":           vla_regions,
     "verbose":           "true",
 }
 gpuDelayAgentParams = {

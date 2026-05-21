@@ -107,13 +107,38 @@
 #define HYADES_MMIO_BASE  0xBEEF0000
 #endif
 
-#define HYADES_COMMAND_OFFSET  0
-#define HYADES_STATUS_OFFSET   4
-#define HYADES_SEQ_LEN_OFFSET  8
+#define HYADES_COMMAND_OFFSET       0
+#define HYADES_STATUS_OFFSET        4
+#define HYADES_SEQ_LEN_OFFSET       8
+/* Region-publish ABI: workload writes (base_lo, base_hi, size, commit-slot)
+ * to the four offsets below; Hali interception agents latch into
+ * PipelineStateBase::stagedBase/stagedSize and call commitStagedRegion() on
+ * the COMMIT write. Lets the binary advertise the real virtual address of
+ * each labeled tensor / queue at startup, so EccGuard's region-aware policy
+ * can route by the addresses Vanadis actually touches (matched on the
+ * MemEvent's preserved virtual address). */
+#define HYADES_REGION_BASE_LO_OFFSET  0x20
+#define HYADES_REGION_BASE_HI_OFFSET  0x24
+#define HYADES_REGION_SIZE_OFFSET     0x28
+#define HYADES_REGION_COMMIT_OFFSET   0x2C
+/* Per-frame action checksum. The workload writes its action_queue (or any
+ * other payload that a SilentEscape would corrupt) fold-hashed into 32 bits
+ * here, typically at the end of the ACTUATE kernel after forcing the read
+ * traffic to traverse EccGuard. The CPU delay agent latches the latest write
+ * and stamps it onto the next PipelineStateBase::FrameRecord::actionChecksum,
+ * so the ActionScorer's argmax_changed test compares against a real,
+ * Escape-sensitive fingerprint instead of a synthetic counter hash. */
+#define HYADES_ACTION_CHECKSUM_OFFSET 0x30
 
 #define HYADES_COMMAND  ((volatile int *)(HYADES_MMIO_BASE + HYADES_COMMAND_OFFSET))
 #define HYADES_STATUS   ((volatile int *)(HYADES_MMIO_BASE + HYADES_STATUS_OFFSET))
 #define HYADES_SEQ_LEN  ((volatile int *)(HYADES_MMIO_BASE + HYADES_SEQ_LEN_OFFSET))
+
+#define HYADES_REGION_BASE_LO  ((volatile unsigned int *)(HYADES_MMIO_BASE + HYADES_REGION_BASE_LO_OFFSET))
+#define HYADES_REGION_BASE_HI  ((volatile unsigned int *)(HYADES_MMIO_BASE + HYADES_REGION_BASE_HI_OFFSET))
+#define HYADES_REGION_SIZE     ((volatile unsigned int *)(HYADES_MMIO_BASE + HYADES_REGION_SIZE_OFFSET))
+#define HYADES_REGION_COMMIT   ((volatile int          *)(HYADES_MMIO_BASE + HYADES_REGION_COMMIT_OFFSET))
+#define HYADES_ACTION_CHECKSUM ((volatile unsigned int *)(HYADES_MMIO_BASE + HYADES_ACTION_CHECKSUM_OFFSET))
 
 /**
  * Read next command index from Hali. Value < 0 means exit.
@@ -134,6 +159,36 @@ static inline int hyades_seq_len_read(void) {
     return *HYADES_SEQ_LEN;
 }
 
+/*
+ * Register a workload-labeled memory region with the Hali interception agent.
+ * The agent latches base/size and commits into PipelineStateBase::regions[slot]
+ * on the COMMIT write. The slot's symbolic name is whatever the agent set when
+ * it parsed its `regions` CSV at setup (slot 0 is reserved for mmio_control).
+ *
+ * `base` is the virtual address the workload will actually touch; EccGuard
+ * matches against the MemEvent's preserved virtual address so this is the
+ * address the agent should publish.
+ */
+static inline void hyades_register_region(int slot,
+                                          unsigned long base,
+                                          unsigned long size) {
+    *HYADES_REGION_BASE_LO = (unsigned int)(base & 0xFFFFFFFFul);
+    *HYADES_REGION_BASE_HI = (unsigned int)((base >> 32) & 0xFFFFFFFFul);
+    *HYADES_REGION_SIZE    = (unsigned int)size;
+    *HYADES_REGION_COMMIT  = slot;
+}
+
+/*
+ * Publish a per-frame action checksum to the delay agent. Called from the
+ * workload's ACTUATE handler after reading back whichever buffer (typically
+ * action_queue) it wants to fingerprint. The agent uses the latest published
+ * value when it pushes the next FrameRecord; if the workload never writes
+ * here the agent falls back to a synthetic (pipelineCycle ^ seqLen) hash.
+ */
+static inline void hyades_action_checksum_write(unsigned int checksum) {
+    *HYADES_ACTION_CHECKSUM = checksum;
+}
+
 /**
  * Handler type: no args, no return.
  */
@@ -151,6 +206,24 @@ static inline void hyades_run(hyades_handler_t *handlers, int n_handlers) {
             break;
         if (idx >= 0 && idx < n_handlers && handlers[idx] != 0)
             handlers[idx]();
+        hyades_status_write(idx);
+    }
+}
+
+/**
+ * Index-passing variant of hyades_run for workloads that drive a single
+ * dispatcher off the command index (e.g. the Phase 2 memory-traffic generator
+ * stubs that walk a per-kernel region mask).
+ */
+typedef void (*hyades_handler_idx_t)(int idx);
+
+static inline void hyades_run_idx(hyades_handler_idx_t handler) {
+    for (;;) {
+        int idx = hyades_command_read();
+        if (idx < 0)
+            break;
+        if (handler)
+            handler(idx);
         hyades_status_write(idx);
     }
 }

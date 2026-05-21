@@ -16,7 +16,9 @@ Usage: run_phase2_from_phase1.sh [--run-phase1] [phase1.log]
 
 SST is run from VLA-Example/tests so Python configs and RISC-V binaries resolve.
 
-Environment: VTO_BUILD_ROOT, VLA_SCALE_FACTOR, PHASE2_LOG, PYTHON
+Environment: VTO_BUILD_ROOT, VLA_SCALE_FACTOR, PHASE2_LOG, PYTHON,
+  VLA_PHASE1_MAX_CYCLES / VLA_PHASE2_MAX_CYCLES / VLA_MAX_CYCLES (FSM depth;
+  stop-at is always cleared).
 EOF
 }
 
@@ -86,15 +88,38 @@ PIPELINE_T0=$SECONDS
 
 run_phase1() {
   echo "=== Phase 1: testCarcosaVLA_GPUCPU.py -> ${PHASE1_LOG} ===" >&2
-  (cd "${TESTS_DIR}" && sst testCarcosaVLA_GPUCPU.py 2>&1 | tee "${PHASE1_LOG}")
+  # No wall-clock stop-at; max_cycles aligned with Phase 2 when
+  # VLA_PHASE2_MAX_CYCLES / VLA_PHASE1_MAX_CYCLES are exported (see run_all_ecc.sh).
+  (cd "${TESTS_DIR}" && env -u VLA_SST_STOP_AT \
+    VLA_NUM_VIT_LAYERS="${VLA_NUM_VIT_LAYERS:-2}" \
+    VLA_NUM_LLM_LAYERS="${VLA_NUM_LLM_LAYERS:-2}" \
+    VLA_MAX_CYCLES="${VLA_MAX_CYCLES:-${VLA_PHASE1_MAX_CYCLES:-${VLA_PHASE2_MAX_CYCLES:-1}}}" \
+    VLA_INITIAL_SEQ_LEN="${VLA_INITIAL_SEQ_LEN:-8}" \
+    VLA_MAX_SEQ_LEN="${VLA_MAX_SEQ_LEN:-64}" \
+    VLA_NUM_ACTION_TOKENS="${VLA_NUM_ACTION_TOKENS:-1}" \
+    sst testCarcosaVLA_GPUCPU.py 2>&1 | tee "${PHASE1_LOG}")
 }
 
 run_phase2() {
   echo "=== Phase 2: testCarcosaVLA_GPUCPU_Synth.py (VLA_SCALE_FACTOR=${VLA_SCALE_FACTOR}) ===" >&2
   if [[ -n "${PHASE2_LOG:-}" ]]; then
-    (cd "${TESTS_DIR}" && sst testCarcosaVLA_GPUCPU_Synth.py 2>&1 | tee "${PHASE2_LOG}")
+    (cd "${TESTS_DIR}" && env -u VLA_SST_STOP_AT \
+      VLA_MAX_CYCLES="${VLA_MAX_CYCLES:-${VLA_PHASE2_MAX_CYCLES:-8}}" \
+      VLA_NUM_VIT_LAYERS="${VLA_NUM_VIT_LAYERS:-2}" \
+      VLA_NUM_LLM_LAYERS="${VLA_NUM_LLM_LAYERS:-2}" \
+      VLA_INITIAL_SEQ_LEN="${VLA_INITIAL_SEQ_LEN:-8}" \
+      VLA_MAX_SEQ_LEN="${VLA_MAX_SEQ_LEN:-64}" \
+      VLA_NUM_ACTION_TOKENS="${VLA_NUM_ACTION_TOKENS:-1}" \
+      sst testCarcosaVLA_GPUCPU_Synth.py 2>&1 | tee "${PHASE2_LOG}")
   else
-    (cd "${TESTS_DIR}" && sst testCarcosaVLA_GPUCPU_Synth.py)
+    (cd "${TESTS_DIR}" && env -u VLA_SST_STOP_AT \
+      VLA_MAX_CYCLES="${VLA_MAX_CYCLES:-${VLA_PHASE2_MAX_CYCLES:-8}}" \
+      VLA_NUM_VIT_LAYERS="${VLA_NUM_VIT_LAYERS:-2}" \
+      VLA_NUM_LLM_LAYERS="${VLA_NUM_LLM_LAYERS:-2}" \
+      VLA_INITIAL_SEQ_LEN="${VLA_INITIAL_SEQ_LEN:-8}" \
+      VLA_MAX_SEQ_LEN="${VLA_MAX_SEQ_LEN:-64}" \
+      VLA_NUM_ACTION_TOKENS="${VLA_NUM_ACTION_TOKENS:-1}" \
+      sst testCarcosaVLA_GPUCPU_Synth.py)
   fi
 }
 

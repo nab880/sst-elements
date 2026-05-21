@@ -397,7 +397,10 @@ void VLACpuDelayAgent::advanceFSM()
             // and folds it into 32 bits) if it arrived this frame; otherwise
             // fall back to a synthetic counter hash that at least varies
             // across frames so ActionScorer's golden file isn't all-zero.
-            if (latestActionChecksumSet_) {
+            if (s->watcherActionChecksumValid) {
+                fr.actionChecksum = s->watcherActionChecksum;
+                s->watcherActionChecksumValid = false;
+            } else if (latestActionChecksumSet_) {
                 fr.actionChecksum = static_cast<uint64_t>(latestActionChecksum_);
                 latestActionChecksumSet_ = false;
                 latestActionChecksum_    = 0;

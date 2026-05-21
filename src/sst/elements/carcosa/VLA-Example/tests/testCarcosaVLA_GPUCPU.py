@@ -2,8 +2,8 @@
 import os
 import sst
 
-mh_debug_level = 10
-mh_debug = 0
+mh_debug_level = int(os.getenv("MH_DEBUG_LEVEL", "0"))
+mh_debug = int(os.getenv("MH_DEBUG", "0"))
 checkpointDir = ""
 checkpoint = ""
 pythonDebug = False
@@ -20,7 +20,14 @@ tlbType = "simpleTLB"
 mmuType = "simpleMMU"
 
 sst.setProgramOption("timebase", "1ps")
-sst.setProgramOption("stop-at", "0 ns")
+# Default "0 ns" runs until the VLA agents end the simulation (Hali exit after
+# max_cycles). VLA_SST_STOP_AT sets a wall-clock cap; run_all_ecc.sh and
+# run_ecc_sweep.sh clear it so FSMs are not truncated mid-pipeline.
+_vla_sst_stop = os.getenv("VLA_SST_STOP_AT", "").strip()
+if _vla_sst_stop and _vla_sst_stop.lower() not in ("0", "0 ns", "none"):
+    sst.setProgramOption("stop-at", _vla_sst_stop)
+else:
+    sst.setProgramOption("stop-at", "0 ns")
 sst.setStatisticLoadLevel(4)
 sst.setStatisticOutput("sst.statOutputConsole")
 
@@ -76,7 +83,13 @@ gpuLsqParams = {
 
 vla_num_vit_layers = os.getenv("VLA_NUM_VIT_LAYERS", "2")
 vla_num_llm_layers = os.getenv("VLA_NUM_LLM_LAYERS", "2")
-vla_max_cycles     = os.getenv("VLA_MAX_CYCLES", "1")
+# Align with run_all_ecc.sh: explicit VLA_MAX_CYCLES wins; else Phase 1 / 2 caps.
+vla_max_cycles = (
+    os.getenv("VLA_MAX_CYCLES")
+    or os.getenv("VLA_PHASE1_MAX_CYCLES")
+    or os.getenv("VLA_PHASE2_MAX_CYCLES")
+    or "1"
+)
 vla_initial_seq_len = os.getenv("VLA_INITIAL_SEQ_LEN", "8")
 vla_max_seq_len      = os.getenv("VLA_MAX_SEQ_LEN", "64")
 vla_num_action_tokens = os.getenv("VLA_NUM_ACTION_TOKENS", "1")

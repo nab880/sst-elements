@@ -154,11 +154,40 @@ mkdir -p "$GOLDEN_DIR"
 # don't race on a shared INDEX_CSV. The parent concatenates them at the end.
 INDEX_PART_DIR="$OUT_DIR/.index_parts"
 
-if [ "$RESUME" = "1" ] && [ -s "$INDEX_CSV" ]; then
-    echo "RESUME=1: keeping existing $INDEX_CSV (use unset/empty to start fresh)"
+# Count data rows in INDEX_CSV (line count minus header). A header-only
+# file is non-empty, so a plain `[ -s INDEX_CSV ]` test would mistake a
+# crashed run that never merged its fragments for one with persisted
+# rows -- causing every cell to re-run instead of resuming.
+_n_index_rows=0
+if [ -s "$INDEX_CSV" ]; then
+    _n_index_rows=$(($(wc -l < "$INDEX_CSV") - 1))
+    [ "$_n_index_rows" -lt 0 ] && _n_index_rows=0
+fi
+
+if [ "$RESUME" = "1" ] && [ "$_n_index_rows" -gt 0 ]; then
+    echo "RESUME=1: keeping existing $INDEX_CSV ($_n_index_rows row(s)); use unset/empty to start fresh"
+elif [ "$RESUME" = "1" ] && [ -d "$INDEX_PART_DIR" ]; then
+    # Crash-recovery path: a previous Phase 2 died after writing per-cell
+    # fragments but before the parent could merge them into INDEX_CSV.
+    # Without this branch, those completed cells would re-run on resume.
+    # Fold the fragments in now so already_indexed() can find them; the
+    # rm -rf below then clears the dir for fresh fragment writes.
+    echo "ber,scheme,policy,seed,fault_model,due_action,log,exit,golden,emitted_golden" > "$INDEX_CSV"
+    shopt -s nullglob
+    _resume_parts=("$INDEX_PART_DIR"/*.csv)
+    if [ ${#_resume_parts[@]} -gt 0 ]; then
+        LC_ALL=C sort -t, -k1,1g -k2,2 -k3,3 -k4,4n -k5,5 -k6,6 \
+            "${_resume_parts[@]}" >> "$INDEX_CSV"
+        echo "RESUME=1: recovered ${#_resume_parts[@]} fragment(s) into $INDEX_CSV"
+    else
+        echo "RESUME=1: no fragments to recover; running fresh"
+    fi
+    shopt -u nullglob
+    unset _resume_parts
 else
     echo "ber,scheme,policy,seed,fault_model,due_action,log,exit,golden,emitted_golden" > "$INDEX_CSV"
 fi
+unset _n_index_rows
 rm -rf "$INDEX_PART_DIR"
 mkdir -p "$INDEX_PART_DIR"
 
@@ -368,6 +397,11 @@ run_one() {
 
 # wait_for_slot: blocks until the live background-job count drops below $JOBS.
 # Tracks pids in a global array; called by Phase 2 before each spawn.
+#
+# bash-3.2/4.x quirk: under `set -u`, expanding an empty array as
+# "${arr[@]}" raises "unbound variable" on some platforms (macOS bash
+# 3.2, older bash 4.x). After the inner reap loop drains every pid,
+# `new_pids` is empty, so the assignment must guard the expansion.
 wait_for_slot() {
     local max="$1"
     while [ ${#BG_PIDS[@]} -ge "$max" ]; do
@@ -383,7 +417,11 @@ wait_for_slot() {
                 reaped=1
             fi
         done
-        BG_PIDS=("${new_pids[@]}")
+        if [ ${#new_pids[@]} -gt 0 ]; then
+            BG_PIDS=("${new_pids[@]}")
+        else
+            BG_PIDS=()
+        fi
         if [ "$reaped" -eq 0 ] && [ ${#BG_PIDS[@]} -ge "$max" ]; then
             # All pids still running; sleep briefly then retry.
             sleep 0.5

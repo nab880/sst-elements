@@ -84,6 +84,14 @@ public:
     // Advance one FSM step.
     VLAState advance(SST::Output* out, const char* agentName);
 
+    /**
+     * DUE-on-frame fast-forward: snap the FSM to ACTUATE so the next advance()
+     * closes the pipeline cycle. Counters (vit/prefill/decode layers, action
+     * tokens, sequence length) are left intact for inspection; the next
+     * ACTUATE step in advance() will reset them as usual.
+     */
+    void fastForwardToActuate() { currentState_ = ACTUATE; }
+
     VLAState state()            const { return currentState_; }
     int      currentSeqLen()    const { return currentSeqLen_; }
     int      vitLayer()         const { return vitLayer_; }

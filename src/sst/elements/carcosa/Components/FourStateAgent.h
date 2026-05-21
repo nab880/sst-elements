@@ -65,6 +65,7 @@ public:
     SST_ELI_DOCUMENT_PARAMS(
         {"state_key",       "PipelineStateRegistry key this agent publishes into. Required.", ""},
         {"region_size",     "Size in bytes of the published MMIO control region (regions[0]).", "4096"},
+        {"regions",         "Optional CSV of workload-labeled DRAM regions for region-aware EccGuard/PortModuleStateGate policies. 'name:base:size' triples; slot 0 reserved for mmio_control. Used by the Phase 6 region-routing smoke test.", ""},
         {"initial_command", "First command index returned to the CPU.", "0"},
         {"num_commands",    "Number of command indices to cycle through (must match the jump_table length in the Vanadis binary; 2 for pingpong, 4 for fourstate).", "4"},
         {"max_iterations",  "Max iterations before sending exit (-1).",  "12"},
@@ -117,6 +118,7 @@ private:
 
     // Registry publishing state
     std::string stateKey_;
+    std::string regionsCsv_;
     int         publishedKernel_ = IDLE;
 };
 

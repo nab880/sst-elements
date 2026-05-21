@@ -54,6 +54,7 @@ public:
         {"max_seq_len",     "KV-cache capacity in the stub/real binary (MAX_SEQ_LEN). Fatal if the CPU delay agent ever announces a seqlen > max_seq_len on the ring.", "64"},
         {"state_key",       "Optional. PipelineStateRegistry<PipelineStateBase> key this agent publishes into so PortModuleStateGate can read currentKernel/pipelineCycle/regions[]. Empty disables publishing.", ""},
         {"region_size",     "Size in bytes of the published MMIO control region (regions[0]).", "4096"},
+        {"regions",         "Optional CSV of workload-labeled DRAM regions for region-aware EccGuard policies. 'name:base:size' triples; slot 0 reserved for mmio_control.", ""},
         {"verbose",         "Enable verbose output.",                             "false"}
     )
 
@@ -79,6 +80,7 @@ private:
     uint64_t computeScaledDelay(int kernelId);
     void publishKernel(int kernel);
     void publishMmioRegion();
+    void applyRegionPublish(uint64_t offset, uint32_t value);
 
     SST::Output* out_;
     SST::Link* highlink_ = nullptr;
@@ -103,6 +105,7 @@ private:
 
     std::string stateKey_;
     uint64_t    regionSize_ = 4096;
+    std::string regionsCsv_;
     // GPU has no FSM; advance pipelineCycle each completed ACTUATE.
     int gpuPipelineCycle_ = 0;
 
