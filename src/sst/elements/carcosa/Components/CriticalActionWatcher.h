@@ -41,7 +41,8 @@ public:
         {"state_key",          "PipelineStateRegistry key (required).", ""},
         {"critical_region",    "Published region name to watch (e.g. action_queue).", "action_queue"},
         {"critical_len",       "Max bytes to hash (0 = entire region).", "64"},
-        {"apply_on_responses_only", "Only snapshot read responses.", "true"})
+        {"apply_on_responses_only", "Only snapshot read responses.", "true"},
+        {"actuation_kernel",   "Workload-supplied kernel name that marks frame commitment. The snapshot is taken during this kernel and frozen on the trailing edge (kernel != actuation_kernel). Falls back to PipelineStateBase::actuationKernelName when this param is empty.", ""})
 
     SST_ELI_DOCUMENT_PORTS(
         {"highlink", "Toward directory/cache", {"memHierarchy.MemEventBase"}},
@@ -79,7 +80,9 @@ private:
     bool applyOnResponsesOnly_ = true;
 
     PipelineStateBase* state_ptr_ = nullptr;
-    int last_kernel_ = -2;
+    std::string        actuation_kernel_name_;
+    std::string        last_kernel_name_;
+    bool               saw_kernel_ = false;
 
     uint64_t crit_base_ = 0;
     uint64_t crit_len_  = 0;

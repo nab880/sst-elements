@@ -97,21 +97,16 @@ bool isMultiChipCampaignAlias(const std::string& s) {
 }
 
 // Resolve a campaign_target_kernel string. Accepts either a small integer
-// kernel id, a kernel name (e.g. "KV_CACHE_ATTN", "ACTUATE"), or "any"/"-1"
-// for "every kernel". Returns -1 for "any". On unknown input, returns -1
-// and the caller logs a one-shot warning.
-int resolveCampaignKernel(const std::string& raw) {
-    if (raw.empty() || raw == "any" || raw == "ANY" || raw == "-1") return -1;
-    // numeric form first.
-    try {
-        size_t pos = 0;
-        int v = std::stoi(raw, &pos);
-        if (pos == raw.size() && v >= 0 && v < NUM_STATES) return v;
-    } catch (...) { /* fall through to name lookup */ }
-    for (int i = 0; i < NUM_STATES; ++i) {
-        if (raw == vlaStateName(i)) return i;
+// Resolve a campaign_target_kernel string to the canonical kernel-name key
+// used by PipelineStateBase::currentKernelName. The empty result represents
+// "every kernel" (uniform campaign), matching the empty currentKernelName
+// the agent publishes between kernels.
+std::string resolveCampaignKernel(const std::string& raw) {
+    if (raw.empty() || raw == "any" || raw == "ANY" || raw == "*"
+        || raw == "-1") {
+        return std::string();
     }
-    return -1;
+    return raw;
 }
 
 EccGuard::PayloadDtype parseDtype(const std::string& s) {
@@ -245,8 +240,8 @@ EccGuard::EccGuard(ComponentId_t id, Params& params) : Component(id) {
     // Campaign-mode parameters. These are inert unless fault_model_ == Campaign.
     {
         std::string raw_target = params.find<std::string>("campaign_target_kernel", "any");
-        campaign_target_kernel_ = resolveCampaignKernel(raw_target);
-        if (campaign_target_kernel_ < 0
+        campaign_target_kernel_name_ = resolveCampaignKernel(raw_target);
+        if (campaign_target_kernel_name_.empty()
             && raw_target != "any" && raw_target != "ANY"
             && raw_target != "-1" && !raw_target.empty()) {
             out_->output("EccGuard WARNING: campaign_target_kernel='%s' did not "
@@ -268,9 +263,9 @@ EccGuard::EccGuard(ComponentId_t id, Params& params) : Component(id) {
         if (fault_model_ == FaultModel::Campaign && verbose_) {
             out_->output("EccGuard: campaign mode active: target=%s mode=%d budget=%" PRIu64
                           " rate=%.3e\n",
-                          (campaign_target_kernel_ < 0
+                          campaign_target_kernel_name_.empty()
                               ? "any"
-                              : vlaStateName(campaign_target_kernel_)),
+                              : campaign_target_kernel_name_.c_str(),
                           static_cast<int>(campaign_mode_),
                           campaign_event_budget_,
                           campaign_event_rate_);
@@ -399,32 +394,26 @@ void EccGuard::complete(unsigned phase) {
 
 void EccGuard::finish() {
     out_->output("\n=== EccGuard %s Per-Kernel Outcomes ===\n", getName().c_str());
-    out_->output("kernel_id,kernel_name,clean,correctable,due,escape,latency_ps\n");
-    for (int i = 0; i < NUM_STATES; ++i) {
-        const auto& c = per_kernel_[i];
+    out_->output("kernel_name,clean,correctable,due,escape,latency_ps\n");
+    for (const auto& kv : per_kernel_) {
+        const auto& c = kv.second;
         if (c.clean + c.correctable + c.due + c.escape == 0) continue;
-        out_->output("%d,%s,%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 "\n",
-                     i, vlaStateName(i),
+        const std::string& kname = kv.first.empty() ? std::string("UNKNOWN") : kv.first;
+        out_->output("%s,%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 "\n",
+                     kname.c_str(),
                      c.clean, c.correctable, c.due, c.escape, c.latency_ps);
-    }
-    const auto& unk = per_kernel_[NUM_STATES];
-    if (unk.clean + unk.correctable + unk.due + unk.escape != 0) {
-        out_->output("-1,UNKNOWN,%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 "\n",
-                     unk.clean, unk.correctable, unk.due, unk.escape, unk.latency_ps);
     }
     out_->output("=== End EccGuard %s Per-Kernel Outcomes ===\n\n", getName().c_str());
 
     if (!per_kernel_region_.empty()) {
         out_->output("\n=== EccGuard %s Per-Kernel-Per-Region Outcomes ===\n", getName().c_str());
-        out_->output("kernel_id,kernel_name,region,clean,correctable,due,escape,latency_ps\n");
+        out_->output("kernel_name,region,clean,correctable,due,escape,latency_ps\n");
         for (auto& kv : per_kernel_region_) {
-            int kid = kv.first.first;
+            const std::string& kname  = kv.first.first.empty()  ? std::string("UNKNOWN")   : kv.first.first;
             const std::string& region = kv.first.second.empty() ? std::string("unlabeled") : kv.first.second;
             const auto& c = kv.second;
-            const char* kname = (kid >= 0 && kid < NUM_STATES) ? vlaStateName(kid) : "UNKNOWN";
-            int kid_print = (kid >= 0 && kid < NUM_STATES) ? kid : -1;
-            out_->output("%d,%s,%s,%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 "\n",
-                         kid_print, kname, region.c_str(),
+            out_->output("%s,%s,%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 "\n",
+                         kname.c_str(), region.c_str(),
                          c.clean, c.correctable, c.due, c.escape, c.latency_ps);
         }
         out_->output("=== End EccGuard %s Per-Kernel-Per-Region Outcomes ===\n\n", getName().c_str());
@@ -530,14 +519,14 @@ bool EccGuard::eventOverlapsAddrFilter(MemEvent* mev) const {
     return addr < fend && end > fbase;
 }
 
-void EccGuard::noteCampaignKernelEntry(int kernel_id) {
+void EccGuard::noteCampaignKernelEntry(const std::string& kernel_name) {
     if (campaign_max_per_kernel_entry_ == 0) return;
-    const int track = (campaign_target_kernel_ >= 0)
-                          ? campaign_target_kernel_
-                          : kernel_id;
-    if (kernel_id != track) return;
-    if (kernel_id != campaign_entry_kernel_) {
-        campaign_entry_kernel_       = kernel_id;
+    const std::string& track = (!campaign_target_kernel_name_.empty())
+                                   ? campaign_target_kernel_name_
+                                   : kernel_name;
+    if (kernel_name != track) return;
+    if (kernel_name != campaign_entry_kernel_name_) {
+        campaign_entry_kernel_name_  = kernel_name;
         campaign_events_this_entry_  = 0;
     }
 }
@@ -566,19 +555,17 @@ void publishCumulative(const std::string& state_key, uint64_t escapes_inc,
 }
 
 // Helper: bump the per-frame per-kernel escape count consumed by Tier B
-// Fig. 3a (the VLA pipeline agent argmaxes this map at frame close to
-// stamp FrameRecord.attributingKernel, then resets the map). The vector
-// is sized lazily; index NUM_STATES is the unlabeled / no-FSM bucket.
-void publishPerFrameEscape(const std::string& state_key, int kidx) {
+// Fig. 3a (the pipeline agent argmaxes this map at frame close to stamp
+// FrameRecord.attributingKernelName, then resets the map). The map is
+// keyed by the workload-supplied kernel name; the empty string is the
+// catch-all for "no FSM publisher / unknown kernel".
+void publishPerFrameEscape(const std::string& state_key,
+                           const std::string& kernel_name) {
     if (state_key.empty()) return;
     PipelineStateBase* s =
         PipelineStateRegistry<PipelineStateBase>::getMutable(state_key);
     if (!s) return;
-    if (s->eccPerFrameEscapesByKernel.size() < static_cast<size_t>(NUM_STATES + 1)) {
-        s->eccPerFrameEscapesByKernel.assign(NUM_STATES + 1, 0u);
-    }
-    if (kidx < 0 || kidx > NUM_STATES) kidx = NUM_STATES;
-    s->eccPerFrameEscapesByKernel[kidx] += 1;
+    s->eccPerFrameEscapesByKernel[kernel_name] += 1;
 }
 } // namespace
 
@@ -836,11 +823,12 @@ EccGuard::FaultDraw EccGuard::drawFaultJedecMix(uint32_t payload_bytes,
 // Campaign-mode injector. Fires at most campaign_event_budget_ events total
 // across the run, each event a single occurrence of campaign_mode_ deposited
 // into one randomly-chosen ECC word (matching JEDEC's single-word/cell
-// deposit semantics). Eligibility is gated on (kernel_id ==
-// campaign_target_kernel_) when target is set, else any kernel is eligible.
+// deposit semantics). Eligibility is gated on (kernel_name ==
+// campaign_target_kernel_name_) when target is set, else any kernel is
+// eligible.
 EccGuard::FaultDraw EccGuard::drawFaultCampaign(uint32_t payload_bytes,
                                                  EccScheme scheme,
-                                                 int kernel_id) {
+                                                 const std::string& kernel_name) {
     FaultDraw d;
     if (payload_bytes == 0) return d;
 
@@ -852,8 +840,8 @@ EccGuard::FaultDraw EccGuard::drawFaultCampaign(uint32_t payload_bytes,
     // Addr-filtered campaign: action_queue traffic is the temporal proxy.
     // ReadResp often returns after publishKernel(IDLE), so do not gate on FSM.
     const bool addr_filtered = !addr_filter_region_.empty();
-    if (!addr_filtered && campaign_target_kernel_ >= 0
-        && kernel_id != campaign_target_kernel_) {
+    if (!addr_filtered && !campaign_target_kernel_name_.empty()
+        && kernel_name != campaign_target_kernel_name_) {
         return d;
     }
     if (addr_filtered && campaign_max_per_kernel_entry_ > 0 && state_ptr_) {
@@ -863,7 +851,7 @@ EccGuard::FaultDraw EccGuard::drawFaultCampaign(uint32_t payload_bytes,
             campaign_events_this_entry_    = 0;
         }
     } else {
-        noteCampaignKernelEntry(kernel_id);
+        noteCampaignKernelEntry(kernel_name);
     }
     if (campaign_max_per_kernel_entry_ > 0
         && campaign_events_this_entry_ >= campaign_max_per_kernel_entry_) {
@@ -962,8 +950,8 @@ void EccGuard::warnIfBerExceedsTightBound(double ber, const char* origin) {
 uint64_t EccGuard::applyPolicy(MemEvent* mev) {
     if (!state_ptr_) resolveStateLazy();
 
-    int kernel_id = -1;
-    if (state_ptr_) kernel_id = state_ptr_->currentKernel;
+    std::string kernel_name;
+    if (state_ptr_) kernel_name = state_ptr_->currentKernelName;
 
     if (!addr_filter_region_.empty() && !eventOverlapsAddrFilter(mev)) {
         if (stat_total_) stat_total_->addData(1);
@@ -974,16 +962,16 @@ uint64_t EccGuard::applyPolicy(MemEvent* mev) {
     int region_id = resolveRegionIdForEvent(mev);
     const std::string& region_name = regionNameForId(region_id);
 
-    const EccPolicyEntry& entry = policy_.effectiveFor(kernel_id, region_name);
+    const EccPolicyEntry& entry = policy_.effectiveFor(kernel_name, region_name);
 
-    int kidx = (kernel_id >= 0 && kernel_id < NUM_STATES) ? kernel_id : NUM_STATES;
-    auto& region_bucket = per_kernel_region_[std::make_pair(kidx, region_name)];
+    auto& kernel_bucket = per_kernel_[kernel_name];
+    auto& region_bucket = per_kernel_region_[std::make_pair(kernel_name, region_name)];
 
     auto countClean = [&]() {
         if (stat_total_) stat_total_->addData(1);
         if (stat_clean_) stat_clean_->addData(1);
-        per_kernel_[kidx].clean += 1;
-        region_bucket.clean     += 1;
+        kernel_bucket.clean += 1;
+        region_bucket.clean += 1;
     };
 
     if (entry.ber <= 0.0 && fault_event_rate_ <= 0.0
@@ -1008,7 +996,7 @@ uint64_t EccGuard::applyPolicy(MemEvent* mev) {
         double rate = (entry.ber > 0.0) ? entry.ber : fault_event_rate_;
         draw = drawFaultJedecMix(payload_bytes, rate, entry.scheme);
     } else if (fault_model_ == FaultModel::Campaign) {
-        draw = drawFaultCampaign(payload_bytes, entry.scheme, kernel_id);
+        draw = drawFaultCampaign(payload_bytes, entry.scheme, kernel_name);
     } else {
         draw = drawFaultPoisson(payload_bytes, entry.ber, entry.scheme);
     }
@@ -1060,9 +1048,9 @@ uint64_t EccGuard::applyPolicy(MemEvent* mev) {
         }
         publishCumulative(state_key_, /*escapes*/1, /*flips*/line.escape_bits);
         // Tier B (Fig. 3a) violation attribution: this escape happened
-        // while currentKernel was kernel_id; bump the per-frame map so
-        // the VLA pipeline agent can argmax it at frame close.
-        publishPerFrameEscape(state_key_, kidx);
+        // while currentKernelName was kernel_name; bump the per-frame map so
+        // the pipeline agent can argmax it at frame close.
+        publishPerFrameEscape(state_key_, kernel_name);
         break;
     }
 
@@ -1070,36 +1058,36 @@ uint64_t EccGuard::applyPolicy(MemEvent* mev) {
     switch (outcome) {
     case EccOutcome::Clean:
         if (stat_clean_)       stat_clean_->addData(1);
-        per_kernel_[kidx].clean += 1;
-        region_bucket.clean    += 1;
+        kernel_bucket.clean += 1;
+        region_bucket.clean += 1;
         break;
     case EccOutcome::Correctable:
         if (stat_correctable_) stat_correctable_->addData(1);
-        per_kernel_[kidx].correctable += 1;
-        region_bucket.correctable    += 1;
+        kernel_bucket.correctable += 1;
+        region_bucket.correctable += 1;
         break;
     case EccOutcome::DetectableUncorrectable:
         if (stat_due_)         stat_due_->addData(1);
-        per_kernel_[kidx].due += 1;
-        region_bucket.due    += 1;
+        kernel_bucket.due += 1;
+        region_bucket.due += 1;
         break;
     case EccOutcome::SilentEscape:
         if (stat_escape_)      stat_escape_->addData(1);
-        per_kernel_[kidx].escape += 1;
-        region_bucket.escape    += 1;
+        kernel_bucket.escape += 1;
+        region_bucket.escape += 1;
         break;
     }
     if (latency_ps > 0) {
         if (stat_latency_) stat_latency_->addData(latency_ps);
-        per_kernel_[kidx].latency_ps += latency_ps;
-        region_bucket.latency_ps    += latency_ps;
+        kernel_bucket.latency_ps += latency_ps;
+        region_bucket.latency_ps += latency_ps;
     }
     if (verbose_ && (outcome != EccOutcome::Clean || high_blast_flip)) {
-        out_->output("EccGuard '%s': kernel=%d (%s) region=%s mode=%s "
+        out_->output("EccGuard '%s': kernel=%s region=%s mode=%s "
                      "errors=%u (escape_bits=%u over %zu words) outcome=%s "
                      "+%" PRIu64 " ps\n",
-                     getName().c_str(), kernel_id,
-                     (kernel_id >= 0 && kernel_id < NUM_STATES) ? vlaStateName(kernel_id) : "UNKNOWN",
+                     getName().c_str(),
+                     kernel_name.empty() ? "UNKNOWN" : kernel_name.c_str(),
                      region_name.empty() ? "unlabeled" : region_name.c_str(),
                      faultModeName(draw.mode),
                      draw.num_errors, line.escape_bits,

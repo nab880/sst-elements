@@ -1,24 +1,8 @@
 tests/pingpong
-tests/vla
-tests/vla_cpu
-tests/vla_gpu
-tests/stub_cpu
-tests/stub_gpu
-VLA-Example/tests/vla_cpu
-VLA-Example/tests/vla_gpu
-VLA-Example/tests/stub_cpu
-VLA-Example/tests/stub_gpu
 
 tests/*.log
 tests/stdout-*
 tests/stderr-*
 tests/tmp/
-VLA-Example/*.log
-VLA-Example/tests/*.log
-VLA-Example/tests/stdout-*
-VLA-Example/tests/stderr-*
-VLA-Example/scripts/tmp/
 
 *.bak
-
-VLA-Example/README.md

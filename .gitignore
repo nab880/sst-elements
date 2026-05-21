@@ -25,11 +25,6 @@ tags
 sst_test_outputs/
 build/
 
-# Run-output directories from VLA case studies / sweeps
-src/sst/elements/carcosa/VLA-Example/tests/ecc_all_out_*/
-src/sst/elements/carcosa/VLA-Example/tests/ecc_sweep_out/
-src/sst/elements/carcosa/VLA-Example/tests/calibration_*/
-src/sst/elements/carcosa/VLA-Example/tests/tests/
 .\#*
 \#*\#
 .gdb_history

@@ -65,20 +65,9 @@ libcarcosa_la_SOURCES =                     \
     Components/PingPongAgent.h              \
     Components/FourStateAgent.cc            \
     Components/FourStateAgent.h             \
-    VLA-Example/Components/vla-fsm.cc       \
-    VLA-Example/Components/vla-fsm.h        \
-    VLA-Example/Components/VLAAgent.cc      \
-    VLA-Example/Components/VLAAgent.h       \
-    VLA-Example/Components/VLAKernelComplexity.h \
-    VLA-Example/Components/VlaRegions.h     \
-    VLA-Example/Components/VLACpuAgent.cc   \
-    VLA-Example/Components/VLACpuAgent.h    \
-    VLA-Example/Components/VLAGpuAgent.cc   \
-    VLA-Example/Components/VLAGpuAgent.h    \
-    VLA-Example/Components/VLACpuDelayAgent.cc \
-    VLA-Example/Components/VLACpuDelayAgent.h  \
-    VLA-Example/Components/VLAGpuDelayAgent.cc \
-    VLA-Example/Components/VLAGpuDelayAgent.h  \
+    Components/vla-fsm.cc                   \
+    Components/vla-fsm.h                    \
+    Components/VlaRegions.h                 \
     Components/CarcosaMemCtrl.cc            \
     Components/CarcosaMemCtrl.h             \
     Components/SensorComponent.cc           \
@@ -97,23 +86,6 @@ EXTRA_DIST = \
     tests/testFourStateRegistryGated.py           \
     examples/SimplePipeline/tests/testSimplePipeline.py \
     examples/SimplePipeline/tests/testPortModuleStateGate.py \
-    VLA-Example/tests/vla.c                       \
-    VLA-Example/tests/vla_shared.h                \
-    VLA-Example/tests/testCarcosaVLA.py           \
-    VLA-Example/tests/testCarcosaVLA_earlyexit.py \
-    VLA-Example/tests/vla_cpu.c                   \
-    VLA-Example/tests/vla_gpu.c                   \
-    VLA-Example/tests/stub_cpu.c                  \
-    VLA-Example/tests/stub_gpu.c                  \
-    VLA-Example/tests/testCarcosaVLA_GPUCPU.py    \
-    VLA-Example/tests/testCarcosaVLA_GPUCPU_Synth.py \
-    VLA-Example/tests/testCarcosaVLA_CaseStudy.py \
-    VLA-Example/scripts/run_case_studies.sh \
-    VLA-Example/scripts/preflight_case_studies.sh \
-    VLA-Example/scripts/load_case_manifest.py \
-    VLA-Example/case_studies/manifest.yaml \
-    VLA-Example/scripts/extract_baselines.py      \
-    VLA-Example/scripts/run_phase2_from_phase1.sh \
     tests/testCorruptMemBasic.py                  \
     tests/testCorruptMemDouble.py                 \
     tests/testCorruptMemDoubleOverlap.py          \
@@ -157,15 +129,10 @@ nobase_sst_HEADERS =                        \
     Components/PipelineStateRegistry.h     \
     Components/PingPongAgent.h             \
     Components/FourStateAgent.h            \
+    Components/HaliEvent.h                 \
     examples/SimplePipeline/SimplePipelineExample.h \
-    VLA-Example/Components/vla-fsm.h        \
-    VLA-Example/Components/VLAAgent.h       \
-    VLA-Example/Components/VLAKernelComplexity.h \
-    VLA-Example/Components/VlaRegions.h     \
-    VLA-Example/Components/VLACpuAgent.h    \
-    VLA-Example/Components/VLAGpuAgent.h    \
-    VLA-Example/Components/VLACpuDelayAgent.h \
-    VLA-Example/Components/VLAGpuDelayAgent.h
+    Components/vla-fsm.h                    \
+    Components/VlaRegions.h
 
 libcarcosa_la_LDFLAGS = -module -avoid-version
 

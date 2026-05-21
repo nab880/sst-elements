@@ -12,7 +12,7 @@
 // see the LICENSE file in the top level directory of the distribution.
 
 #include "sst_config.h"
-#include "sst/elements/carcosa/VLA-Example/Components/vla-fsm.h"
+#include "sst/elements/carcosa/Components/vla-fsm.h"
 
 namespace SST {
 namespace Carcosa {

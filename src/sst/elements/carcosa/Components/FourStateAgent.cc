@@ -12,7 +12,7 @@
 #include "sst_config.h"
 #include "sst/elements/carcosa/Components/FourStateAgent.h"
 #include "sst/elements/carcosa/Components/HaliEvent.h"
-#include "sst/elements/carcosa/VLA-Example/Components/VlaRegions.h"
+#include "sst/elements/carcosa/Components/VlaRegions.h"
 #include "sst/elements/memHierarchy/memEvent.h"
 #include "sst/elements/memHierarchy/memTypes.h"
 

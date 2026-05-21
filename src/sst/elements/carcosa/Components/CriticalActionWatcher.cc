@@ -7,7 +7,6 @@
 
 #include "sst_config.h"
 #include "sst/elements/carcosa/Components/CriticalActionWatcher.h"
-#include "sst/elements/carcosa/VLA-Example/Components/vla-fsm.h"
 #include <algorithm>
 #include <cinttypes>
 
@@ -37,6 +36,7 @@ CriticalActionWatcher::CriticalActionWatcher(ComponentId_t id, Params& params)
     critical_len_    = params.find<uint64_t>("critical_len", 64);
     applyOnResponsesOnly_ =
         params.find<bool>("apply_on_responses_only", true);
+    actuation_kernel_name_ = params.find<std::string>("actuation_kernel", "");
 
     if (state_key_.empty()) {
         out_->fatal(CALL_INFO, -1,
@@ -73,6 +73,9 @@ void CriticalActionWatcher::setup() {
             "CriticalActionWatcher '%s': no PipelineStateBase for key '%s'.\n",
             getName().c_str(), state_key_.c_str());
     }
+    if (actuation_kernel_name_.empty()) {
+        actuation_kernel_name_ = state_ptr_->actuationKernelName;
+    }
 }
 
 void CriticalActionWatcher::init(unsigned phase) {
@@ -102,7 +105,7 @@ void CriticalActionWatcher::complete(unsigned phase) {
 }
 
 void CriticalActionWatcher::finish() {
-    if (last_kernel_ == ACTUATE)
+    if (saw_kernel_ && last_kernel_name_ == actuation_kernel_name_)
         finalizeActuateFrame();
     if (verbose_ && state_ptr_) {
         out_->output("CriticalActionWatcher '%s': frames_critical_region_corrupted=%" PRIu64 "\n",
@@ -196,12 +199,16 @@ void CriticalActionWatcher::handleHighlink(Event* ev) {
             snapshot_.assign(crit_len_, 0);
         }
 
-        int k = state_ptr_->currentKernel;
-        if (last_kernel_ == ACTUATE && k != ACTUATE)
+        const std::string& k = state_ptr_->currentKernelName;
+        if (saw_kernel_ && last_kernel_name_ == actuation_kernel_name_
+            && k != actuation_kernel_name_) {
             finalizeActuateFrame();
-        last_kernel_ = k;
+        }
+        last_kernel_name_ = k;
+        saw_kernel_       = true;
 
-        if ((!applyOnResponsesOnly_ || isResponseCmd(mev)) && k == ACTUATE) {
+        if ((!applyOnResponsesOnly_ || isResponseCmd(mev))
+            && k == actuation_kernel_name_) {
             uint64_t rel = 0, olen = 0;
             if (eventOverlapsCritical(mev, rel, olen)) {
                 const auto& payload = mev->getPayload();

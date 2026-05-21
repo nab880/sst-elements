@@ -12,7 +12,6 @@
 #include "sst_config.h"
 #include "sst/elements/carcosa/Components/ActionScorer.h"
 #include "sst/elements/carcosa/Components/PipelineStateRegistry.h"
-#include "sst/elements/carcosa/VLA-Example/Components/vla-fsm.h"
 #include <algorithm>
 #include <cinttypes>
 #include <cstring>
@@ -195,18 +194,20 @@ void ActionScorer::finish() {
             else                               outcome_class = 2;
         }
 
-        const char* kname = (fr.kernelAtClose >= 0 && fr.kernelAtClose < NUM_STATES)
-                                ? vlaStateName(fr.kernelAtClose)
-                                : "UNKNOWN";
+        const char* kname = fr.kernelAtCloseName.empty()
+                                ? "UNKNOWN"
+                                : fr.kernelAtCloseName.c_str();
 
         // Tier B (Fig. 3a): attributing_kernel = the kernel with the most
         // EccGuard escapes during this frame. Falls back to kernelAtClose
         // when the simulator didn't see any escapes (low-BER cells).
         int attr_id = fr.attributingKernel;
-        if (attr_id < 0) attr_id = fr.kernelAtClose;
-        const char* aname = (attr_id >= 0 && attr_id < NUM_STATES)
-                                ? vlaStateName(attr_id)
-                                : "UNKNOWN";
+        std::string attr_name = fr.attributingKernelName;
+        if (attr_name.empty()) {
+            attr_name = fr.kernelAtCloseName;
+            if (attr_id < 0) attr_id = fr.kernelAtClose;
+        }
+        const char* aname = attr_name.empty() ? "UNKNOWN" : attr_name.c_str();
 
         out_->output("%d,%d,%s,%d,%s,%d,%" PRIu64 ",%" PRIu64
                      ",%" PRIu64 ",%" PRIu64 ",%d,%d,%s,%" PRIu64 "\n",

@@ -117,7 +117,7 @@ public:
         {"kernel_policy",            "CSV of per-kernel/per-region overrides; entries 'KERNEL:scheme:ber:c_ps:d_ps:e_ps' or 'KERNEL@REGION:...' or '*@REGION:...'. Resolution precedence: (kernel,region) > region > kernel > uniform.", ""},
         {"apply_on_responses_only",  "If true, only apply ECC modeling to MemEvent responses (read returns). Writes pass through.", "true"},
         {"fault_model",              "Per-event fault sampler: 'poisson' (per-bit Bernoulli/Poisson on payload), 'jedec_mix' (mixture of single-cell/word/row/column/bank/device events with mixture weights derived from Sridharan ASPLOS'15 Table 4 plus Schroeder SIGMETRICS'09), or 'campaign' (deterministic fault budget keyed to a target VLA kernel; see campaign_* params).", "poisson"},
-        {"campaign_target_kernel",   "Campaign mode only: VLA kernel id (integer) or kernel name (e.g. 'KV_CACHE_ATTN', 'ACTUATE') into which the entire fault budget is injected. -1 / 'any' targets every access (uniform campaign).", "any"},
+        {"campaign_target_kernel",   "Campaign mode only: workload-supplied kernel name string (e.g. 'KV_CACHE_ATTN', 'ACTUATE') into which the entire fault budget is injected. Empty / 'any' / '*' targets every access (uniform campaign).", "any"},
         {"campaign_mode",            "Campaign mode only: which fault mode to inject ('cell','word','row','column','bank','device').", "row"},
         {"campaign_event_budget",    "Campaign mode only: total number of fault events to inject across the run; once exhausted the guard reverts to clean classification on every subsequent access. 0 disables campaign injection regardless of fault_model.", "0"},
         {"campaign_event_rate",      "Campaign mode only: per-eligible-access probability of firing one campaign event. Eligible accesses are those whose currentKernel matches campaign_target_kernel.", "0.0"},
@@ -209,7 +209,7 @@ private:
     // campaign_target_kernel_) and per-access probability
     // campaign_event_rate_; see EccGuard.h docs.
     FaultDraw drawFaultCampaign(uint32_t payload_bytes, EccScheme scheme,
-                                 int kernel_id);
+                                 const std::string& kernel_name);
 
     // Emit a one-shot warning whenever a policy entry's BER exceeds the
     // documented tight-approximation bound (see kEccBerTightUpperBound in
@@ -227,7 +227,7 @@ private:
     bool eventOverlapsAddrFilter(SST::MemHierarchy::MemEvent* mev) const;
     /** Campaign + addr_filter: also inject on CPU writes (payload present). */
     bool shouldApplyPolicy(SST::MemHierarchy::MemEvent* mev);
-    void noteCampaignKernelEntry(int kernel_id);
+    void noteCampaignKernelEntry(const std::string& kernel_name);
 
     void requestFrameAbort();
 
@@ -250,21 +250,24 @@ private:
     double fault_event_rate_ = 0.0;
 
     // Campaign-mode parameters (only consulted when fault_model_ == Campaign).
-    // campaign_target_kernel_ < 0 means "any kernel". campaign_mode_ picks the
-    // single FaultMode to inject. campaign_event_budget_ counts down to zero;
-    // once depleted the guard returns Clean for every subsequent access.
-    int       campaign_target_kernel_ = -1;
-    FaultMode campaign_mode_          = FaultMode::SingleRow;
-    uint64_t  campaign_event_budget_  = 0;
-    double    campaign_event_rate_    = 0.0;
-    uint64_t  campaign_events_fired_  = 0;
-    uint64_t  campaign_max_per_kernel_entry_ = 0;
-    uint64_t  campaign_events_this_entry_    = 0;
-    int       campaign_entry_kernel_         = -2;
+    // campaign_target_kernel_name_ empty means "any kernel". campaign_mode_
+    // picks the single FaultMode to inject. campaign_event_budget_ counts
+    // down to zero; once depleted the guard returns Clean for every
+    // subsequent access.
+    std::string campaign_target_kernel_name_;
+    FaultMode   campaign_mode_          = FaultMode::SingleRow;
+    uint64_t    campaign_event_budget_  = 0;
+    double      campaign_event_rate_    = 0.0;
+    uint64_t    campaign_events_fired_  = 0;
+    uint64_t    campaign_max_per_kernel_entry_ = 0;
+    uint64_t    campaign_events_this_entry_    = 0;
+    // Sentinel kernel name for "no entry observed yet" so the first
+    // noteCampaignKernelEntry call always fires.
+    std::string campaign_entry_kernel_name_   = "\x01__none__";
     /** When addr_filter_region_ is set, cap per pipeline frame (async ReadResp). */
-    int       campaign_entry_pipeline_cycle_ = -1;
-    unsigned  campaign_errors_fixed_         = 0;
-    bool      campaign_force_multi_chip_     = false;
+    int         campaign_entry_pipeline_cycle_ = -1;
+    unsigned    campaign_errors_fixed_         = 0;
+    bool        campaign_force_multi_chip_     = false;
 
     std::string addr_filter_region_;
     uint64_t    addr_filter_len_  = 0;
@@ -295,12 +298,14 @@ private:
         uint64_t escape      = 0;
         uint64_t latency_ps  = 0;
     };
-    // Last slot is the catch-all for kernel_id < 0 (no FSM publisher yet).
-    OutcomeCounters per_kernel_[NUM_STATES + 1]{};
+    // Per-kernel counters keyed by the workload-supplied kernel name. The
+    // empty string is the catch-all for "no FSM publisher / unknown kernel".
+    std::map<std::string, OutcomeCounters> per_kernel_;
 
-    // (kernel_id_or_NUM_STATES, region_name) -> counters. Region "" means
-    // "address didn't fall in any published region" (i.e. unlabeled DRAM).
-    std::map<std::pair<int, std::string>, OutcomeCounters> per_kernel_region_;
+    // (kernel_name, region_name) -> counters. Region "" means "address
+    // didn't fall in any published region" (i.e. unlabeled DRAM); kernel
+    // "" means "no FSM publisher yet".
+    std::map<std::pair<std::string, std::string>, OutcomeCounters> per_kernel_region_;
 
     // Fault-mode draw counters; written every time fault_model_=JedecMix fires.
     uint64_t per_mode_draws_[static_cast<int>(FaultMode::Count)] = {};

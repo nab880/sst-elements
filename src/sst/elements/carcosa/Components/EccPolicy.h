@@ -13,12 +13,12 @@
 #define SST_ELEMENTS_CARCOSA_ECC_POLICY_H
 
 #include "sst/elements/carcosa/Components/EccScheme.h"
-#include "sst/elements/carcosa/VLA-Example/Components/vla-fsm.h"
 #include <cctype>
 #include <cstdint>
 #include <map>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace SST {
@@ -36,7 +36,12 @@ struct EccPolicyEntry {
 
 // Resolution precedence:
 //   (kernel,region) > region > kernel > uniform
-// kernel "*" means "any kernel"; region "*" or "" means "any region".
+// kernel "*" or "" means "any kernel"; region "*" or "" means "any region".
+// Kernel names are workload-supplied strings published by the InterceptionAgent
+// into PipelineStateBase::currentKernelName (e.g. "PREFILL_FFN", "ACTUATE").
+// The table itself never inspects or enumerates those names; the workload is
+// the source of truth for the kernel namespace.
+//
 // CSV entry forms accepted:
 //   KERNEL:scheme:ber:c_ps:d_ps:e_ps
 //   KERNEL@REGION:scheme:ber:c_ps:d_ps:e_ps
@@ -44,11 +49,7 @@ struct EccPolicyEntry {
 //   KERNEL@*:scheme:ber:c_ps:d_ps:e_ps    (same as kernel-only)
 class EccPolicyTable {
 public:
-    EccPolicyTable() {
-        for (int i = 0; i < NUM_STATES; ++i) {
-            per_kernel_[i].inherits_uniform = true;
-        }
-    }
+    EccPolicyTable() = default;
 
     void setUniform(const EccPolicyEntry& e) { uniform_ = e; uniform_.inherits_uniform = false; }
     const EccPolicyEntry& uniform() const { return uniform_; }
@@ -61,12 +62,8 @@ public:
     template <typename Fn>
     void forEachEntry(Fn&& fn) const {
         fn(std::string("uniform"), uniform_);
-        for (int i = 0; i < NUM_STATES; ++i) {
-            const EccPolicyEntry& e = per_kernel_[i];
-            if (!e.inherits_uniform) {
-                std::string tag = std::string("kernel=") + vlaStateName(i);
-                fn(tag, e);
-            }
+        for (const auto& kv : per_kernel_) {
+            fn(std::string("kernel=") + kv.first, kv.second);
         }
         for (const auto& kv : per_region_) {
             fn(std::string("region=") + kv.first, kv.second);
@@ -77,31 +74,33 @@ public:
     }
 
     // Backwards-compatible kernel-only resolver. Region-unaware callers stay on this path.
-    const EccPolicyEntry& effectiveFor(int kernel_id) const {
-        if (kernel_id < 0 || kernel_id >= NUM_STATES) return uniform_;
-        const EccPolicyEntry& e = per_kernel_[kernel_id];
-        return e.inherits_uniform ? uniform_ : e;
+    const EccPolicyEntry& effectiveFor(const std::string& kernel_name) const {
+        if (kernel_name.empty()) return uniform_;
+        auto it = per_kernel_.find(kernel_name);
+        if (it == per_kernel_.end()) return uniform_;
+        return it->second.inherits_uniform ? uniform_ : it->second;
     }
 
     // (kernel,region) > region > kernel > uniform.
     // region_name "" or unmatched falls through to kernel-only.
-    const EccPolicyEntry& effectiveFor(int kernel_id,
+    const EccPolicyEntry& effectiveFor(const std::string& kernel_name,
                                        const std::string& region_name) const {
         if (!region_name.empty()) {
-            if (kernel_id >= 0 && kernel_id < NUM_STATES) {
-                auto it = per_kernel_region_.find(makeComboKey(kernel_id, region_name));
+            if (!kernel_name.empty()) {
+                auto it = per_kernel_region_.find(makeComboKey(kernel_name, region_name));
                 if (it != per_kernel_region_.end()) return it->second;
             }
             auto rit = per_region_.find(region_name);
             if (rit != per_region_.end()) return rit->second;
         }
-        return effectiveFor(kernel_id);
+        return effectiveFor(kernel_name);
     }
 
-    void setPerKernel(int kernel_id, const EccPolicyEntry& e) {
-        if (kernel_id < 0 || kernel_id >= NUM_STATES) return;
-        per_kernel_[kernel_id] = e;
-        per_kernel_[kernel_id].inherits_uniform = false;
+    void setPerKernel(const std::string& kernel_name, const EccPolicyEntry& e) {
+        if (kernel_name.empty()) return;
+        EccPolicyEntry copy = e;
+        copy.inherits_uniform = false;
+        per_kernel_[kernel_name] = copy;
     }
 
     void setPerRegion(const std::string& region_name, const EccPolicyEntry& e) {
@@ -111,13 +110,12 @@ public:
         per_region_[region_name] = copy;
     }
 
-    void setPerKernelRegion(int kernel_id, const std::string& region_name,
+    void setPerKernelRegion(const std::string& kernel_name, const std::string& region_name,
                             const EccPolicyEntry& e) {
-        if (kernel_id < 0 || kernel_id >= NUM_STATES) return;
-        if (region_name.empty()) return;
+        if (kernel_name.empty() || region_name.empty()) return;
         EccPolicyEntry copy = e;
         copy.inherits_uniform = false;
-        per_kernel_region_[makeComboKey(kernel_id, region_name)] = copy;
+        per_kernel_region_[makeComboKey(kernel_name, region_name)] = copy;
     }
 
     // CSV per entry. See class doc for accepted forms.
@@ -146,15 +144,6 @@ public:
             bool kernel_any = (kernel_tok == "*" || kernel_tok.empty());
             bool region_any = (region_tok == "*" || region_tok.empty());
 
-            int kid = -1;
-            if (!kernel_any) {
-                kid = stateIdFromName(kernel_tok);
-                if (kid < 0) {
-                    errors.push_back("ecc_kernel_policy: unknown kernel '" + kernel_tok + "'");
-                    continue;
-                }
-            }
-
             EccPolicyEntry e;
             e.inherits_uniform = false;
 
@@ -170,11 +159,11 @@ public:
             if (parts.size() >= 6) e.escape_latency_ps      = parseUInt64(parts[5]);
 
             if (!kernel_any && !region_any) {
-                setPerKernelRegion(kid, region_tok, e);
+                setPerKernelRegion(kernel_tok, region_tok, e);
             } else if (!region_any) {
                 setPerRegion(region_tok, e);
             } else if (!kernel_any) {
-                setPerKernel(kid, e);
+                setPerKernel(kernel_tok, e);
             } else {
                 errors.push_back("ecc_kernel_policy: '*@*' not allowed; use ecc_scheme/ber for the uniform fallback");
                 continue;
@@ -186,12 +175,13 @@ public:
 
 private:
     EccPolicyEntry uniform_{};
-    EccPolicyEntry per_kernel_[NUM_STATES]{};
+    std::unordered_map<std::string, EccPolicyEntry> per_kernel_;
     std::map<std::string, EccPolicyEntry> per_region_;
     std::map<std::string, EccPolicyEntry> per_kernel_region_;
 
-    static std::string makeComboKey(int kernel_id, const std::string& region) {
-        return std::to_string(kernel_id) + "@" + region;
+    static std::string makeComboKey(const std::string& kernel,
+                                    const std::string& region) {
+        return kernel + "@" + region;
     }
 
     static void splitAt(const std::string& tag, std::string& kernel,
@@ -220,13 +210,6 @@ private:
         std::istringstream ss(s);
         while (std::getline(ss, buf, ':')) out.push_back(buf);
         return out;
-    }
-
-    static int stateIdFromName(const std::string& n) {
-        for (int i = 0; i < NUM_STATES; ++i) {
-            if (n == vlaStateName(i)) return i;
-        }
-        return -1;
     }
 
     static double parseDouble(const std::string& s) {

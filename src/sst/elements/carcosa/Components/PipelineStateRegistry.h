@@ -20,6 +20,7 @@
 #include <map>
 #include <string>
 #include <type_traits>
+#include <unordered_map>
 #include <vector>
 
 namespace SST {
@@ -51,9 +52,19 @@ struct MemoryRegion {
  * consumed by PortModule fault injectors.
  *
  * Every pipeline agent publishes at minimum:
- *   - currentKernel  : the FSM state / kernel id currently executing
- *   - pipelineCycle  : a monotonically increasing count of full pipeline iterations
- *   - regions[]      : labeled memory ranges (tensors, queues, ring buffers, ...)
+ *   - currentKernel       : workload-opaque FSM/kernel id (e.g. VLA enum index)
+ *   - currentKernelName   : workload-agnostic string label for that kernel
+ *                           (e.g. "PREFILL_FFN", "ACTUATE"). This is the
+ *                           canonical key consumed by Carcosa.EccGuard /
+ *                           Carcosa.ActionScorer / Carcosa.CriticalActionWatcher;
+ *                           the core no longer interprets the int id.
+ *   - actuationKernelName : workload-defined name for the "frame committed"
+ *                           kernel. CriticalActionWatcher snapshots the
+ *                           critical region during this kernel and freezes
+ *                           the snapshot on the trailing edge. Defaults to
+ *                           "ACTUATE" by convention.
+ *   - pipelineCycle       : a monotonically increasing count of full pipeline iterations
+ *   - regions[]           : labeled memory ranges (tensors, queues, ring buffers, ...)
  *
  * Workload-specific snapshots (e.g. VLAFaultState with vitLayer/prefillLayer/
  * decodeLayer/actionChecksum/goldenChecksum) derive from this struct and are
@@ -64,8 +75,10 @@ struct MemoryRegion {
  * with the region id; see commitStagedRegion().
  */
 struct PipelineStateBase {
-    int      currentKernel = -1;
-    int      pipelineCycle = 0;
+    int         currentKernel     = -1;
+    std::string currentKernelName;
+    std::string actuationKernelName = "ACTUATE";
+    int         pipelineCycle     = 0;
 
     uint64_t stagedBase = 0;
     uint64_t stagedSize = 0;
@@ -98,72 +111,69 @@ struct PipelineStateBase {
      * eccCumulativeEscapes into the frame).
      */
     struct FrameRecord {
-        int      pipelineCycle      = 0;
-        int      kernelAtClose      = -1;
-        // Tier B (Fig. 3a) violation attribution. Set by the VLA pipeline
-        // agent at frame close to the kernel that produced the largest
-        // number of EccGuard escape classifications during this frame.
-        // Populated only when the agent has read the per-frame escape map
-        // EccGuard publishes (eccPerFrameEscapesByKernel below). Falls
-        // back to kernelAtClose (== ACTUATE on the synthetic FSM) when no
-        // escapes were observed in the frame.
-        int      attributingKernel  = -1;
-        bool     dropped            = false;
-        uint64_t actionChecksum     = 0;
-        uint64_t cumulativeEscapes  = 0;
-        uint64_t cumulativeFlips    = 0;
-        uint64_t simTimePs          = 0;
+        int         pipelineCycle      = 0;
+        int         kernelAtClose      = -1;
+        std::string kernelAtCloseName;
+        // Tier B (Fig. 3a) violation attribution. Set by the pipeline agent
+        // at frame close to the kernel that produced the largest number of
+        // EccGuard escape classifications during this frame. Populated only
+        // when the agent has read the per-frame escape map EccGuard
+        // publishes (eccPerFrameEscapesByKernel below). Falls back to
+        // kernelAtClose / kernelAtCloseName when no escapes were observed.
+        int         attributingKernel  = -1;
+        std::string attributingKernelName;
+        bool        dropped            = false;
+        uint64_t    actionChecksum     = 0;
+        uint64_t    cumulativeEscapes  = 0;
+        uint64_t    cumulativeFlips    = 0;
+        uint64_t    simTimePs          = 0;
     };
     std::vector<FrameRecord> frames;
 
     /**
      * Per-frame per-kernel escape counter, updated by EccGuard whenever
-     * applyPolicy classifies an event as SilentEscape. Indexed by kernel
-     * id with a final slot (NUM_STATES) for "no FSM publisher / unknown
-     * kernel" so the array is bounds-safe even when EccGuard sees traffic
-     * before any kernel is published.
+     * applyPolicy classifies an event as SilentEscape. Keyed by the
+     * workload-supplied kernel name string (PipelineStateBase::
+     * currentKernelName at the time of the escape); the empty string ""
+     * is used when no kernel has been published yet.
      *
-     * The VLA pipeline agent reads this map at frame close, picks the
-     * argmax, writes the result into FrameRecord.attributingKernel, then
-     * resets the map for the next frame. The reset step is intentionally
-     * driven by the consumer rather than EccGuard so a single guard can
-     * serve multiple agents without race conditions on the per-frame
-     * edge.
+     * The pipeline agent reads this map at frame close, picks the
+     * argmax, writes the result into FrameRecord.attributingKernelName,
+     * then resets the map for the next frame. The reset step is
+     * intentionally driven by the consumer rather than EccGuard so a
+     * single guard can serve multiple agents without race conditions
+     * on the per-frame edge.
      *
-     * A frame that closes with zero escapes (every slot still zero
-     * after reset by the previous close) gets argmax==-1; the agent
-     * then stamps attributingKernel = kernelAtClose so downstream
-     * consumers always see a valid kernel id, and Fig. 3a's caption
-     * disambiguates the fallback case.
-     *
-     * Allocated lazily by EccGuard on first escape.
+     * A frame that closes with zero escapes (map empty / every slot
+     * zero after the previous reset) gets argmax="" and the agent
+     * falls back to kernelAtCloseName so downstream consumers always
+     * see a valid kernel name; Fig. 3a's caption disambiguates the
+     * fallback case.
      */
-    std::vector<uint64_t> eccPerFrameEscapesByKernel;
+    std::unordered_map<std::string, uint64_t> eccPerFrameEscapesByKernel;
 
     /**
-     * Helper: argmax over eccPerFrameEscapesByKernel. Returns -1 when
-     * the vector is empty or every slot is zero (no escapes since the
-     * last reset). The "unknown" slot at index NUM_STATES is returned as
-     * NUM_STATES so the caller can distinguish "argmax was the unlabeled
-     * bucket" from "no signal at all" (-1).
+     * Helper: argmax over eccPerFrameEscapesByKernel. Returns "" when
+     * the map is empty or every value is zero (no escapes since the
+     * last reset). The empty-string key represents "no FSM publisher /
+     * unknown kernel"; callers can compare against "" to detect both
+     * "no signal at all" and "argmax was the unlabeled bucket".
      */
-    int argmaxEccPerFrameEscapesByKernel() const {
-        if (eccPerFrameEscapesByKernel.empty()) return -1;
-        int      best_i = -1;
-        uint64_t best_v = 0;
-        for (size_t i = 0; i < eccPerFrameEscapesByKernel.size(); ++i) {
-            if (eccPerFrameEscapesByKernel[i] > best_v) {
-                best_v = eccPerFrameEscapesByKernel[i];
-                best_i = static_cast<int>(i);
+    std::string argmaxEccPerFrameEscapesByKernel() const {
+        std::string best_name;
+        uint64_t    best_v = 0;
+        for (const auto& kv : eccPerFrameEscapesByKernel) {
+            if (kv.second > best_v) {
+                best_v    = kv.second;
+                best_name = kv.first;
             }
         }
-        return best_i;
+        return best_name;
     }
 
     /** Helper: zero out the per-frame escape map (consumer at frame close). */
     void resetEccPerFrameEscapesByKernel() {
-        std::fill(eccPerFrameEscapesByKernel.begin(),
-                  eccPerFrameEscapesByKernel.end(), 0u);
+        for (auto& kv : eccPerFrameEscapesByKernel) kv.second = 0u;
     }
 
     /**
