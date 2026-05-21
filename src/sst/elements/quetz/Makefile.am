@@ -24,6 +24,9 @@ libquetz_la_SOURCES = \
     quetzcore.h \
     quetz_config.cc \
     quetz_config.h \
+    quetz_config_manager.cc \
+    quetz_config_manager.h \
+    quetz_platform_profiles.cc \
     quetz_core_backend.cc \
     quetz_core_backend.h \
     quetz_frontend.h \
@@ -31,14 +34,30 @@ libquetz_la_SOURCES = \
     quetz_qemu_frontend.h \
     quetz_launcher.cc \
     quetz_launcher.h \
-    quetz_memmap.cc \
-    quetz_memmap.h \
+    quetz_region_handler.h \
+    quetz_region_table.cc \
+    quetz_region_table.h \
+    quetz_region_handlers.cc \
+    quetz_region_handlers.h \
     quetz_mem_access.cc \
     quetz_mem_access.h \
     quetz_mem_issue.cc \
     quetz_mem_issue.h \
+    quetz_pipeline.cc \
+    quetz_pipeline.h \
+    quetz_pipeline_api.h \
+    quetz_pipeline_input.cc \
+    quetz_pipeline_filter.cc \
+    quetz_pipeline_transform.cc \
+    quetz_pipeline_output.cc \
+    quetz_logging_pipeline_output.cc \
     quetz_stats.cc \
     quetz_stats.h \
+    quetz_statistics_collector.cc \
+    quetz_statistics_collector.h \
+    quetz_ipc_types.h \
+    quetz_command_buffer.h \
+    quetz_sync_manager.h \
     quetz_shmem.h
 
 libquetz_la_LDFLAGS = \
@@ -66,15 +85,24 @@ libqemu_sst_plugin_la_SOURCES = \
     qemu_plugin/insn_classifier.h \
     qemu_plugin/mem_access_handler.cpp \
     qemu_plugin/mem_access_handler.h \
+    qemu_plugin/registry.h \
+    qemu_plugin/decoder_riscv.cpp \
+    qemu_plugin/decoder_aarch64.cpp \
+    qemu_plugin/decoder_generic.cpp \
     qemu_plugin/decoder_riscv.h \
     qemu_plugin/decoder_aarch64.h \
     qemu_plugin/decoder_generic.h \
+    quetz_ipc_types.h \
+    quetz_command_buffer.h \
+    quetz_sync_manager.h \
+    quetz_statistics_collector.h \
     quetz_shmem.h
 
 libqemu_sst_plugin_la_LDFLAGS = \
     -module \
     -avoid-version \
     -shared \
+    -Wl,-no-as-needed \
     $(AM_LDFLAGS)
 
 libqemu_sst_plugin_la_CPPFLAGS = \
@@ -90,6 +118,10 @@ libqemu_sst_plugin_la_CPPFLAGS = \
 # ---------------------------------------------------------------------------
 sstdir = $(includedir)/sst/elements/quetz
 nobase_sst_HEADERS = \
+    quetz_ipc_types.h \
+    quetz_command_buffer.h \
+    quetz_sync_manager.h \
+    quetz_statistics_collector.h \
     quetz_shmem.h
 
 # ---------------------------------------------------------------------------
@@ -98,3 +130,14 @@ nobase_sst_HEADERS = \
 install-exec-hook:
 	$(SST_REGISTER_TOOL) SST_ELEMENT_SOURCE quetz=$(abs_srcdir)
 	$(SST_REGISTER_TOOL) SST_ELEMENT_TESTS  quetz=$(abs_srcdir)/tests
+
+# ---------------------------------------------------------------------------
+# Quetz unit / integration test targets (no install)
+# ---------------------------------------------------------------------------
+.PHONY: check-quetz-unit check-quetz-integration
+
+check-quetz-unit:
+	@$(abs_srcdir)/tests/unit/run_unit_tests.sh
+
+check-quetz-integration:
+	@$(SST_PREFIX)/bin/sst-test-elements -p $(abs_srcdir)/tests/testsuite_default_quetz.py
