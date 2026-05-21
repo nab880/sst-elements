@@ -42,7 +42,7 @@ This script:
 === All Quetz tests passed ===
 ```
 
-In a clean run you should see **11 tests passing** (usermode + sysmode + PR1 checks: multicore quorum, class balance, wide split, UART).
+In a clean run you should see **all integration tests passing** (matrix usermode/sysmode tests plus invariant checks: multicore quorum, class balance, wide split, determinism, config negative, sysmode filtered-only, UART capture, and more). Unit tests run first via `check-quetz-unit`.
 
 ---
 
@@ -181,6 +181,58 @@ src/sst/elements/quetz/tests/unit/run_unit_tests.sh
 ```
 
 Add a case in `tests/unit/test_decoder_riscv.cc` (or a new `test_*.cc`), list it in `run_unit_tests.sh`, rebuild.
+
+---
+
+## Microbenchmark guest binaries
+
+Sources live under `tests/binaries/src/`. Build RISC-V static ELFs (requires `riscv64-linux-gnu-gcc`, installed in the Docker image):
+
+```bash
+cd src/sst/elements/quetz/tests/binaries
+./build_microbench.sh
+```
+
+| Binary | Purpose |
+|--------|---------|
+| `stride_read_1` / `stride_read_64` | Stride sweep over 1 MiB — used by `test_quetz_stride_scaling` |
+| `pointer_chase` | Random linked-list walk — cache miss sensitivity |
+| `write_burst` | Tight store loop |
+| `rvv_vlen_sweep` | RVV SAXPY strip mine (`-march=rv64gcv`) |
+| `false_share` | Two OpenMP threads on adjacent lines |
+
+Integration tests skip microbenchmark cases if the ELF is missing.
+
+---
+
+## Invariant tests (Python integration)
+
+| Test | Regression caught |
+|------|-------------------|
+| `test_quetz_riscv_class_balance` | Plugin class tags do not sum to `instruction_count` |
+| `test_quetz_aarch64_class_balance` | Same identity on AArch64 |
+| `test_quetz_latency_floor` | `read_latency` per request below MemController `access_time` |
+| `test_quetz_determinism` | Filtered stats differ between identical back-to-back runs |
+| `test_quetz_stride_scaling` | Stride-1 vs stride-64 read traffic ordering through L1 |
+| `test_quetz_config_negative` | `compute_latency_*` without `detailed_instruction_tracking` not fatal |
+| `test_quetz_multicore_quorum` | Halt quorum ends sim before vCPU 1 runs |
+| `test_quetz_wide_split` | Cache-line split stats not incremented |
+| `test_quetz_sysmode_filtered_only` | `filtered` region still forwards to memHierarchy |
+| `test_quetz_sysmode_uart_capture` | UART THR bytes not captured in stdout |
+
+---
+
+## libmem ground-truth validation
+
+`tests/validate_against_libmem.py` compares Quetz reconciled load/store counts against QEMU’s reference `libmem.so` plugin (same guest: vanadis RISC-V hello). Soft tolerance is 5% until syscall-emulation deltas are baselined.
+
+```bash
+export SST_HOME=/opt/sst
+export QEMU_PLUGIN_DIR=/opt/qemu/lib/qemu/plugins
+python3 src/sst/elements/quetz/tests/validate_against_libmem.py
+```
+
+Skipped automatically when `libmem.so` is absent. `docker/run-quetz-tests.sh` runs this after unit + integration tests (warn-only on failure).
 
 ---
 
