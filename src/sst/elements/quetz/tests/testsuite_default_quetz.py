@@ -22,6 +22,14 @@ from sst_unittest_support import *
 from sst_unittest_parameterized import parameterized
 import os
 
+from quetz_test_helpers import (
+    compare_gold,
+    make_sysmode_env,
+    make_usermode_env,
+    parse_stats,
+    stat_sum,
+)
+
 module_init = 0
 module_sema = threading.Semaphore()
 quetz_test_matrix = []
@@ -29,25 +37,6 @@ quetz_sysmode_matrix = []
 
 updateFiles = False
 # updateFiles = True   # uncomment to regenerate gold files
-
-# ---------------------------------------------------------------------------
-# Filter: keep only " cpu." event-count lines; discard timing stats.
-# ---------------------------------------------------------------------------
-# instruction_count and no_ops are also excluded: they include idle NOP cycles
-# injected during QEMU startup and async-shutdown spin loops, making them
-# non-deterministic across environments and QEMU versions.
-_TIMING_KEYWORDS = ("_latency", ".cycles.", "active_cycles", "stall_cycles",
-                    "instruction_count", "no_ops")
-
-class QuetzStatsFilter(LineFilter):
-    """Keep only deterministic event-count statistics from QuetzComponent."""
-    def filter(self, line):
-        if not line.startswith(" cpu."):
-            return None
-        for kw in _TIMING_KEYWORDS:
-            if kw in line:
-                return None
-        return line
 
 # ---------------------------------------------------------------------------
 # Test matrix
@@ -81,7 +70,8 @@ build_quetz_test_matrix()
 #   (testname, qemu_target, exe_rel, qemu_args, loader,
 #    ram_start, ram_end, memmaps, uart_echo_input, timeout_sec)
 #
-# memmaps is a list of (name, start, end, type) tuples.
+# region_handlers is a list of (name, start, end, type) tuples.
+# type is filtered | uart | memory (mapped to quetz.*RegionHandler).
 # uart_echo_input is None (no echo) or a bytes object to inject via stdin.
 # ---------------------------------------------------------------------------
 def build_quetz_sysmode_matrix():
@@ -97,7 +87,7 @@ def build_quetz_sysmode_matrix():
          "-machine virt -nographic -bios none",
          "-kernel",
          0x00000000, 0xFFFFFFFF,
-         [("sub_ram", 0x00000000, 0x7FFFFFFF, "filtered")],
+         [("sub_ram", 0x00000000, 0x7FFFFFFF, "filtered")],  # region_handlers
          None, 120),
 
         ("uart_echo",
@@ -106,7 +96,10 @@ def build_quetz_sysmode_matrix():
          "-machine virt -nographic -bios none",
          "-kernel",
          0x00000000, 0xFFFFFFFF,
-         [("sub_ram", 0x00000000, 0x7FFFFFFF, "filtered")],
+         # uart0 must precede sub_ram: sub_ram covers 0x0-0x7fffffff and would
+         # otherwise swallow MMIO at 0x10000000 before uart capture runs.
+         [("uart0", 0x10000000, 0x10000FFF, "uart"),
+          ("sub_ram", 0x00000000, 0x7FFFFFFF, "filtered")],
          b"ABCDE", 120),
 
         ("arm_m7_hello",
@@ -190,13 +183,8 @@ class testcase_quetz(SSTTestCase):
         ref_outfile = os.path.join(test_path, "usermode", "small",
                                    testname, "sst.stdout.gold")
 
-        os.environ["QUETZ_EXE"]     = exe_abs
-        os.environ["QUETZ_QEMU"]    = qemu_bin
-        os.environ["QUETZ_PLUGIN"]  = os.path.join(sst_libexec,
-                                                    "libqemu_sst_plugin.so")
-        os.environ["QUETZ_WITH_L1"] = "1" if with_l1 else "0"
-        os.environ["QUETZ_ISA"]     = isa
-        os.environ["SST_HOME"]      = sst_prefix
+        make_usermode_env(sst_prefix, sst_libexec, qemu_bin, exe_abs,
+                          with_l1=with_l1, isa=isa, detailed=True)
 
         oscmd = self.run_sst(sdlfile, sst_outfile, sst_errfile,
                              mpi_out_files=mpifiles,
@@ -204,23 +192,177 @@ class testcase_quetz(SSTTestCase):
                              timeout_sec=testtimeout)
 
         if os.path.exists(ref_outfile):
-            cmp_result = testing_compare_filtered_diff(
-                testname, sst_outfile, ref_outfile,
-                filters=[QuetzStatsFilter()])
+            cmp_result = compare_gold(testname, sst_outfile, ref_outfile,
+                                      update_files=updateFiles)
             if not cmp_result:
-                diffdata = testing_get_diff_data(testname)
                 log_failure(oscmd)
-                log_failure(diffdata)
-                if updateFiles:
-                    import subprocess
-                    print("Updating gold file", sst_outfile, "->", ref_outfile)
-                    subprocess.call(["cp", sst_outfile, ref_outfile])
             self.assertTrue(cmp_result,
                 "Quetz output {} does not match reference {}".format(
                     sst_outfile, ref_outfile))
         else:
             log_testing_note(
                 "Quetz test {} has no gold file; did not compare".format(testname))
+
+    # -------------------------------------------------------------------------
+    # Multicore halt-quorum test: verify both vCPUs ran to completion.
+    # -------------------------------------------------------------------------
+    def test_quetz_multicore_quorum(self):
+        test_path = self.get_testsuite_dir()
+
+        sst_prefix  = sstsimulator_conf_get_value("SSTCore", "prefix",     str, "")
+        sst_bindir  = sstsimulator_conf_get_value("SSTCore", "bindir",     str, "")
+        sst_libexec = sstsimulator_conf_get_value("SSTCore", "libexecdir", str, "")
+
+        qemu_bin = os.path.join(sst_bindir, "qemu-riscv64")
+        if not os.path.exists(qemu_bin):
+            self.skipTest("qemu-riscv64 not found at {}; skipping".format(qemu_bin))
+
+        sdlfile = os.path.join(test_path, "usermode", "test_multicore.py")
+        if not os.path.exists(sdlfile):
+            self.skipTest("test_multicore.py not found; skipping")
+
+        outdir = os.path.join(self.get_test_output_run_dir(),
+                              "quetz_tests", "multicore_quorum")
+        os.makedirs(outdir, exist_ok=True)
+
+        sst_outfile = os.path.join(outdir, "multicore_quorum.out")
+        sst_errfile = os.path.join(outdir, "multicore_quorum.err")
+        mpifiles    = os.path.join(outdir, "multicore_quorum.testfile")
+
+        os.environ["SST_HOME"] = sst_prefix
+
+        self.run_sst(sdlfile, sst_outfile, sst_errfile,
+                     mpi_out_files=mpifiles,
+                     set_cwd=outdir,
+                     timeout_sec=240)
+
+        # Both vCPUs must have issued at least one read request, proving the
+        # halt-quorum logic did not tear down the simulation early.
+        with open(sst_outfile, "r") as f:
+            output = f.read()
+        self.assertIn("read_requests.0", output,
+            "vCPU 0 read_requests not found in output")
+        self.assertIn("read_requests.1", output,
+            "vCPU 1 read_requests not found in output")
+
+        val = stat_sum(output, "read_requests.1")
+        self.assertIsNotNone(val, "Could not parse read_requests.1 from output")
+        self.assertGreater(val, 0,
+            "vCPU 1 read_requests is 0 — halt quorum may have "
+            "terminated simulation before core 1 completed")
+
+    # -------------------------------------------------------------------------
+    # Class-balance identity: for RISC-V with detailed tracking, the sum of
+    # all per-class instruction counters must equal instruction_count.
+    # -------------------------------------------------------------------------
+    def test_quetz_riscv_class_balance(self):
+        test_path = self.get_testsuite_dir()
+
+        sst_prefix  = sstsimulator_conf_get_value("SSTCore", "prefix",     str, "")
+        sst_bindir  = sstsimulator_conf_get_value("SSTCore", "bindir",     str, "")
+        sst_libexec = sstsimulator_conf_get_value("SSTCore", "libexecdir", str, "")
+
+        qemu_bin = os.path.join(sst_bindir, "qemu-riscv64")
+        vanadis_hello = os.path.normpath(os.path.join(
+            test_path, "../../vanadis/tests/small"
+                       "/basic-io/hello-world/riscv64/hello-world"))
+
+        if not os.path.exists(qemu_bin):
+            self.skipTest("qemu-riscv64 not found; skipping")
+        if not os.path.exists(vanadis_hello):
+            self.skipTest("vanadis hello-world not found; skipping")
+
+        outdir = os.path.join(self.get_test_output_run_dir(),
+                              "quetz_tests", "class_balance")
+        os.makedirs(outdir, exist_ok=True)
+
+        sdlfile     = os.path.join(test_path, "usermode", "basic_quetz.py")
+        sst_outfile = os.path.join(outdir, "class_balance.out")
+        sst_errfile = os.path.join(outdir, "class_balance.err")
+        mpifiles    = os.path.join(outdir, "class_balance.testfile")
+
+        make_usermode_env(sst_prefix, sst_libexec, qemu_bin, vanadis_hello,
+                          with_l1=False, isa="", detailed=True)
+
+        self.run_sst(sdlfile, sst_outfile, sst_errfile,
+                     mpi_out_files=mpifiles,
+                     set_cwd=outdir,
+                     timeout_sec=120)
+
+        stats = parse_stats(sst_outfile)
+
+        needed = ["cpu.read_requests.0", "cpu.write_requests.0",
+                  "cpu.int_compute.0", "cpu.fp_compute.0",
+                  "cpu.vec_compute.0", "cpu.branch.0",
+                  "cpu.instruction_count.0"]
+        for s in needed:
+            self.assertIn(s, stats,
+                "Statistic {} not found in output".format(s))
+
+        # instruction_count counts mem ops + NOPs.  Classified NOPs appear in
+        # int/fp/vec/branch; unclassified (OTHER) NOPs only appear in no_ops.
+        classified_nop = (stats["cpu.int_compute.0"] +
+                          stats["cpu.fp_compute.0"] +
+                          stats["cpu.vec_compute.0"] +
+                          stats["cpu.branch.0"])
+        other_nop = stats["cpu.no_ops.0"] - classified_nop
+        class_sum = (stats["cpu.read_requests.0"] +
+                     stats["cpu.write_requests.0"] +
+                     classified_nop + other_nop)
+        insn_count = stats["cpu.instruction_count.0"]
+
+        self.assertEqual(class_sum, insn_count,
+            "Class-balance identity failed: "
+            "reads({}) + writes({}) + classified_nops({}) + other_nops({}) "
+            "= {} != instruction_count({})".format(
+                stats["cpu.read_requests.0"],
+                stats["cpu.write_requests.0"],
+                classified_nop, other_nop,
+                class_sum, insn_count))
+
+    # -------------------------------------------------------------------------
+    # Cache-line split: x86 hello must produce split_read_requests > 0.
+    # -------------------------------------------------------------------------
+    def test_quetz_wide_split(self):
+        test_path = self.get_testsuite_dir()
+
+        sst_prefix  = sstsimulator_conf_get_value("SSTCore", "prefix",     str, "")
+        sst_bindir  = sstsimulator_conf_get_value("SSTCore", "bindir",     str, "")
+        sst_libexec = sstsimulator_conf_get_value("SSTCore", "libexecdir", str, "")
+
+        qemu_bin = os.path.join(sst_bindir, "qemu-x86_64")
+        exe_abs  = os.path.normpath(os.path.join(test_path, "binaries", "hello_x86_64"))
+
+        if not os.path.exists(qemu_bin):
+            self.skipTest("qemu-x86_64 not found; skipping")
+        if not os.path.exists(exe_abs):
+            self.skipTest("hello_x86_64 binary not found; skipping")
+
+        outdir = os.path.join(self.get_test_output_run_dir(),
+                              "quetz_tests", "wide_split")
+        os.makedirs(outdir, exist_ok=True)
+
+        sdlfile     = os.path.join(test_path, "usermode", "test_wide_split.py")
+        sst_outfile = os.path.join(outdir, "wide_split.out")
+        sst_errfile = os.path.join(outdir, "wide_split.err")
+        mpifiles    = os.path.join(outdir, "wide_split.testfile")
+
+        os.environ["SST_HOME"] = sst_prefix
+
+        self.run_sst(sdlfile, sst_outfile, sst_errfile,
+                     mpi_out_files=mpifiles,
+                     set_cwd=outdir,
+                     timeout_sec=120)
+
+        with open(sst_outfile, "r") as f:
+            output = f.read()
+
+        val = stat_sum(output, "split_read_requests.0")
+        self.assertIsNotNone(val,
+            "Could not parse split_read_requests.0 from output")
+        self.assertGreater(val, 0,
+            "split_read_requests.0 is 0 — wide-access line split "
+            "loop may not be exercised")
 
 
 # ---------------------------------------------------------------------------
@@ -289,24 +431,9 @@ class testcase_quetz_sysmode(SSTTestCase):
                 f.write(uart_echo_input)
             stdin_file = stdin_path
 
-        os.environ["QUETZ_EXE"]         = exe_abs
-        os.environ["QUETZ_QEMU"]        = qemu_bin
-        os.environ["QUETZ_PLUGIN"]      = os.path.join(sst_libexec,
-                                                        "libqemu_sst_plugin.so")
-        os.environ["QUETZ_QEMU_ARGS"]   = qemu_args
-        os.environ["QUETZ_LOADER"]      = loader
-        os.environ["QUETZ_RAM_START"]   = str(ram_start)
-        os.environ["QUETZ_RAM_END"]     = str(ram_end)
-        os.environ["QUETZ_MEMMAP_COUNT"]= str(len(memmaps))
-        os.environ["SST_HOME"]          = sst_prefix
-        os.environ["QUETZ_STDIN_FILE"]  = stdin_file
-        os.environ["QUETZ_STDOUT_FILE"] = ""
-
-        for n, (name, start, end, rtype) in enumerate(memmaps):
-            os.environ[f"QUETZ_MEMMAP{n}_NAME"]  = name
-            os.environ[f"QUETZ_MEMMAP{n}_START"] = str(start)
-            os.environ[f"QUETZ_MEMMAP{n}_END"]   = str(end)
-            os.environ[f"QUETZ_MEMMAP{n}_TYPE"]  = rtype
+        make_sysmode_env(sst_prefix, sst_libexec, qemu_bin, exe_abs,
+                         qemu_args, loader, ram_start, ram_end, memmaps,
+                         stdin_file=stdin_file)
 
         self.run_sst(sdlfile, sst_outfile, sst_errfile,
                      mpi_out_files=mpifiles,
@@ -314,16 +441,8 @@ class testcase_quetz_sysmode(SSTTestCase):
                      timeout_sec=testtimeout)
 
         if os.path.exists(ref_outfile):
-            cmp_result = testing_compare_filtered_diff(
-                testname, sst_outfile, ref_outfile,
-                filters=[QuetzStatsFilter()])
-            if not cmp_result:
-                diffdata = testing_get_diff_data(testname)
-                log_failure(diffdata)
-                if updateFiles:
-                    import subprocess
-                    print("Updating gold file", sst_outfile, "->", ref_outfile)
-                    subprocess.call(["cp", sst_outfile, ref_outfile])
+            cmp_result = compare_gold(testname, sst_outfile, ref_outfile,
+                                      update_files=updateFiles)
             self.assertTrue(cmp_result,
                 "Quetz sysmode output {} does not match reference {}".format(
                     sst_outfile, ref_outfile))
@@ -331,3 +450,79 @@ class testcase_quetz_sysmode(SSTTestCase):
             log_testing_note(
                 "Quetz sysmode test {} has no gold file; did not compare".format(
                     testname))
+
+        # Positive UART capture check: when the test injects stdin bytes for
+        # UART echo, verify the captured UART output appears in SST's stdout.
+        # The QuetzStatsFilter strips non-stat lines so this is not covered by
+        # the gold-file comparison above.
+        if uart_echo_input is not None and os.path.exists(sst_outfile):
+            with open(sst_outfile, "r") as f:
+                raw_output = f.read()
+            self.assertIn("UART[0]:", raw_output,
+                "Sysmode UART echo test '{}' did not produce UART[0]: output "
+                "— store-data capture may not be working (requires QEMU 9.0+ "
+                "with qemu_plugin_mem_get_value)".format(testname))
+
+    # -------------------------------------------------------------------------
+    # QuetzConfigManager platform-preset coverage: run the same firmware as
+    # the riscv64_virt_hello sysmode test, but supply only platform= and let
+    # the C++ preset register supply qemu_args, loader, and region handlers.
+    # Reuses the riscv64_virt_hello gold file so any drift would surface as
+    # a stat mismatch.
+    def test_quetz_sysmode_preset_riscv64_virt(self):
+        testname    = "preset_riscv64_virt"
+        gold_test   = "riscv64_virt_hello"
+        qemu_target = "qemu-system-riscv64"
+        platform    = "riscv64_virt"
+        exe_rel     = "sysmode/firmware/riscv_virt_hello"
+
+        test_path   = self.get_testsuite_dir()
+        sst_prefix  = sstsimulator_conf_get_value("SSTCore", "prefix",     str, "")
+        sst_bindir  = sstsimulator_conf_get_value("SSTCore", "bindir",     str, "")
+        sst_libexec = sstsimulator_conf_get_value("SSTCore", "libexecdir", str, "")
+
+        import shutil
+        qemu_bin = os.path.join(sst_bindir, qemu_target)
+        if not os.path.exists(qemu_bin):
+            found = shutil.which(qemu_target)
+            if found:
+                qemu_bin = found
+        exe_abs = os.path.normpath(os.path.join(test_path, exe_rel))
+
+        if not os.path.exists(qemu_bin):
+            self.skipTest("{} not found; skipping".format(qemu_target))
+        if not os.path.exists(exe_abs):
+            self.skipTest("firmware not found at {}; skipping".format(exe_abs))
+
+        outdir = os.path.join(self.get_test_output_run_dir(),
+                              "quetz_sysmode_tests", testname)
+        os.makedirs(outdir, exist_ok=True)
+
+        sdlfile     = os.path.join(test_path, "sysmode", "preset_quetz_sysmode.py")
+        test_label  = "test_quetz_sysmode_{}".format(testname)
+        sst_outfile = os.path.join(outdir, test_label + ".out")
+        sst_errfile = os.path.join(outdir, test_label + ".err")
+        mpifiles    = os.path.join(outdir, test_label + ".testfile")
+        ref_outfile = os.path.join(test_path, "sysmode", "small",
+                                   gold_test, "sst.stdout.gold")
+
+        make_sysmode_env(sst_prefix, sst_libexec, qemu_bin, exe_abs,
+                         "", "-kernel", 0, 0xFFFFFFFF, [],
+                         platform=platform)
+
+        self.run_sst(sdlfile, sst_outfile, sst_errfile,
+                     mpi_out_files=mpifiles,
+                     set_cwd=outdir,
+                     timeout_sec=120)
+
+        if os.path.exists(ref_outfile):
+            cmp_result = compare_gold(testname, sst_outfile, ref_outfile,
+                                      update_files=updateFiles)
+            self.assertTrue(cmp_result,
+                "Quetz preset sysmode output {} does not match reference {} "
+                "(platform preset should yield equivalent stats to explicit "
+                "region handler params)".format(sst_outfile, ref_outfile))
+        else:
+            log_testing_note(
+                "No gold file at {}; preset test ran but was not compared".format(
+                    ref_outfile))
