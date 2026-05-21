@@ -23,7 +23,9 @@ from sst_unittest_parameterized import parameterized
 import os
 
 from quetz_test_helpers import (
+    assert_class_balance,
     compare_gold,
+    filtered_stat_lines,
     make_sysmode_env,
     make_usermode_env,
     parse_stats,
@@ -289,36 +291,10 @@ class testcase_quetz(SSTTestCase):
                      set_cwd=outdir,
                      timeout_sec=120)
 
-        stats = parse_stats(sst_outfile)
-
-        needed = ["cpu.read_requests.0", "cpu.write_requests.0",
-                  "cpu.int_compute.0", "cpu.fp_compute.0",
-                  "cpu.vec_compute.0", "cpu.branch.0",
-                  "cpu.instruction_count.0"]
-        for s in needed:
-            self.assertIn(s, stats,
-                "Statistic {} not found in output".format(s))
-
-        # instruction_count counts mem ops + NOPs.  Classified NOPs appear in
-        # int/fp/vec/branch; unclassified (OTHER) NOPs only appear in no_ops.
-        classified_nop = (stats["cpu.int_compute.0"] +
-                          stats["cpu.fp_compute.0"] +
-                          stats["cpu.vec_compute.0"] +
-                          stats["cpu.branch.0"])
-        other_nop = stats["cpu.no_ops.0"] - classified_nop
-        class_sum = (stats["cpu.read_requests.0"] +
-                     stats["cpu.write_requests.0"] +
-                     classified_nop + other_nop)
-        insn_count = stats["cpu.instruction_count.0"]
-
-        self.assertEqual(class_sum, insn_count,
-            "Class-balance identity failed: "
-            "reads({}) + writes({}) + classified_nops({}) + other_nops({}) "
-            "= {} != instruction_count({})".format(
-                stats["cpu.read_requests.0"],
-                stats["cpu.write_requests.0"],
-                classified_nop, other_nop,
-                class_sum, insn_count))
+        try:
+            assert_class_balance(parse_stats(sst_outfile), core_id=0)
+        except AssertionError as e:
+            self.fail(str(e))
 
     # -------------------------------------------------------------------------
     # Cache-line split: x86 hello must produce split_read_requests > 0.
@@ -363,6 +339,195 @@ class testcase_quetz(SSTTestCase):
         self.assertGreater(val, 0,
             "split_read_requests.0 is 0 — wide-access line split "
             "loop may not be exercised")
+
+    # -------------------------------------------------------------------------
+    def test_quetz_aarch64_class_balance(self):
+        test_path = self.get_testsuite_dir()
+        sst_prefix  = sstsimulator_conf_get_value("SSTCore", "prefix",     str, "")
+        sst_bindir  = sstsimulator_conf_get_value("SSTCore", "bindir",     str, "")
+        sst_libexec = sstsimulator_conf_get_value("SSTCore", "libexecdir", str, "")
+
+        qemu_bin = os.path.join(sst_bindir, "qemu-aarch64")
+        exe_abs  = os.path.normpath(os.path.join(test_path, "binaries", "hello_aarch64"))
+
+        if not os.path.exists(qemu_bin):
+            self.skipTest("qemu-aarch64 not found; skipping")
+        if not os.path.exists(exe_abs):
+            self.skipTest("hello_aarch64 not found; skipping")
+
+        outdir = os.path.join(self.get_test_output_run_dir(),
+                              "quetz_tests", "aarch64_class_balance")
+        os.makedirs(outdir, exist_ok=True)
+
+        sdlfile     = os.path.join(test_path, "usermode", "basic_quetz.py")
+        sst_outfile = os.path.join(outdir, "aarch64_class_balance.out")
+        sst_errfile = os.path.join(outdir, "aarch64_class_balance.err")
+        mpifiles    = os.path.join(outdir, "aarch64_class_balance.testfile")
+
+        make_usermode_env(sst_prefix, sst_libexec, qemu_bin, exe_abs,
+                          with_l1=False, isa="aarch64", detailed=True)
+
+        self.run_sst(sdlfile, sst_outfile, sst_errfile,
+                     mpi_out_files=mpifiles, set_cwd=outdir, timeout_sec=120)
+
+        try:
+            assert_class_balance(parse_stats(sst_outfile), core_id=0)
+        except AssertionError as e:
+            self.fail(str(e))
+
+    # -------------------------------------------------------------------------
+    def test_quetz_latency_floor(self):
+        test_path = self.get_testsuite_dir()
+        sst_prefix  = sstsimulator_conf_get_value("SSTCore", "prefix",     str, "")
+        sst_bindir  = sstsimulator_conf_get_value("SSTCore", "bindir",     str, "")
+        sst_libexec = sstsimulator_conf_get_value("SSTCore", "libexecdir", str, "")
+
+        qemu_bin = os.path.join(sst_bindir, "qemu-riscv64")
+        vanadis_hello = os.path.normpath(os.path.join(
+            test_path, "../../vanadis/tests/small"
+                       "/basic-io/hello-world/riscv64/hello-world"))
+
+        if not os.path.exists(qemu_bin):
+            self.skipTest("qemu-riscv64 not found; skipping")
+        if not os.path.exists(vanadis_hello):
+            self.skipTest("vanadis hello-world not found; skipping")
+
+        outdir = os.path.join(self.get_test_output_run_dir(),
+                              "quetz_tests", "latency_floor")
+        os.makedirs(outdir, exist_ok=True)
+
+        sdlfile     = os.path.join(test_path, "usermode", "basic_quetz.py")
+        sst_outfile = os.path.join(outdir, "latency_floor.out")
+        sst_errfile = os.path.join(outdir, "latency_floor.err")
+        mpifiles    = os.path.join(outdir, "latency_floor.testfile")
+
+        make_usermode_env(sst_prefix, sst_libexec, qemu_bin, vanadis_hello,
+                          with_l1=False, detailed=True)
+
+        self.run_sst(sdlfile, sst_outfile, sst_errfile,
+                     mpi_out_files=mpifiles, set_cwd=outdir, timeout_sec=120)
+
+        stats = parse_stats(sst_outfile)
+        reads = stats.get("cpu.read_requests.0", 0)
+        lat   = stats.get("cpu.read_latency.0", 0)
+        self.assertGreater(reads, 0, "no read_requests recorded")
+        if reads > 0:
+            self.assertGreaterEqual(lat / reads, 100,
+                "read_latency per request below 100ns backend access_time")
+
+    # -------------------------------------------------------------------------
+    def test_quetz_determinism(self):
+        test_path = self.get_testsuite_dir()
+        sst_prefix  = sstsimulator_conf_get_value("SSTCore", "prefix",     str, "")
+        sst_bindir  = sstsimulator_conf_get_value("SSTCore", "bindir",     str, "")
+        sst_libexec = sstsimulator_conf_get_value("SSTCore", "libexecdir", str, "")
+
+        qemu_bin = os.path.join(sst_bindir, "qemu-riscv64")
+        vanadis_hello = os.path.normpath(os.path.join(
+            test_path, "../../vanadis/tests/small"
+                       "/basic-io/hello-world/riscv64/hello-world"))
+
+        if not os.path.exists(qemu_bin) or not os.path.exists(vanadis_hello):
+            self.skipTest("riscv64 hello prerequisites missing; skipping")
+
+        sdlfile = os.path.join(test_path, "usermode", "basic_quetz.py")
+        outdir  = os.path.join(self.get_test_output_run_dir(),
+                               "quetz_tests", "determinism")
+        os.makedirs(outdir, exist_ok=True)
+
+        make_usermode_env(sst_prefix, sst_libexec, qemu_bin, vanadis_hello,
+                          with_l1=False, detailed=True)
+
+        lines_a = lines_b = None
+        for run_id, label in enumerate(("a", "b")):
+            out = os.path.join(outdir, "determinism_{}.out".format(label))
+            err = os.path.join(outdir, "determinism_{}.err".format(label))
+            mpi = os.path.join(outdir, "determinism_{}.testfile".format(label))
+            self.run_sst(sdlfile, out, err, mpi_out_files=mpi,
+                         set_cwd=outdir, timeout_sec=120)
+            if run_id == 0:
+                lines_a = filtered_stat_lines(out)
+            else:
+                lines_b = filtered_stat_lines(out)
+
+        self.assertEqual(lines_a, lines_b,
+            "Filtered stat lines differ between back-to-back runs")
+
+    # -------------------------------------------------------------------------
+    def test_quetz_stride_scaling(self):
+        test_path = self.get_testsuite_dir()
+        sst_prefix  = sstsimulator_conf_get_value("SSTCore", "prefix",     str, "")
+        sst_bindir  = sstsimulator_conf_get_value("SSTCore", "bindir",     str, "")
+        sst_libexec = sstsimulator_conf_get_value("SSTCore", "libexecdir", str, "")
+
+        qemu_bin = os.path.join(sst_bindir, "qemu-riscv64")
+        if not os.path.exists(qemu_bin):
+            self.skipTest("qemu-riscv64 not found; skipping")
+
+        sdlfile = os.path.join(test_path, "usermode", "basic_quetz.py")
+        outdir  = os.path.join(self.get_test_output_run_dir(),
+                               "quetz_tests", "stride_scaling")
+        os.makedirs(outdir, exist_ok=True)
+
+        reads_by_stride = {}
+        for stride, exe_name in ((1, "stride_read_1"), (64, "stride_read_64")):
+            exe_abs = os.path.normpath(os.path.join(test_path, "binaries", exe_name))
+            if not os.path.exists(exe_abs):
+                self.skipTest("{} not built; run build_microbench.sh".format(exe_name))
+
+            out = os.path.join(outdir, "{}.out".format(exe_name))
+            err = os.path.join(outdir, "{}.err".format(exe_name))
+            mpi = os.path.join(outdir, "{}.testfile".format(exe_name))
+            make_usermode_env(sst_prefix, sst_libexec, qemu_bin, exe_abs,
+                              with_l1=True, detailed=False)
+            self.run_sst(sdlfile, out, err, mpi_out_files=mpi,
+                         set_cwd=outdir, timeout_sec=180)
+            reads_by_stride[stride] = parse_stats(out).get("cpu.read_requests.0", 0)
+
+        self.assertGreater(reads_by_stride[1], reads_by_stride[64],
+            "stride-1 should issue more read_requests than stride-64 through L1")
+
+    # -------------------------------------------------------------------------
+    def test_quetz_config_negative(self):
+        test_path = self.get_testsuite_dir()
+        sst_prefix  = sstsimulator_conf_get_value("SSTCore", "prefix",     str, "")
+        sst_bindir  = sstsimulator_conf_get_value("SSTCore", "bindir",     str, "")
+        sst_libexec = sstsimulator_conf_get_value("SSTCore", "libexecdir", str, "")
+
+        qemu_bin = os.path.join(sst_bindir, "qemu-riscv64")
+        vanadis_hello = os.path.normpath(os.path.join(
+            test_path, "../../vanadis/tests/small"
+                       "/basic-io/hello-world/riscv64/hello-world"))
+
+        if not os.path.exists(qemu_bin) or not os.path.exists(vanadis_hello):
+            self.skipTest("riscv64 hello prerequisites missing; skipping")
+
+        outdir = os.path.join(self.get_test_output_run_dir(),
+                              "quetz_tests", "config_negative")
+        os.makedirs(outdir, exist_ok=True)
+
+        sdlfile     = os.path.join(test_path, "usermode", "test_config_bad.py")
+        sst_outfile = os.path.join(outdir, "config_negative.out")
+        sst_errfile = os.path.join(outdir, "config_negative.err")
+        mpifiles    = os.path.join(outdir, "config_negative.testfile")
+
+        os.environ["QUETZ_EXE"]  = vanadis_hello
+        os.environ["QUETZ_QEMU"] = qemu_bin
+        os.environ["SST_HOME"]   = sst_prefix
+
+        self.run_sst(sdlfile, sst_outfile, sst_errfile,
+                     mpi_out_files=mpifiles, set_cwd=outdir, timeout_sec=60)
+
+        err_text = ""
+        if os.path.exists(sst_errfile):
+            with open(sst_errfile, "r") as f:
+                err_text = f.read()
+        if os.path.exists(sst_outfile):
+            with open(sst_outfile, "r") as f:
+                err_text += f.read()
+
+        self.assertIn("detailed_instruction_tracking", err_text,
+            "Expected fatal about compute_latency without detailed tracking")
 
 
 # ---------------------------------------------------------------------------
@@ -526,3 +691,107 @@ class testcase_quetz_sysmode(SSTTestCase):
             log_testing_note(
                 "No gold file at {}; preset test ran but was not compared".format(
                     ref_outfile))
+
+    # -------------------------------------------------------------------------
+    def test_quetz_sysmode_filtered_only(self):
+        test_path = self.get_testsuite_dir()
+        sst_prefix  = sstsimulator_conf_get_value("SSTCore", "prefix",     str, "")
+        sst_bindir  = sstsimulator_conf_get_value("SSTCore", "bindir",     str, "")
+        sst_libexec = sstsimulator_conf_get_value("SSTCore", "libexecdir", str, "")
+
+        qemu_target = "qemu-system-riscv64"
+        exe_rel     = "sysmode/firmware/riscv_virt_hello"
+        import shutil
+        qemu_bin = os.path.join(sst_bindir, qemu_target)
+        if not os.path.exists(qemu_bin):
+            found = shutil.which(qemu_target)
+            if found:
+                qemu_bin = found
+        exe_abs = os.path.normpath(os.path.join(test_path, exe_rel))
+
+        if not os.path.exists(qemu_bin) or not os.path.exists(exe_abs):
+            self.skipTest("sysmode prerequisites missing; skipping")
+
+        outdir = os.path.join(self.get_test_output_run_dir(),
+                              "quetz_sysmode_tests", "filtered_only")
+        os.makedirs(outdir, exist_ok=True)
+
+        sdlfile     = os.path.join(test_path, "sysmode", "basic_quetz_sysmode.py")
+        sst_outfile = os.path.join(outdir, "filtered_only.out")
+        sst_errfile = os.path.join(outdir, "filtered_only.err")
+        mpifiles    = os.path.join(outdir, "filtered_only.testfile")
+
+        memmaps = [("all", 0, 0xFFFFFFFF, "filtered")]
+        make_sysmode_env(sst_prefix, sst_libexec, qemu_bin, exe_abs,
+                         "-machine virt -nographic -bios none",
+                         "-kernel", 0, 0xFFFFFFFF, memmaps)
+
+        self.run_sst(sdlfile, sst_outfile, sst_errfile,
+                     mpi_out_files=mpifiles, set_cwd=outdir, timeout_sec=120)
+
+        stats = parse_stats(sst_outfile)
+        fwd_reads  = stats.get("cpu.read_requests.0", 0)
+        fwd_writes = stats.get("cpu.write_requests.0", 0)
+        filt_reads = stats.get("cpu.filtered_reads.0", 0)
+        filt_writes = stats.get("cpu.filtered_writes.0", 0)
+
+        self.assertEqual(fwd_reads + fwd_writes, 0,
+            "filtered-only sysmode should not forward traffic to memHierarchy")
+        self.assertGreater(filt_reads + filt_writes, 0,
+            "filtered-only sysmode should record filtered MMIO/RAM ops")
+
+    # -------------------------------------------------------------------------
+    def test_quetz_sysmode_uart_capture(self):
+        test_path = self.get_testsuite_dir()
+        sst_prefix  = sstsimulator_conf_get_value("SSTCore", "prefix",     str, "")
+        sst_bindir  = sstsimulator_conf_get_value("SSTCore", "bindir",     str, "")
+        sst_libexec = sstsimulator_conf_get_value("SSTCore", "libexecdir", str, "")
+
+        qemu_target = "qemu-system-riscv64"
+        exe_rel     = "sysmode/firmware/riscv_virt_uart_echo"
+        import shutil
+        qemu_bin = os.path.join(sst_bindir, qemu_target)
+        if not os.path.exists(qemu_bin):
+            found = shutil.which(qemu_target)
+            if found:
+                qemu_bin = found
+        exe_abs = os.path.normpath(os.path.join(test_path, exe_rel))
+
+        if not os.path.exists(qemu_bin) or not os.path.exists(exe_abs):
+            self.skipTest("uart echo firmware missing; skipping")
+
+        outdir = os.path.join(self.get_test_output_run_dir(),
+                              "quetz_sysmode_tests", "uart_capture")
+        os.makedirs(outdir, exist_ok=True)
+
+        stdin_path = os.path.join(outdir, "uart_stdin.bin")
+        echo_input = b"ABCDE"
+        with open(stdin_path, "wb") as f:
+            f.write(echo_input)
+
+        memmaps = [
+            ("uart0", 0x10000000, 0x10000FFF, "uart"),
+            ("sub_ram", 0x00000000, 0x7FFFFFFF, "filtered"),
+        ]
+        make_sysmode_env(sst_prefix, sst_libexec, qemu_bin, exe_abs,
+                         "-machine virt -nographic -bios none",
+                         "-kernel", 0, 0xFFFFFFFF, memmaps,
+                         stdin_file=stdin_path)
+
+        sdlfile     = os.path.join(test_path, "sysmode", "basic_quetz_sysmode.py")
+        sst_outfile = os.path.join(outdir, "uart_capture.out")
+        sst_errfile = os.path.join(outdir, "uart_capture.err")
+        mpifiles    = os.path.join(outdir, "uart_capture.testfile")
+
+        self.run_sst(sdlfile, sst_outfile, sst_errfile,
+                     mpi_out_files=mpifiles, set_cwd=outdir, timeout_sec=120)
+
+        with open(sst_outfile, "r") as f:
+            raw = f.read()
+        self.assertIn("UART[0]:", raw)
+        idx = raw.find("UART[0]:")
+        self.assertNotEqual(idx, -1)
+        line = raw[idx:raw.find("\n", idx)]
+        for ch in echo_input:
+            self.assertIn(chr(ch), line,
+                "UART capture missing byte {!r}".format(ch))
