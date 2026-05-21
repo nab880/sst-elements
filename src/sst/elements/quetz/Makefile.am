@@ -137,7 +137,7 @@ install-exec-hook:
 .PHONY: check-quetz-unit check-quetz-integration
 
 check-quetz-unit:
-	@$(abs_srcdir)/tests/unit/run_unit_tests.sh
+	@SST_HOME="$${SST_HOME:-/opt/sst}" $(abs_srcdir)/tests/unit/run_unit_tests.sh
 
 check-quetz-integration:
-	@$(SST_PREFIX)/bin/sst-test-elements -p $(abs_srcdir)/tests/testsuite_default_quetz.py
+	@"$${SST_HOME:-/opt/sst}/bin/sst-test-elements" -p $(abs_srcdir)/tests/testsuite_default_quetz.py

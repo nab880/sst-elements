@@ -42,5 +42,5 @@ TEST_CASE("riscv32 opcodes") {
 TEST_CASE("riscv compressed") {
     CHECK(classify_riscv_insn(0x0000u) == classify_rvc_rv64(0x0000u));
     CHECK(classify_rvc_rv64(0x4000u) == QUETZ_INSN_INT_MEM);
-    CHECK(classify_rvc_rv64(0x2000u) == QUETZ_INSN_BRANCH);
+    CHECK(classify_rvc_rv64(0xC001u) == QUETZ_INSN_BRANCH);
 }
