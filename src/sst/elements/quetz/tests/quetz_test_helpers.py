@@ -91,6 +91,50 @@ def make_sysmode_env(sst_prefix, sst_libexec, qemu_bin, exe_abs,
         os.environ[f"QUETZ_REGION_HANDLER{n}_TYPE"] = rtype
 
 
+def filtered_stat_lines(outfile):
+    """Return sorted deterministic stat lines from an SST stdout file."""
+    filt = QuetzStatsFilter()
+    lines = []
+    with open(outfile, "r") as f:
+        for line in f:
+            kept = filt.filter(line)
+            if kept is not None:
+                lines.append(kept.rstrip("\n"))
+    return lines
+
+
+def assert_class_balance(stats, core_id=0):
+    """Verify per-class instruction counters sum to instruction_count."""
+    cid = str(core_id)
+    needed = [
+        "cpu.read_requests." + cid,
+        "cpu.write_requests." + cid,
+        "cpu.int_compute." + cid,
+        "cpu.fp_compute." + cid,
+        "cpu.vec_compute." + cid,
+        "cpu.branch." + cid,
+        "cpu.instruction_count." + cid,
+        "cpu.no_ops." + cid,
+    ]
+    for s in needed:
+        if s not in stats:
+            raise AssertionError("Statistic {} not found in output".format(s))
+
+    classified_nop = (stats["cpu.int_compute." + cid] +
+                      stats["cpu.fp_compute." + cid] +
+                      stats["cpu.vec_compute." + cid] +
+                      stats["cpu.branch." + cid])
+    other_nop = stats["cpu.no_ops." + cid] - classified_nop
+    class_sum = (stats["cpu.read_requests." + cid] +
+                 stats["cpu.write_requests." + cid] +
+                 classified_nop + other_nop)
+    insn_count = stats["cpu.instruction_count." + cid]
+    if class_sum != insn_count:
+        raise AssertionError(
+            "Class-balance identity failed: sum {} != instruction_count {}".format(
+                class_sum, insn_count))
+
+
 def compare_gold(testname, sst_outfile, ref_outfile, update_files=False):
     """Diff sst_outfile against ref_outfile; optionally refresh gold."""
     from sst_unittest_support import (
