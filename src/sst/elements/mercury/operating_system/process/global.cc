@@ -18,6 +18,8 @@
 #include <mercury/operating_system/process/thread.h>
 #include <mercury/operating_system/process/cppglobal.h>
 
+#include <cstdlib>
+
 extern "C" {
 char* static_init_glbls_segment = nullptr;
 char* static_init_tls_segment = nullptr;
@@ -36,6 +38,35 @@ namespace Hg {
 GlobalVariableContext GlobalVariable::glblCtx;
 GlobalVariableContext GlobalVariable::tlsCtx;
 bool GlobalVariable::inited = false;
+
+// One-time read of SST_HG_VALIDATE_GLOBALS at static-init time. Cached in a
+// plain bool so the hot path in get_global_at_offset / get_tls_at_offset costs
+// a single load + a predicted-not-taken branch when the flag is off.
+// Accepted truthy values: any non-empty string whose first character is not '0'.
+bool GlobalVariable::validateMaps = []{
+  const char* v = std::getenv("SST_HG_VALIDATE_GLOBALS");
+  return v && *v && v[0] != '0';
+}();
+
+void validate_global_map_or_abort(void* globalMap, void* stackPtr,
+                                  intptr_t stackTopInt, bool isTls)
+{
+  // Slow path: only reached when SST_HG_VALIDATE_GLOBALS is on AND the
+  // stack-pointer-aligned lookup pointed at memory that no GlobalVariableContext
+  // ever registered as an active per-app segment. Almost always means a global
+  // was accessed from the main simulator stack (or some other non-coroutine
+  // stack) -- the same class of failure that ASLR exposes as a ~30% MPI_Init
+  // flake on Linux.
+  sst_hg_abort_printf(
+    "%s access from non-coroutine stack: globalMap=%p (not a registered "
+    "active segment); stackPtr=%p stackTopInt=0x%lx stacksize=%d. "
+    "This typically means a global was touched before / outside a Mercury "
+    "user-space thread switch. Disable SST_HG_VALIDATE_GLOBALS to silence.",
+    isTls ? "TLS" : "global",
+    globalMap, stackPtr,
+    static_cast<unsigned long>(stackTopInt),
+    sst_hg_global_stacksize);
+}
 
 int
 GlobalVariable::init(const int size, const char* name, bool tls)

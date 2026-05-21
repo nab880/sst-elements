@@ -58,6 +58,10 @@ class GlobalVariableContext {
     activeGlobalMaps_.erase(globals);
   }
 
+  bool isActiveSegment(void* globals) const {
+    return activeGlobalMaps_.find(globals) != activeGlobalMaps_.end();
+  }
+
   void initGlobalSpace(void* ptr, int size, int offset);
 
   void callInitFxns(void* globals);
@@ -89,7 +93,15 @@ class GlobalVariable {
   static GlobalVariableContext glblCtx;
   static GlobalVariableContext tlsCtx;
   static bool inited;
+  // Opt-in diagnostic: when true, every global/TLS access verifies that the
+  // stack-pointer-aligned lookup landed on a registered globals map. Toggled
+  // by the SST_HG_VALIDATE_GLOBALS env var (init in global.cc).
+  static bool validateMaps;
 };
+
+// Out-of-line slow path so the inline accessors stay small. Defined in global.cc.
+void validate_global_map_or_abort(void* globalMap, void* stackPtr,
+                                  intptr_t stackTopInt, bool isTls);
 
 static inline void* get_special_at_offset(int offset, int map_offset)
 {
@@ -101,11 +113,29 @@ static inline void* get_special_at_offset(int offset, int map_offset)
 }
 
 static inline void* get_global_at_offset(int offset){
-  return get_special_at_offset(offset, SST_HG_TLS_GLOBAL_MAP);
+  int stack; int* stackPtr = &stack;
+  intptr_t stackTopInt = ((intptr_t)stackPtr/sst_hg_global_stacksize)*sst_hg_global_stacksize
+                         + SST_HG_TLS_GLOBAL_MAP;
+  char* globalMap = *(char**)stackTopInt;
+  if (__builtin_expect(GlobalVariable::validateMaps, 0)) {
+    if (!GlobalVariable::glblCtx.isActiveSegment(globalMap)) {
+      validate_global_map_or_abort(globalMap, stackPtr, stackTopInt, /*isTls=*/false);
+    }
+  }
+  return globalMap + offset;
 }
 
 static inline void* get_tls_at_offset(int offset){
-  return get_special_at_offset(offset, SST_HG_TLS_TLS_MAP);
+  int stack; int* stackPtr = &stack;
+  intptr_t stackTopInt = ((intptr_t)stackPtr/sst_hg_global_stacksize)*sst_hg_global_stacksize
+                         + SST_HG_TLS_TLS_MAP;
+  char* globalMap = *(char**)stackTopInt;
+  if (__builtin_expect(GlobalVariable::validateMaps, 0)) {
+    if (!GlobalVariable::tlsCtx.isActiveSegment(globalMap)) {
+      validate_global_map_or_abort(globalMap, stackPtr, stackTopInt, /*isTls=*/true);
+    }
+  }
+  return globalMap + offset;
 }
 
 template <class T>
