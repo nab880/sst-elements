@@ -105,40 +105,6 @@ QuetzConfig QuetzConfig::fromParams(Params& params, SST::Output* out) {
                 "compute_latency_other for a class-independent delay.\n");
     }
 
-    uint32_t mmcount = params.find<uint32_t>("memmap_count", 0);
-    {
-        char buf[256];
-        for (uint32_t r = 0; r < mmcount; r++) {
-            MemRegion region;
-            snprintf(buf, sizeof(buf), "memmap%" PRIu32 "_name", r);
-            region.name = params.find<std::string>(buf, "");
-            snprintf(buf, sizeof(buf), "memmap%" PRIu32 "_start", r);
-            region.start = params.find<uint64_t>(buf, 0ULL);
-            snprintf(buf, sizeof(buf), "memmap%" PRIu32 "_end", r);
-            region.end = params.find<uint64_t>(buf, 0ULL);
-            snprintf(buf, sizeof(buf), "memmap%" PRIu32 "_type", r);
-            std::string type = params.find<std::string>(buf, "memory");
-            if (type == "filtered")
-                region.type = MemRegionType::FILTERED;
-            else if (type == "uart")
-                region.type = MemRegionType::UART;
-            else
-                region.type = MemRegionType::MEMORY;
-
-            snprintf(buf, sizeof(buf), "memmap%" PRIu32 "_uart_tx_offset", r);
-            region.uart_tx_offset = params.find<uint32_t>(buf, 0);
-
-            const char* type_str =
-                (region.type == MemRegionType::FILTERED) ? "filtered" :
-                (region.type == MemRegionType::UART)     ? "uart"     : "memory";
-            out->verbose(CALL_INFO, 1, 0,
-                "MemMap region[%" PRIu32 "] '%s': "
-                "0x%016" PRIx64 "-0x%016" PRIx64 " (%s)\n",
-                r, region.name.c_str(), region.start, region.end, type_str);
-            cfg.memmap.push_back(region);
-        }
-    }
-
     int32_t env_count = params.find<int32_t>("envparamcount", -1);
     if (env_count > 0) {
         char buf[256];

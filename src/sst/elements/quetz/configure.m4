@@ -78,12 +78,15 @@ AC_DEFUN([SST_quetz_CONFIG], [
     AC_SUBST([QEMU_BIN])
 
     dnl -----------------------------------------------------------------------
-    dnl Define the plugin install directory (used in quetzcpu.cc to auto-resolve
-    dnl the plugin path when qemu_plugin= is not specified).
+    dnl Plugin install directory (used in quetzcpu.cc to auto-resolve the
+    dnl plugin path when qemu_plugin= is not specified).
+    dnl
+    dnl The QEMU_PLUGIN_INSTALL_DIR preprocessor symbol is defined at compile
+    dnl time by Makefile.am as -DQEMU_PLUGIN_INSTALL_DIR=\"$(libexecdir)\"; we
+    dnl do NOT AC_DEFINE it here because $(libexecdir) is a Makefile variable
+    dnl (not a configure-time shell variable), so its expansion only happens
+    dnl correctly during make.
     dnl -----------------------------------------------------------------------
-    AC_SUBST([QEMU_PLUGIN_INSTALL_DIR], ['$(libexecdir)'])
-    AC_DEFINE_UNQUOTED([QEMU_PLUGIN_INSTALL_DIR], ["$(libexecdir)"],
-        [Default install directory for the QEMU SST plugin])
 
     AS_IF([test "$sst_check_quetz" = "yes"], [$1], [$2])
 ])

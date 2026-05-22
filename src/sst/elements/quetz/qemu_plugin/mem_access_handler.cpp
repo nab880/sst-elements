@@ -9,11 +9,13 @@
 
 #include "insn_classifier.h"
 #include "plugin_state.h"
+#include "registry.h"
 
 #include <cstdint>
 #include <cstring>
 
-using namespace SST::Quetz;
+namespace SST {
+namespace Quetz {
 
 void QemuMemAccessHandler::handle(unsigned int vcpu_index,
                                   qemu_plugin_meminfo_t info,
@@ -69,8 +71,11 @@ void QemuMemAccessHandler::handle(unsigned int vcpu_index,
               size, pc, vaddr, cls, store_data);
 }
 
-static QemuMemAccessHandler s_qemu_mem_handler;
+QUETZ_REGISTER_MEM_HANDLER("", QemuMemAccessHandler);
 
 MemAccessHandler* get_mem_access_handler() {
-    return &s_qemu_mem_handler;
+    return g_mem_handler;
 }
+
+} // namespace Quetz
+} // namespace SST

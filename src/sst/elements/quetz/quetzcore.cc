@@ -13,83 +13,112 @@
 #include "quetzcore.h"
 
 #include <inttypes.h>
+#include <cstring>
 
 using namespace SST;
 using namespace SST::Quetz;
 
 QuetzCore::QuetzCore(
-        ComponentId_t                id,
-        QuetzCoreBackend*            backend,
-        uint32_t                     coreID,
-        uint32_t                     maxPendTrans,
-        SST::Output*                 out,
-        uint32_t                     maxIssuePerCycle,
-        uint32_t                     maxQueueLen,
-        uint64_t                     cacheLineSize,
-        TimeConverter                tc,
-        Params&                      /*params*/,
-        const uint32_t               execLatency[QUETZ_INSN_CLASS_COUNT],
-        const uint32_t               computeLatency[QUETZ_INSN_CLASS_COUNT],
-        const std::vector<MemRegion>& memmap,
-        uint64_t                     maxInsts,
-        uint32_t                     checkAddresses,
-        bool                         detailedTracking)
+        ComponentId_t         id,
+        QuetzCoreBackend*     backend,
+        uint32_t              coreID,
+        SST::Output*          out,
+        TimeConverter         tc,
+        Params&               /*params*/,
+        const MemRegionTable* region_table,
+        uint32_t              maxPendTrans,
+        uint32_t              maxIssuePerCycle,
+        uint32_t              maxQueueLen,
+        uint64_t              cacheLineSize,
+        uint64_t              maxInsts,
+        uint32_t              checkAddresses,
+        bool                  detailedTracking,
+        const uint32_t        execLatency[QUETZ_INSN_CLASS_COUNT],
+        const uint32_t        computeLatency[QUETZ_INSN_CLASS_COUNT])
     : ComponentExtension(id),
-      backend_(backend),
       output_(out),
-      tc_(tc),
       core_id_(coreID),
-      max_pending_(maxPendTrans),
-      max_issue_per_cycle_(maxIssuePerCycle),
-      max_queue_len_(maxQueueLen),
-      max_insts_(maxInsts),
-      inst_count_(0),
-      detailed_tracking_(detailedTracking),
-      halted_(false),
-      stalled_(false),
-      mem_access_(memmap),
-      emitter_(this, out, coreID, tc, cacheLineSize, checkAddresses, stats_)
+      pipeline_input_(nullptr),
+      pipeline_filter_(nullptr),
+      pipeline_transform_(nullptr),
+      pipeline_output_(nullptr),
+      pipeline_(nullptr)
 {
-    for (int c = 0; c < QUETZ_INSN_CLASS_COUNT; c++) {
-        exec_latency_[c]    = execLatency[c];
-        compute_latency_[c] = computeLatency[c];
-    }
+    memcpy(exec_latency_,    execLatency,    sizeof(exec_latency_));
+    memcpy(compute_latency_, computeLatency, sizeof(compute_latency_));
 
     char sub_id[32];
     snprintf(sub_id, sizeof(sub_id), "%" PRIu32, coreID);
     stats_.registerAll(this, sub_id);
 
+    ctx_.backend             = backend;
+    ctx_.comp                = this;
+    ctx_.out                 = out;
+    ctx_.tc                  = tc;
+    ctx_.core_id             = coreID;
+    ctx_.max_queue_len       = maxQueueLen;
+    ctx_.max_issue_per_cycle = maxIssuePerCycle;
+    ctx_.max_pending         = maxPendTrans;
+    ctx_.max_insts           = maxInsts;
+    ctx_.cache_line_size     = cacheLineSize;
+    ctx_.check_addresses     = checkAddresses;
+    ctx_.detailed_tracking   = detailedTracking;
+    ctx_.region_table        = region_table;
+    ctx_.exec_latency        = exec_latency_;
+    ctx_.compute_latency     = compute_latency_;
+    ctx_.stats               = &stats_;
+
+    pipeline_input_ = loadPipelineStage<PipelineInput>(
+        "pipeline_input", "quetz.DefaultPipelineInput");
+    pipeline_filter_ = loadPipelineStage<PipelineFilter>(
+        "pipeline_filter", "quetz.DefaultPipelineFilter");
+    pipeline_transform_ = loadPipelineStage<PipelineTransform>(
+        "pipeline_transform", "quetz.DefaultPipelineTransform");
+    pipeline_output_ = loadPipelineStage<PipelineOutput>(
+        "pipeline_output", "quetz.DefaultPipelineOutput");
+
+    pipeline_input_->configure(ctx_);
+    pipeline_filter_->configure(ctx_);
+    pipeline_transform_->configure(ctx_);
+
+    pipeline_ = new QuetzEventPipeline(
+        ctx_, pipeline_input_, pipeline_filter_,
+        pipeline_transform_, pipeline_output_);
+
     output_->verbose(CALL_INFO, 1, 0,
         "QuetzCore %" PRIu32 " created: maxPend=%" PRIu32
         " maxIssue=%" PRIu32 " maxQ=%" PRIu32 " clineSize=%" PRIu64
-        " latency[int/fp/vec]=%" PRIu32 "/%" PRIu32 "/%" PRIu32
-        " memmap_regions=%zu\n",
-        core_id_, max_pending_, max_issue_per_cycle_,
-        max_queue_len_, cacheLineSize,
+        " latency[int/fp/vec]=%" PRIu32 "/%" PRIu32 "/%" PRIu32 "\n",
+        core_id_, maxPendTrans, maxIssuePerCycle, maxQueueLen, cacheLineSize,
         exec_latency_[QUETZ_INSN_INT_MEM],
         exec_latency_[QUETZ_INSN_FP_MEM],
-        exec_latency_[QUETZ_INSN_VEC_MEM],
-        mem_access_.regionCount());
+        exec_latency_[QUETZ_INSN_VEC_MEM]);
 }
 
-QuetzCore::~QuetzCore() {}
+QuetzCore::~QuetzCore() {
+    delete pipeline_;
+}
+
+bool QuetzCore::isCoreHalted() const {
+    return pipeline_->isHalted();
+}
+
+uint32_t QuetzCore::pendingCount() const {
+    return pipeline_->pendingCount();
+}
 
 void QuetzCore::setMemLink(SST::Interfaces::StandardMem* link) {
-    emitter_.setLink(link);
+    pipeline_->setMemLink(link);
 }
 
 void QuetzCore::finishCore() {
-    output_->verbose(CALL_INFO, 1, 0,
-        "QuetzCore %" PRIu32 " finishing, %" PRIu32
-        " transactions still pending.\n",
-        core_id_, emitter_.pendingCount());
-    mem_access_.finish(output_, core_id_);
+    pipeline_->finish();
 }
 
 void QuetzCore::handleMemResponse(SST::Interfaces::StandardMem::Request* resp) {
     uint64_t lat = 0;
     bool was_read = false;
-    if (!emitter_.handleResponse(resp, lat, was_read))
+    if (!pipeline_->handleResponse(resp, lat, was_read))
         return;
     if (was_read)
         stats_.read_lat->addData(lat);
@@ -97,134 +126,6 @@ void QuetzCore::handleMemResponse(SST::Interfaces::StandardMem::Request* resp) {
         stats_.write_lat->addData(lat);
 }
 
-void QuetzCore::refillQueue() {
-    while (coreQ_.size() < max_queue_len_) {
-        QuetzCommand cmd;
-        if (!backend_->readCommandNB(core_id_, &cmd))
-            break;
-
-        uint32_t stall = 0;
-        if (cmd.insn_class < (uint32_t)QUETZ_INSN_CLASS_COUNT) {
-            if (cmd.cmd == QUETZ_CMD_READ || cmd.cmd == QUETZ_CMD_WRITE)
-                stall = exec_latency_[cmd.insn_class];
-            else if (cmd.cmd == QUETZ_CMD_NOP)
-                stall = compute_latency_[cmd.insn_class];
-        }
-
-        coreQ_.push({ cmd, stall });
-
-        if (cmd.cmd == QUETZ_CMD_EXIT) {
-            output_->verbose(CALL_INFO, 1, 0,
-                "QuetzCore %" PRIu32 " received EXIT from plugin.\n", core_id_);
-            break;
-        }
-    }
-}
-
-void QuetzCore::processQueue() {
-    uint32_t issued = 0;
-
-    auto checkMaxInsts = [&]() -> bool {
-        if (max_insts_ > 0 && inst_count_ >= max_insts_) {
-            output_->verbose(CALL_INFO, 1, 0,
-                "QuetzCore %" PRIu32 " reached max_insts %" PRIu64 " — halting.\n",
-                core_id_, max_insts_);
-            halted_ = true;
-            return true;
-        }
-        return false;
-    };
-
-    while (!coreQ_.empty()) {
-        StagedCmd& sc     = coreQ_.front();
-        QuetzCommand& cmd = sc.cmd;
-
-        if (cmd.cmd == QUETZ_CMD_EXIT) {
-            output_->verbose(CALL_INFO, 1, 0,
-                "QuetzCore %" PRIu32 " processing EXIT — halting.\n", core_id_);
-            halted_ = true;
-            coreQ_.pop();
-            return;
-        }
-
-        if ((cmd.cmd == QUETZ_CMD_READ || cmd.cmd == QUETZ_CMD_WRITE) &&
-            mem_access_.handleMemoryAccess(cmd, stats_))
-        {
-            stats_.insn_count->addData(1);
-            coreQ_.pop();
-            inst_count_++;
-            if (checkMaxInsts()) return;
-            continue;
-        }
-
-        if (sc.remaining_stall > 0) {
-            sc.remaining_stall--;
-            if (cmd.cmd == QUETZ_CMD_NOP)
-                stats_.compute_stall_cycles->addData(1);
-            else
-                stats_.stall_cycles->addData(1);
-            break;
-        }
-
-        if (cmd.cmd == QUETZ_CMD_NOP) {
-            stats_.noop_count->addData(1);
-            stats_.insn_count->addData(1);
-            if (detailed_tracking_) {
-                switch (static_cast<QuetzInsnClass>(cmd.insn_class)) {
-                case QUETZ_INSN_INT_COMPUTE: stats_.int_compute->addData(1); break;
-                case QUETZ_INSN_FP_COMPUTE:  stats_.fp_compute->addData(1);  break;
-                case QUETZ_INSN_VEC_COMPUTE: stats_.vec_compute->addData(1); break;
-                case QUETZ_INSN_BRANCH:      stats_.branch->addData(1);      break;
-                default: break;
-                }
-            }
-            coreQ_.pop();
-            inst_count_++;
-            if (checkMaxInsts()) return;
-            continue;
-        }
-
-        uint32_t slots_needed = emitter_.slotsNeeded(cmd.addr, cmd.size);
-
-        if (issued + slots_needed > max_issue_per_cycle_)
-            break;
-        if (emitter_.pendingCount() + slots_needed > max_pending_)
-            break;
-
-        switch (cmd.cmd) {
-        case QUETZ_CMD_READ:
-            emitter_.issueRead(cmd.addr, cmd.size, cmd.pc);
-            stats_.insn_count->addData(1);
-            issued += slots_needed;
-            coreQ_.pop();
-            inst_count_++;
-            if (checkMaxInsts()) return;
-            break;
-
-        case QUETZ_CMD_WRITE:
-            emitter_.issueWrite(cmd.addr, cmd.size, cmd.pc, cmd.data);
-            stats_.insn_count->addData(1);
-            issued += slots_needed;
-            coreQ_.pop();
-            inst_count_++;
-            if (checkMaxInsts()) return;
-            break;
-
-        default:
-            output_->fatal(CALL_INFO, -1,
-                "QuetzCore %" PRIu32 ": unknown command %" PRIu32 "\n",
-                core_id_, (uint32_t)cmd.cmd);
-        }
-    }
-
-    if (issued > 0)
-        stats_.active_cycles->addData(1);
-    stats_.cycles->addData(1);
-}
-
 void QuetzCore::tick() {
-    if (halted_)
-        return;
-    refillQueue();
-    processQueue();
+    pipeline_->tick();
 }

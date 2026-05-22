@@ -18,11 +18,12 @@
 namespace SST {
 namespace Quetz {
 
-enum QuetzISA { QUETZ_ISA_RISCV, QUETZ_ISA_AARCH64, QUETZ_ISA_GENERIC };
-
 constexpr unsigned PLUGIN_MAX_VCPUS = 256;
 
 using PluginSHMChild = SST::Core::Interprocess::SHMChild<QuetzTunnel>;
+
+class InsnClassifier;
+class MemAccessHandler;
 
 extern PluginSHMChild*     g_shmchild;
 extern QuetzTunnel*         g_tunnel;
@@ -31,10 +32,8 @@ extern bool                 g_detailed;
 extern bool                 g_system_mode;
 extern std::atomic<bool>    g_mem_seen[PLUGIN_MAX_VCPUS];
 extern QuetzInsnClass       g_prev_cls[PLUGIN_MAX_VCPUS];
-extern QuetzISA             g_isa;
-
-class InsnClassifier;
 extern InsnClassifier*      g_insn_classifier;
+extern MemAccessHandler*    g_mem_handler;
 
 void write_cmd(unsigned vcpu, QuetzShmemCmd type,
                uint32_t size, uint64_t pc, uint64_t addr,

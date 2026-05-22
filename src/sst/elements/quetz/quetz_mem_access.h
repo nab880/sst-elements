@@ -12,9 +12,6 @@
 /**
  * quetz_mem_access.h — strategy for handling guest memory accesses on the
  * SST side before they reach memHierarchy.
- *
- * Filtered regions, UART capture, and future MMIO device models are handled
- * here so QuetzCore stays focused on queue scheduling and latency modeling.
  */
 
 #ifndef _H_SST_QUETZ_MEM_ACCESS
@@ -24,7 +21,8 @@
 
 #include <vector>
 
-#include "quetz_memmap.h"
+#include "quetz_region_handler.h"
+#include "quetz_region_table.h"
 #include "quetz_shmem.h"
 #include "quetz_stats.h"
 
@@ -46,18 +44,19 @@ public:
     virtual void finish(SST::Output* out, uint32_t core_id) = 0;
 };
 
-class MemMapMemAccessStrategy : public MemAccessStrategy {
+class RegionTableMemAccessStrategy : public MemAccessStrategy {
 public:
-    explicit MemMapMemAccessStrategy(std::vector<MemRegion> regions);
+    explicit RegionTableMemAccessStrategy(const MemRegionTable& table);
 
     bool handleMemoryAccess(const QuetzCommand& cmd,
                             QuetzCoreStats& stats) override;
     void finish(SST::Output* out, uint32_t core_id) override;
 
-    size_t regionCount() const { return memmap_.regionCount(); }
+    size_t handlerCount() const { return table_.handlerCount(); }
 
 private:
-    MemMap memmap_;
+    const MemRegionTable& table_;
+    std::vector<MemRegionHandler*> handlers_for_finish_;
 };
 
 } // namespace Quetz

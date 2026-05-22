@@ -14,27 +14,27 @@
 using namespace SST;
 using namespace SST::Quetz;
 
-MemMapMemAccessStrategy::MemMapMemAccessStrategy(std::vector<MemRegion> regions)
-    : memmap_(std::move(regions))
+RegionTableMemAccessStrategy::RegionTableMemAccessStrategy(
+        const MemRegionTable& table)
+    : table_(table),
+      handlers_for_finish_(table.handlers())
 {}
 
-bool MemMapMemAccessStrategy::handleMemoryAccess(const QuetzCommand& cmd,
-                                                 QuetzCoreStats& stats) {
+bool RegionTableMemAccessStrategy::handleMemoryAccess(const QuetzCommand& cmd,
+                                                      QuetzCoreStats& stats) {
     if (cmd.cmd != QUETZ_CMD_READ && cmd.cmd != QUETZ_CMD_WRITE)
         return false;
-    if (!memmap_.isFiltered(cmd.addr))
+
+    MemRegionHandler* h = table_.findHandler(cmd.addr);
+    if (!h)
         return false;
 
-    if (cmd.cmd == QUETZ_CMD_WRITE) {
-        if (cmd.size >= 1)
-            memmap_.captureUartByte(cmd.addr, cmd.data[0]);
-        stats.filtered_writes->addData(1);
-    } else {
-        stats.filtered_reads->addData(1);
-    }
-    return true;
+    MemRegionHandler::Action act =
+        (cmd.cmd == QUETZ_CMD_READ) ? h->onRead(cmd, stats) : h->onWrite(cmd, stats);
+    return (act == MemRegionHandler::Action::CONSUME);
 }
 
-void MemMapMemAccessStrategy::finish(SST::Output* out, uint32_t core_id) {
-    memmap_.flushUart(out, core_id);
+void RegionTableMemAccessStrategy::finish(SST::Output* out, uint32_t core_id) {
+    for (MemRegionHandler* h : handlers_for_finish_)
+        h->finish(out, core_id);
 }

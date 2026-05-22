@@ -190,19 +190,56 @@ reaches the cache — useful for modelling functional-unit pipeline depth.
 | `exec_latency_fp` | `0` | Extra cycles for scalar FP load/stores |
 | `exec_latency_vec` | `0` | Extra cycles for vector load/stores |
 | `detailed_instruction_tracking` | `0` | If 1, populate per-class non-memory instruction statistics (`int_compute`, `fp_compute`, `vec_compute`, `branch`). Requires a RISC-V or AArch64 guest; other ISAs emit a warning and report all non-memory instructions as OTHER. |
+| `compute_latency_int` | `0` | Extra cycles an integer compute NOP occupies the issue queue (requires `detailed_instruction_tracking=1`) |
+| `compute_latency_fp` | `0` | Extra cycles a scalar FP compute NOP occupies the issue queue (requires `detailed_instruction_tracking=1`) |
+| `compute_latency_vec` | `0` | Extra cycles a vector compute NOP occupies the issue queue (requires `detailed_instruction_tracking=1`) |
+| `compute_latency_branch` | `0` | Extra cycles a branch/jump occupies the issue queue (requires `detailed_instruction_tracking=1`) |
+| `compute_latency_other` | `0` | Extra cycles an unclassified (OTHER) NOP occupies the issue queue (works on all ISAs) |
 
-### Memory-map regions
-
-Filter specific address ranges from cache statistics (useful for VDSO pages,
-kernel-space addresses, or MMIO that should not pollute cache hit/miss rates).
+### System-mode parameters
 
 | Parameter | Default | Description |
 |---|---|---|
-| `memmap_count` | `0` | Number of named regions (0 = no filtering) |
-| `memmap0_name` | `""` | Human-readable name for region 0 |
-| `memmap0_start` | `0` | Inclusive start address (hex or decimal) |
-| `memmap0_end` | `0` | Inclusive end address |
-| `memmap0_type` | `memory` | `memory` = forward to cache; `filtered` = drop |
+| `system_mode` | `0` | If 1, run `qemu-system-*` instead of `qemu-*` user-mode |
+| `system_mode_loader` | `-kernel` | Flag inserted before the executable path in system mode (`-kernel` for ELF, `-bios` for raw ROM images) |
+
+### Platform presets
+
+| Parameter | Default | Description |
+|---|---|---|
+| `platform` | `""` | Built-in preset (`riscv64_virt`, `riscv64_virt_uart`, `arm_m7`, `x86_baremetal`, `*_usermode`). Supplies QEMU defaults and `region_handler` presets when slots are not populated in SDL. |
+
+### Address regions (`region_handler` subcomponents)
+
+Use `setSubComponent("region_handler", ...)` instead of flat `memmap*` params.
+First matching handler wins; put specific regions (UART) before broad filters.
+
+| SubComponent | Purpose |
+|---|---|
+| `quetz.ForwardRegionHandler` | Forward traffic to memHierarchy (optional explicit range) |
+| `quetz.FilteredRegionHandler` | Count `filtered_reads` / `filtered_writes`; drop |
+| `quetz.UartRegionHandler` | Capture TX bytes at `tx_offset`; drop |
+| `quetz.MmioForwardRegionHandler` | Forward MMIO range (optional `mmio_link` port) |
+
+Example (RISC-V virt UART + filtered RAM):
+
+```python
+uart = cpu.setSubComponent("region_handler", "quetz.UartRegionHandler", 0)
+uart.addParams({"start": "0x10000000", "end": "0x10000FFF", "tx_offset": "0"})
+ram = cpu.setSubComponent("region_handler", "quetz.FilteredRegionHandler", 1)
+ram.addParams({"start": "0x0", "end": "0x7FFFFFFF"})
+```
+
+### Pipeline stage subcomponents (per vCPU)
+
+| Slot | Default class | Role |
+|---|---|---|
+| `pipeline_input` | `quetz.DefaultPipelineInput` | Drain IPC ring |
+| `pipeline_filter` | `quetz.DefaultPipelineFilter` | Region handlers |
+| `pipeline_transform` | `quetz.DefaultPipelineTransform` | Stalls / NOP / MemOp |
+| `pipeline_output` | `quetz.DefaultPipelineOutput` | Issue `StandardMem` |
+
+Override a stage per vCPU index, e.g. `cpu.setSubComponent("pipeline_output", "quetz.LoggingPipelineOutput", 0)`.
 
 ---
 
@@ -213,8 +250,8 @@ kernel-space addresses, or MMIO that should not pollute cache hit/miss rates).
 | `cache_link_0` … `cache_link_N` | Per-vCPU connection to the memory hierarchy. `N = vcpu_count - 1` |
 
 Each port should be connected to an L1 cache or directly to a MemController.
-The component also supports a named `memory` subcomponent slot as an
-alternative to port-based wiring (see sst-elements subcomponent documentation).
+The component also supports subcomponent slots: `memory` (per-vCPU StandardMem),
+`region_handler`, and the four `pipeline_*` stages (see above).
 
 ---
 
@@ -322,6 +359,11 @@ Build a test binary:
 Set `vcpu_count` to the number of OS threads the binary will create.  QEMU
 user-mode transparently handles `pthread_create` and OpenMP — each new thread
 becomes a new vCPU in the plugin's view.
+
+**Halt quorum:** the simulation ends only when **every** vCPU has halted (via
+EXIT or `max_insts`) **and** every vCPU has drained its in-flight memory
+transactions.  A single vCPU exiting early does not tear down the simulation
+while other vCPUs still have queued work.
 
 Pass `OMP_NUM_THREADS` via `envparamcount`/`envparamname0`/`envparamval0` so
 the child process inherits the correct thread count:

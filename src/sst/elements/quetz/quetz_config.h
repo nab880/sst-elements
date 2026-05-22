@@ -20,11 +20,16 @@
 #include <utility>
 #include <vector>
 
-#include "quetz_memmap.h"
 #include "quetz_shmem.h"
 
 namespace SST {
 namespace Quetz {
+
+/** Platform-preset or programmatic default for a region_handler slot. */
+struct RegionHandlerPreset {
+    std::string type;
+    std::vector<std::pair<std::string, std::string>> params;
+};
 
 struct QuetzConfig {
     int verbosity = 0;
@@ -63,7 +68,7 @@ struct QuetzConfig {
     uint32_t exec_latency[QUETZ_INSN_CLASS_COUNT];
     uint32_t compute_latency[QUETZ_INSN_CLASS_COUNT];
 
-    std::vector<MemRegion>                          memmap;
+    std::vector<RegionHandlerPreset>                 region_handlers;
     std::vector<std::pair<std::string, std::string>> extra_env;
 
     static QuetzConfig fromParams(Params& params, SST::Output* out);

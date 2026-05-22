@@ -12,6 +12,8 @@
 #include <sst_config.h>
 #include "quetzcpu.h"
 
+#include "quetz_config_manager.h"
+
 #include <inttypes.h>
 
 using namespace SST;
@@ -26,12 +28,15 @@ QuetzCPU::QuetzCPU(ComponentId_t id, Params& params)
       stop_ticking_(true),
       halted_count_(0)
 {
-    cfg_ = QuetzConfig::fromParams(params, output_);
+    cfg_ = QuetzConfigManager::fromParams(params, output_).config();
     output_->setVerboseLevel(cfg_.verbosity);
 
     output_->verbose(CALL_INFO, 1, 0, "Creating QuetzComponent...\n");
     output_->verbose(CALL_INFO, 1, 0,
         "Configuring for %" PRIu32 " vCPU(s).\n", cfg_.vcpu_count);
+
+    loadRegionHandlers();
+    region_table_ = MemRegionTable(region_handlers_);
 
     frontend_ = new QemuFrontend(id, cfg_.vcpu_count, cfg_.max_core_queue, output_);
 
@@ -50,11 +55,11 @@ QuetzCPU::QuetzCPU(ComponentId_t id, Params& params)
 
     for (uint32_t i = 0; i < cfg_.vcpu_count; i++) {
         cores_.push_back(loadComponentExtension<QuetzCore>(
-            frontend_->coreBackend(), i, cfg_.max_pend_trans, output_,
-            cfg_.max_issue_cyc, cfg_.max_core_queue,
-            cfg_.cache_line_sz, tc, params,
-            cfg_.exec_latency, cfg_.compute_latency, cfg_.memmap,
-            cfg_.max_insts, cfg_.check_addresses, cfg_.detailed_tracking));
+            frontend_->coreBackend(), i, output_, tc, params,
+            &region_table_, cfg_.max_pend_trans, cfg_.max_issue_cyc,
+            cfg_.max_core_queue, cfg_.cache_line_sz, cfg_.max_insts,
+            cfg_.check_addresses, cfg_.detailed_tracking,
+            cfg_.exec_latency, cfg_.compute_latency));
     }
 
     SubComponentSlotInfo* mem_slot = getSubComponentSlotInfo("memory");
@@ -96,6 +101,38 @@ QuetzCPU::QuetzCPU(ComponentId_t id, Params& params)
 
     output_->verbose(CALL_INFO, 1, 0,
         "QuetzComponent initialization complete.\n");
+}
+
+void QuetzCPU::loadRegionHandlers() {
+    region_handlers_.clear();
+
+    SubComponentSlotInfo* rh_slot = getSubComponentSlotInfo("region_handler");
+    if (rh_slot && rh_slot->getMaxPopulatedSlotNumber() >= 0) {
+        for (uint32_t s = 0; s <= rh_slot->getMaxPopulatedSlotNumber(); s++) {
+            auto* h = rh_slot->create<MemRegionHandler>(
+                s, ComponentInfo::INSERT_STATS);
+            region_handlers_.push_back(h);
+            output_->verbose(CALL_INFO, 1, 0,
+                "region_handler[%" PRIu32 "]: 0x%016" PRIx64 "-0x%016" PRIx64 "\n",
+                s, h->startAddr(), h->endAddr());
+        }
+        return;
+    }
+
+    for (size_t i = 0; i < cfg_.region_handlers.size(); i++) {
+        const RegionHandlerPreset& preset = cfg_.region_handlers[i];
+        Params p;
+        for (const auto& kv : preset.params)
+            p.insert(kv.first, kv.second);
+        auto* h = loadAnonymousSubComponent<MemRegionHandler>(
+            preset.type, "region_handler", (int)i,
+            ComponentInfo::INSERT_STATS, p);
+        region_handlers_.push_back(h);
+        output_->verbose(CALL_INFO, 1, 0,
+            "region_handler preset[%" PRIu32 "]: %s "
+            "0x%016" PRIx64 "-0x%016" PRIx64 "\n",
+            (uint32_t)i, preset.type.c_str(), h->startAddr(), h->endAddr());
+    }
 }
 
 QuetzCPU::~QuetzCPU() {
