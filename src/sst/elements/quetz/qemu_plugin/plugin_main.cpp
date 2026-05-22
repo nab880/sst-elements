@@ -12,7 +12,9 @@ extern "C" {
 
 #include "instrument.h"
 #include "insn_classifier.h"
+#include "mem_access_handler.h"
 #include "plugin_state.h"
+#include "registry.h"
 
 #include <cstdio>
 #include <cstring>
@@ -45,19 +47,24 @@ int qemu_plugin_install(qemu_plugin_id_t id,
                         const qemu_info_t* info,
                         int argc, char** argv)
 {
-    if (info && info->target_name) {
-        const char* t = info->target_name;
-        if      (strncmp(t, "riscv",   5) == 0) g_isa = QUETZ_ISA_RISCV;
-        else if (strncmp(t, "aarch64", 7) == 0) g_isa = QUETZ_ISA_AARCH64;
-        else                                     g_isa = QUETZ_ISA_GENERIC;
+    const char* target = (info && info->target_name) ? info->target_name : "";
+    if (info)
         g_system_mode = info->system_emulation;
+
+    g_insn_classifier = Registry<InsnClassifier>::instance().findByPrefix(target);
+    g_mem_handler     = Registry<MemAccessHandler>::instance().findByPrefix(target);
+
+    if (!g_insn_classifier || !g_mem_handler) {
         fprintf(stderr,
-            "[qemu_sst_plugin] Target: %s  ISA class: %s  system_mode: %d\n", t,
-            (g_isa == QUETZ_ISA_RISCV)   ? "riscv" :
-            (g_isa == QUETZ_ISA_AARCH64) ? "aarch64" : "generic",
-            (int)g_system_mode);
+            "[qemu_sst_plugin] ERROR: no classifier/handler for target '%s'.\n",
+            target);
+        return 1;
     }
-    g_insn_classifier = create_insn_classifier(g_isa);
+
+    fprintf(stderr,
+        "[qemu_sst_plugin] Target: %s  precise_mem=%d  system_mode: %d\n",
+        target, (int)g_insn_classifier->usesPreciseMemCallbacks(),
+        (int)g_system_mode);
 
     for (unsigned i = 0; i < PLUGIN_MAX_VCPUS; i++) {
         g_mem_seen[i].store(false, std::memory_order_relaxed);
@@ -71,13 +78,13 @@ int qemu_plugin_install(qemu_plugin_id_t id,
             g_detailed = (argv[i][9] == '1');
     }
 
-    if (g_detailed && g_isa == QUETZ_ISA_GENERIC) {
+    if (g_detailed && !g_insn_classifier->usesPreciseMemCallbacks()) {
         fprintf(stderr,
             "[qemu_sst_plugin] WARNING: detailed instruction tracking "
             "requested but ISA '%s' has no instruction decoder.\n"
             "  All non-memory instructions will be reported as OTHER.\n"
-            "  Add decoder_<isa>.h and a case in instrument.cpp.\n",
-            (info && info->target_name) ? info->target_name : "unknown");
+            "  Register a decoder via QUETZ_REGISTER_CLASSIFIER.\n",
+            target);
     }
 
     if (g_shmem_name.empty()) {

@@ -37,6 +37,8 @@
 
 #include "quetz_config.h"
 #include "quetz_qemu_frontend.h"
+#include "quetz_region_handler.h"
+#include "quetz_region_table.h"
 #include "quetzcore.h"
 
 namespace SST {
@@ -60,6 +62,13 @@ public:
     SST_ELI_DOCUMENT_PARAMS(
         { "verbose",
           "Verbosity level (0 = quiet, higher = more output).", "0" },
+        { "platform",
+          "Optional platform preset name.  When set, supplies default values "
+          "for qemu, system_mode, system_mode_loader, qemu_args, isa, and "
+          "region_handler defaults.  Explicit SST params override preset fields. "
+          "Built-in presets: riscv64_virt, riscv64_virt_uart, arm_m7, "
+          "x86_baremetal, riscv64_usermode, aarch64_usermode, x86_64_usermode. "
+          "Empty (default) disables preset application.", "" },
         { "clock",
           "CPU clock rate used to drive the SST time-base.", "1GHz" },
         { "vcpu_count",
@@ -179,27 +188,7 @@ public:
         { "compute_latency_other",
           "Extra cycles an unclassified (OTHER) non-memory instruction occupies "
           "the issue queue.  Applies to all ISAs including GENERIC targets.",
-          "0" },
-
-        { "memmap_count",
-          "Number of named address-range regions (0 = all addresses forwarded).",
-          "0" },
-        { "memmap%(memmap_count)d_name",
-          "Name of memory-map region N (used in log output).", "" },
-        { "memmap%(memmap_count)d_start",
-          "Inclusive start address of region N (decimal or 0x hex).", "0" },
-        { "memmap%(memmap_count)d_end",
-          "Inclusive end address of region N (decimal or 0x hex).", "0" },
-        { "memmap%(memmap_count)d_type",
-          "Region type: 'memory' (forward to hierarchy), "
-          "'filtered' (drop, count in filtered_reads/filtered_writes), or "
-          "'uart' (capture TX bytes — printed at simulation end as "
-          "\"UART[N]: ...\"; does not forward to hierarchy).",
-          "memory" },
-        { "memmap%(memmap_count)d_uart_tx_offset",
-          "For type='uart': byte offset of the TX data register within the "
-          "region (default 0 covers NS16550 THR, PL011 DR, SiFive txdata, "
-          "CMSDK DATA — all at offset 0 from their base).", "0" }
+          "0" }
     )
 
     SST_ELI_DOCUMENT_PORTS(
@@ -282,7 +271,23 @@ public:
         { "memory",
           "StandardMem interface to the memory hierarchy "
           "(one slot per vCPU, indexed 0..vcpu_count-1).",
-          "SST::Interfaces::StandardMem" }
+          "SST::Interfaces::StandardMem" },
+        { "region_handler",
+          "Address-range policy (filter, UART capture, MMIO forward, custom). "
+          "First-match wins; more specific regions must use lower slot indices.",
+          "SST::Quetz::MemRegionHandler" },
+        { "pipeline_input",
+          "Per-vCPU pipeline input stage (drain IPC ring).",
+          "SST::Quetz::PipelineInput" },
+        { "pipeline_filter",
+          "Per-vCPU pipeline filter stage (region handlers).",
+          "SST::Quetz::PipelineFilter" },
+        { "pipeline_transform",
+          "Per-vCPU pipeline transform stage (stall / NOP / MemOp).",
+          "SST::Quetz::PipelineTransform" },
+        { "pipeline_output",
+          "Per-vCPU pipeline output stage (StandardMem issue).",
+          "SST::Quetz::PipelineOutput" }
     )
 
     QuetzCPU(ComponentId_t id, Params& params);
@@ -295,12 +300,17 @@ public:
     bool tick(SST::Cycle_t cycle);
 
 private:
+    void loadRegionHandlers();
+
     QuetzConfig cfg_;
     SST::Output* output_;
 
     QemuFrontend* frontend_;
     bool          stop_ticking_;
     uint32_t     halted_count_;
+
+    std::vector<MemRegionHandler*>             region_handlers_;
+    MemRegionTable                             region_table_;
 
     std::vector<QuetzCore*>                    cores_;
     std::vector<SST::Interfaces::StandardMem*> mem_ifaces_;

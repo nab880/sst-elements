@@ -63,6 +63,8 @@ cpu_params = {
 }
 if isa:
     cpu_params["isa"] = isa
+if os.environ.get("QUETZ_DETAILED", "0") == "1":
+    cpu_params["detailed_instruction_tracking"] = 1
 
 cpu = sst.Component("cpu", "quetz.QuetzComponent")
 cpu.addParams(cpu_params)

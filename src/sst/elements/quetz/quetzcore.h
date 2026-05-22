@@ -9,18 +9,6 @@
 // information, see the LICENSE file in the top level directory of the
 // distribution.
 
-/**
- * quetzcore.h — per-vCPU event pump for the Quetz SST component.
- *
- * On every SST clock tick the owning QuetzCPU calls tick() on each
- * QuetzCore.  QuetzCore drains commands from its shared-memory buffer,
- * stages them in a local queue, and issues up to maxIssuePer Cycle memory
- * requests through its StandardMem interface.
- *
- * Design mirrors ariel/arielcore.h so that existing SST infrastructure
- * (statistics, memHierarchy wiring, etc.) can be reused without modification.
- */
-
 #ifndef _H_SST_QUETZ_CORE
 #define _H_SST_QUETZ_CORE
 
@@ -31,44 +19,38 @@
 #include <sst/core/timeConverter.h>
 
 #include <stdint.h>
-#include <queue>
-#include <vector>
 
-#include "quetz_mem_issue.h"
-#include "quetz_mem_access.h"
 #include "quetz_core_backend.h"
+#include "quetz_pipeline.h"
+#include "quetz_pipeline_api.h"
+#include "quetz_region_table.h"
 #include "quetz_shmem.h"
 #include "quetz_stats.h"
 
 namespace SST {
 namespace Quetz {
 
-struct StagedCmd {
-    QuetzCommand cmd;
-    uint32_t    remaining_stall;
-};
-
 class QuetzCore : public SST::ComponentExtension {
     friend struct QuetzCoreStats;
 
 public:
     QuetzCore(
-        ComponentId_t                   id,
-        QuetzCoreBackend*               backend,
-        uint32_t                        coreID,
-        uint32_t                        maxPendTrans,
-        SST::Output*                    out,
-        uint32_t                        maxIssuePerCycle,
-        uint32_t                        maxQueueLen,
-        uint64_t                        cacheLineSize,
-        TimeConverter                   tc,
-        Params&                         params,
-        const uint32_t                  execLatency[QUETZ_INSN_CLASS_COUNT],
-        const uint32_t                  computeLatency[QUETZ_INSN_CLASS_COUNT],
-        const std::vector<MemRegion>&   memmap,
-        uint64_t                        maxInsts,
-        uint32_t                        checkAddresses,
-        bool                            detailedTracking);
+        ComponentId_t         id,
+        QuetzCoreBackend*     backend,
+        uint32_t              coreID,
+        SST::Output*          out,
+        TimeConverter         tc,
+        Params&               params,
+        const MemRegionTable* region_table,
+        uint32_t              maxPendTrans,
+        uint32_t              maxIssuePerCycle,
+        uint32_t              maxQueueLen,
+        uint64_t              cacheLineSize,
+        uint64_t              maxInsts,
+        uint32_t              checkAddresses,
+        bool                  detailedTracking,
+        const uint32_t        execLatency[QUETZ_INSN_CLASS_COUNT],
+        const uint32_t        computeLatency[QUETZ_INSN_CLASS_COUNT]);
 
     ~QuetzCore();
 
@@ -77,40 +59,35 @@ public:
     void tick();
     void handleMemResponse(SST::Interfaces::StandardMem::Request* resp);
 
-    bool     isCoreHalted()  const { return halted_;  }
-    bool     isCoreStalled() const { return stalled_; }
-    uint32_t pendingCount()  const { return emitter_.pendingCount(); }
+    bool     isCoreHalted()  const;
+    uint32_t pendingCount()  const;
 
     void finishCore();
 
 private:
-    void refillQueue();
-    void processQueue();
+    template <typename T>
+    T* loadPipelineStage(const char* slot_name, const char* default_type) {
+        SubComponentSlotInfo* slot = getSubComponentSlotInfo(slot_name);
+        if (slot && slot->isPopulated(core_id_))
+            return slot->create<T>(core_id_, ComponentInfo::INSERT_STATS);
+        Params p;
+        return loadAnonymousSubComponent<T>(
+            default_type, slot_name, core_id_,
+            ComponentInfo::INSERT_STATS, p);
+    }
 
-    QuetzCoreBackend*             backend_;
-    SST::Output*                  output_;
-    TimeConverter                 tc_;
+    SST::Output*           output_;
+    uint32_t               core_id_;
+    uint32_t               exec_latency_[QUETZ_INSN_CLASS_COUNT];
+    uint32_t               compute_latency_[QUETZ_INSN_CLASS_COUNT];
+    QuetzCoreContext       ctx_;
+    QuetzCoreStats         stats_;
 
-    uint32_t core_id_;
-    uint32_t max_pending_;
-    uint32_t max_issue_per_cycle_;
-    uint32_t max_queue_len_;
-
-    uint64_t max_insts_;
-    uint64_t inst_count_;
-    bool     detailed_tracking_;
-
-    bool halted_;
-    bool stalled_;
-
-    std::queue<StagedCmd> coreQ_;
-
-    uint32_t exec_latency_[QUETZ_INSN_CLASS_COUNT];
-    uint32_t compute_latency_[QUETZ_INSN_CLASS_COUNT];
-
-    MemMapMemAccessStrategy       mem_access_;
-    MemRequestEmitter             emitter_;
-    QuetzCoreStats     stats_;
+    PipelineInput*         pipeline_input_;
+    PipelineFilter*        pipeline_filter_;
+    PipelineTransform*     pipeline_transform_;
+    PipelineOutput*        pipeline_output_;
+    QuetzEventPipeline*    pipeline_;
 };
 
 } // namespace Quetz

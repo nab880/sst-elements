@@ -5,17 +5,10 @@
 // Copyright (c) 2026, NTESS
 // All rights reserved.
 
-/**
- * insn_classifier.h — strategy interface for guest instruction classification.
- *
- * Each ISA backend (RISC-V, AArch64, generic size-based fallback) implements
- * InsnClassifier so instrument.cpp stays free of per-ISA conditionals.
- */
-
 #ifndef _QUETZ_INSN_CLASSIFIER_H
 #define _QUETZ_INSN_CLASSIFIER_H
 
-#include "plugin_state.h"
+#include "../quetz_ipc_types.h"
 
 #include <cstdint>
 
@@ -26,17 +19,10 @@ class InsnClassifier {
 public:
     virtual ~InsnClassifier() = default;
 
-    /** Classify a guest instruction from its 32-bit encoding. */
     virtual QuetzInsnClass classify(uint32_t enc) const = 0;
 
-    /**
-     * When true, mem and exec callbacks are registered separately at TB
-     * translation time (precise mode).  When false, both callbacks are
-     * registered and classification is deferred to the mem callback.
-     */
     virtual bool usesPreciseMemCallbacks() const = 0;
 
-    /** Refine the memory-access class at runtime (generic ISA uses size). */
     virtual QuetzInsnClass refineMemClass(QuetzInsnClass cls,
                                           uint32_t size) const;
 };
@@ -62,8 +48,6 @@ public:
     QuetzInsnClass refineMemClass(QuetzInsnClass /*cls*/,
                                   uint32_t size) const override;
 };
-
-InsnClassifier* create_insn_classifier(QuetzISA isa);
 
 } // namespace Quetz
 } // namespace SST

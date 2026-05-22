@@ -7,22 +7,20 @@
 
 #include "plugin_state.h"
 
-#include "insn_classifier.h"
-
 #include <cstring>
 
 namespace SST {
 namespace Quetz {
 
-PluginSHMChild*     g_shmchild    = nullptr;
-QuetzTunnel*        g_tunnel      = nullptr;
+PluginSHMChild*     g_shmchild         = nullptr;
+QuetzTunnel*        g_tunnel           = nullptr;
 std::string         g_shmem_name;
-bool                g_detailed    = false;
-bool                g_system_mode = false;
+bool                g_detailed         = false;
+bool                g_system_mode      = false;
 std::atomic<bool>   g_mem_seen[PLUGIN_MAX_VCPUS];
 QuetzInsnClass      g_prev_cls[PLUGIN_MAX_VCPUS];
-QuetzISA            g_isa = QUETZ_ISA_GENERIC;
-InsnClassifier*     g_insn_classifier = nullptr;
+InsnClassifier*     g_insn_classifier  = nullptr;
+MemAccessHandler*   g_mem_handler      = nullptr;
 
 void write_cmd(unsigned vcpu, QuetzShmemCmd type,
                uint32_t size, uint64_t pc, uint64_t addr,
