@@ -54,6 +54,7 @@ libhg_la_SOURCES = \
   operating_system/process/progress_queue.cc \
   operating_system/process/thread.cc \
   operating_system/process/thread_info.cc \
+  operating_system/process/tls.cc \
   operating_system/threading/context_util.cc \
   operating_system/threading/stack_alloc.cc \
   operating_system/threading/stack_alloc_chunk.cc \

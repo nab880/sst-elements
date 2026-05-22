@@ -100,42 +100,29 @@ class GlobalVariable {
 };
 
 // Out-of-line slow path so the inline accessors stay small. Defined in global.cc.
-void validate_global_map_or_abort(void* globalMap, void* stackPtr,
-                                  intptr_t stackTopInt, bool isTls);
-
-static inline void* get_special_at_offset(int offset, int map_offset)
-{
-  int stack; int* stackPtr = &stack;
-  intptr_t stackTopInt = ((intptr_t)stackPtr/sst_hg_global_stacksize)*sst_hg_global_stacksize + map_offset;
-  char** stackTopPtr = (char**) stackTopInt;
-  char* globalMap = *stackTopPtr;
-  return globalMap + offset;
-}
+// Reports either a null per-thread context (no Mercury thread installed) or
+// a context whose globals segment is not registered with the matching
+// GlobalVariableContext. Both signal misuse of the new pthread-local mechanism.
+void validate_global_map_or_abort(void* globalMap, bool isTls);
 
 static inline void* get_global_at_offset(int offset){
-  int stack; int* stackPtr = &stack;
-  intptr_t stackTopInt = ((intptr_t)stackPtr/sst_hg_global_stacksize)*sst_hg_global_stacksize
-                         + SST_HG_TLS_GLOBAL_MAP;
-  char* globalMap = *(char**)stackTopInt;
+  SstHgThreadTls* t = sst_hg_current_tls;
   if (__builtin_expect(GlobalVariable::validateMaps, 0)) {
-    if (!GlobalVariable::glblCtx.isActiveSegment(globalMap)) {
-      validate_global_map_or_abort(globalMap, stackPtr, stackTopInt, /*isTls=*/false);
+    if (!t || !GlobalVariable::glblCtx.isActiveSegment(t->global_map)) {
+      validate_global_map_or_abort(t ? t->global_map : nullptr, /*isTls=*/false);
     }
   }
-  return globalMap + offset;
+  return (char*)t->global_map + offset;
 }
 
 static inline void* get_tls_at_offset(int offset){
-  int stack; int* stackPtr = &stack;
-  intptr_t stackTopInt = ((intptr_t)stackPtr/sst_hg_global_stacksize)*sst_hg_global_stacksize
-                         + SST_HG_TLS_TLS_MAP;
-  char* globalMap = *(char**)stackTopInt;
+  SstHgThreadTls* t = sst_hg_current_tls;
   if (__builtin_expect(GlobalVariable::validateMaps, 0)) {
-    if (!GlobalVariable::tlsCtx.isActiveSegment(globalMap)) {
-      validate_global_map_or_abort(globalMap, stackPtr, stackTopInt, /*isTls=*/true);
+    if (!t || !GlobalVariable::tlsCtx.isActiveSegment(t->tls_map)) {
+      validate_global_map_or_abort(t ? t->tls_map : nullptr, /*isTls=*/true);
     }
   }
-  return globalMap + offset;
+  return (char*)t->tls_map + offset;
 }
 
 template <class T>

@@ -46,18 +46,17 @@ StackAlloc::chunk::chunk(size_t stacksize, size_t suggested_chunk_size, bool pro
     SST::Hg::abort("stackalloc::chunk: failed to mmap region.");
   }
 
-  //make sure we are aligned on boundaries of size stack_size
-  size_t stack_mod = ((size_t)addr_) % stacksize_;
-  if (stack_mod != 0){ //this aligns us on boundaries
-    next_stack_offset_ = stacksize_ - stack_mod;
-  }
+  // Note: legacy code skewed next_stack_offset_ forward to align each stack on
+  // a multiple of stacksize_, because the old TLS lookup did SP & ~(stacksize_-1)
+  // to find the per-coroutine TLS header. With the pthread-local TLS pointer
+  // (see operating_system/process/tls.h) that constraint is gone -- stacks just
+  // need to be page-aligned, which mmap already guarantees.
 
   // If protected we need to mprotect the first stack and advance our offset to
   // the end of the second stack
   if(protect_){
-    // Start protection on the first stack
-    auto protected_offset_ = next_stack_offset_;
-    next_stack_offset_ += stacksize_; // Second stack is first usable stack
+    size_t protected_offset_ = 0;
+    next_stack_offset_ = stacksize_; // Second stack is first usable stack
 
     while(protected_offset_ + step_size_ < size_){
       void *protected_address = addr_ + protected_offset_;

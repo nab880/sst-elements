@@ -15,15 +15,34 @@
 
 #pragma once
 
-/* start at 64 to avoid conflicts with other libs */
-#define SST_HG_TLS_OFFSET 64
-#define SST_HG_TLS_THREAD_ID SST_HG_TLS_OFFSET
-#define SST_HG_TLS_GLOBAL_MAP SST_HG_TLS_THREAD_ID + sizeof(int)
-#define SST_HG_TLS_TLS_MAP SST_HG_TLS_GLOBAL_MAP + sizeof(void*)
-#define SST_HG_TLS_SANITY_CHECK SST_HG_TLS_TLS_MAP + sizeof(void*)
-#define SST_HG_TLS_IMPLICIT_STATE SST_HG_TLS_SANITY_CHECK + sizeof(int)
-#define SST_HG_TLS_END SST_HG_TLS_IMPLICIT_STATE + sizeof(void*)
-#define SST_HG_TLS_SIZE (SST_HG_TLS_END - SST_HG_TLS_OFFSET)
+// Per-Mercury-thread TLS context, addressed via a single pthread-thread-local
+// pointer. Replaces the legacy "SP-align-then-read" trick that conflated
+// process-thread layout with per-coroutine state and was sensitive to Linux
+// ASLR. Installed/cleared by the Mercury OS layer around every user-space
+// thread context switch.
+
+#ifdef __cplusplus
+#include <cstdint>
+extern "C" {
+#else
+#include <stdint.h>
+#endif
+
+extern int sst_hg_global_stacksize;
+
+struct SstHgThreadTls {
+  int   thread_id;
+  void* global_map;      // per-app globals segment
+  void* tls_map;         // per-thread TLS segment
+  void* implicit_state;  // OS-implicit state slot
+  int   sanity_check;    // populated with tls_sanity_check; debug aid
+};
+
+extern __thread struct SstHgThreadTls* sst_hg_current_tls;
+
+#ifdef __cplusplus
+} // extern "C"
+#endif
 
 #ifndef SST_HG_INLINE
 #ifdef __STRICT_ANSI__
@@ -32,19 +51,3 @@
 #define SST_HG_INLINE inline
 #endif
 #endif
-
-//
-#ifdef __cplusplus
-#include <cstdint>
-extern "C" int sst_hg_global_stacksize;
-#else
-#include <stdint.h>
-extern int sst_hg_global_stacksize;
-#endif
-
-
-static SST_HG_INLINE uintptr_t get_sst_hg_tls(){
-  int stack; int* stackPtr = &stack;
-  uintptr_t localStorage = ((uintptr_t) stackPtr/sst_hg_global_stacksize)*sst_hg_global_stacksize;
-  return localStorage;
-}

@@ -50,7 +50,7 @@ Thread::initThread(const SST::Params&  /*params*/,
   int physical_thread_id, ThreadContext* des_thread, void *stack,
   int stacksize, void* globals_storage, void* tls_storage)
 {
-  ThreadInfo::registerUserSpaceVirtualThread(physical_thread_id, stack,
+  ThreadInfo::registerUserSpaceVirtualThread(physical_thread_id, &tls_ctx_,
                                              globals_storage, tls_storage,
                                              isMainThread(), true);
   stack_ = stack;
@@ -63,9 +63,14 @@ Thread::initThread(const SST::Params&  /*params*/,
 
   tls_storage_ = (char*) tls_storage;
 
+  // Install per-coroutine TLS for the very first jump into runRoutine, then
+  // clear it on return so the DES main thread does not observe stale state.
+  // Mirrors the install/clear pair around resumeContext in switchToThread.
+  sst_hg_current_tls = &tls_ctx_;
   context_->startContext(stack, stacksize,
                           runRoutine, this,
                           des_thread);
+  sst_hg_current_tls = nullptr;
 }
 
 Thread*

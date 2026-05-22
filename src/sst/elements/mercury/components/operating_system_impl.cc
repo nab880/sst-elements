@@ -25,6 +25,7 @@
 #include <mercury/operating_system/libraries/library.h>
 #include <mercury/operating_system/libraries/unblock_event.h>
 #include <mercury/operating_system/process/thread_id.h>
+#include <mercury/operating_system/process/tls.h>
 #include <mercury/operating_system/threading/stack_alloc.h>
 #include <sst/core/eli/elementbuilder.h>
 #include <sst/core/params.h>
@@ -220,7 +221,11 @@ OperatingSystemImpl::switchToThread(Thread* tothread)
   }
   active_thread_ = tothread;
   activeOs() = os_api_;
+  // Install per-coroutine TLS for accessor lookups; cleared on return so the
+  // DES main thread does not see stale per-app state.
+  sst_hg_current_tls = tothread->tls();
   tothread->context()->resumeContext(des_context_);
+  sst_hg_current_tls = nullptr;
   out_->debug(CALL_INFO, 1, 0,
                 "switched back from context %d to main thread %d\n",
                 tothread->threadId(), physical_thread_id_);
@@ -282,7 +287,11 @@ OperatingSystemImpl::block()
                 active_thread_->threadId(), physical_thread_id_);
   blocked_thread_ = active_thread_;
   active_thread_ = nullptr;
+  // Yielding to DES: clear per-coroutine TLS so DES side doesn't read stale
+  // app state. Restored below after we are resumed on the same physical thread.
+  sst_hg_current_tls = nullptr;
   old_context->pauseContext(des_context_);
+  sst_hg_current_tls = old_thread->tls();
 
   //restore state to indicate this thread and this OS are active again
   activeOs() = os_api_;

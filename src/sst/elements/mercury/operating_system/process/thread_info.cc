@@ -32,121 +32,75 @@ namespace Hg {
 extern template class  HgBase<SST::Component>;
 extern template class  HgBase<SST::SubComponent>;
 
-//#if (SST_HG_TLS_OFFSET != SPKT_TLS_OFFSET)
-//#error sprockit and sstmac do not agree on stack TLS offset
-//#endif
-
 static const int tls_sanity_check = 42042042;
 
 static thread_lock globals_lock;
 
-static void configureStack(int thread_id, void* stack, void* globals, void* tlsMap)
+extern "C" void* sst_hg_alloc_stack(int sz, int /*md_sz*/)
 {
-  //essentially treat this as thread-local storage
-  char* tls = (char*) stack;
-  int* thr_id_ptr = (int*) &tls[SST_HG_TLS_THREAD_ID];
-  *thr_id_ptr = thread_id;
-
-  int* sanity_ptr = (int*) &tls[SST_HG_TLS_SANITY_CHECK];
-  *sanity_ptr = tls_sanity_check;
-
-  //this is dirty - so dirty, but it works
-  void** globalPtr = (void**) &tls[SST_HG_TLS_GLOBAL_MAP];
-  *globalPtr = globals;
-
-  void** tlsPtr = (void**) &tls[SST_HG_TLS_TLS_MAP];
-  *tlsPtr = tlsMap;
-
-  void** statePtr = (void**) &tls[SST_HG_TLS_IMPLICIT_STATE];
-  *statePtr = nullptr;
-}
-
-extern "C" void* sst_hg_alloc_stack(int sz, int md_sz)
-{
-  if (md_sz >= SST_HG_TLS_OFFSET){
-    sst_hg_abort_printf("Cannot have stack metadata larger than %d - requested %d",
-                      SST_HG_TLS_OFFSET, md_sz);
-  }
   if (sz > SST::Hg::OperatingSystem::stacksize()){
     sst_hg_abort_printf("Cannot allocate stack larger than %d - requested %d",
                       SST::Hg::OperatingSystem::stacksize(), sz);
   }
-  void* stack = SST::Hg::StackAlloc::alloc();
-  //configureStack(get_sst_hg_tls_thread_id(), stack, get_sst_hg_global_data(), get_sst_hg_tls_data());
-  return stack;
+  // The legacy SP-alignment trick reserved an SST_HG_TLS_OFFSET prefix in the
+  // stack for per-coroutine TLS. With the pthread-local sst_hg_current_tls
+  // mechanism that prefix is no longer needed, so md_sz is unrestricted.
+  return SST::Hg::StackAlloc::alloc();
 }
 
-extern "C" void sst_hg_free_stack(void* ptr)
+extern "C" void sst_hg_free_stack(void* /*ptr*/)
 {
   abort("sst_hg_free_stack");
 //  SST::Hg::StackAlloc::free(ptr);
 }
 
 void
-ThreadInfo::registerUserSpaceVirtualThread(int phys_thread_id, void *stack,
+ThreadInfo::registerUserSpaceVirtualThread(int phys_thread_id,
+                                           SstHgThreadTls* tls,
                                            void* globalsMap, void* tlsMap,
                                            bool isAppStartup,
                                            bool isThreadStartup)
 {
-  //abort("abort ThreadInfo::registerUserSpaceVirtualThread");
-  size_t stack_mod = ((size_t)stack) % sst_hg_global_stacksize;
-  if (stack_mod != 0){
-    sst_hg_throw_printf(Hg::ValueError,
-        "user space thread stack is not aligned on %llu bytes",
-        sst_hg_global_stacksize);
+  // Populate the per-Thread TLS slot. This pointer is what the Mercury OS
+  // layer installs into sst_hg_current_tls on every context switch into this
+  // Thread; subsequent global/TLS lookups resolve through it.
+  tls->thread_id      = phys_thread_id;
+  tls->global_map     = globalsMap;
+  tls->tls_map        = tlsMap;
+  tls->implicit_state = nullptr;
+  tls->sanity_check   = tls_sanity_check;
+
+  globals_lock.lock();
+  // Init functions for newly-active globals/TLS segments run on whatever
+  // physical thread is calling us (typically the DES main thread during App
+  // launch). They must read/write the new app's segment via the standard
+  // accessor path, so temporarily install the new TLS pointer for the
+  // duration of the call sequence, then restore. We save/restore rather than
+  // unconditionally clearing to be safe under nested or recursive launches.
+  SstHgThreadTls* saved = sst_hg_current_tls;
+  sst_hg_current_tls = tls;
+
+  if (globalsMap && isAppStartup){
+    GlobalVariable::glblCtx.addActiveSegment(globalsMap);
+    GlobalVariable::glblCtx.callInitFxns(globalsMap);
   }
 
-  configureStack(phys_thread_id, stack, globalsMap, tlsMap);
+  if (tlsMap && isThreadStartup){
+    GlobalVariable::tlsCtx.addActiveSegment(tlsMap);
+    GlobalVariable::tlsCtx.callInitFxns(tlsMap);
+  }
 
-//  //there is no parent user-space thread...
-//  static std::vector<char> fake_globals(1e6);
-//  static std::vector<char> fake_tls(1e6);
-//  void** currentGlobalsPtr = (void**) &fake_globals[0];
-//  void** currentTlsPtr = (void**) &fake_tls[0];
-
-  int activeStack; int* activeStackPtr = &activeStack;
-  intptr_t stackTopInt = sst_hg_global_stacksize //avoid errors if this is zero
-      ? ((intptr_t)activeStackPtr/sst_hg_global_stacksize)*sst_hg_global_stacksize
-      : 0;
-
-  void** currentGlobalsPtr = (void**)(stackTopInt + SST_HG_TLS_GLOBAL_MAP);
-  void** currentTlsPtr = (void**)(stackTopInt + SST_HG_TLS_GLOBAL_MAP);
-
- globals_lock.lock();
- if (globalsMap && isAppStartup){
-   void* currentGlobals = *currentGlobalsPtr;
-   *currentGlobalsPtr = globalsMap;
-   GlobalVariable::glblCtx.addActiveSegment(globalsMap);
-   GlobalVariable::glblCtx.callInitFxns(globalsMap);
-   *currentGlobalsPtr = currentGlobals;
- }
-
- if (tlsMap && isThreadStartup){
-   void* currentTls = *currentTlsPtr;
-   *currentTlsPtr = tlsMap;
-   GlobalVariable::tlsCtx.addActiveSegment(tlsMap);
-   GlobalVariable::tlsCtx.callInitFxns(tlsMap);
-   *currentTlsPtr = currentTls;
- }
- globals_lock.unlock();
+  sst_hg_current_tls = saved;
+  globals_lock.unlock();
 }
 
 void
-ThreadInfo::deregisterUserSpaceVirtualThread(void* stack)
+ThreadInfo::deregisterUserSpaceVirtualThread(SstHgThreadTls* /*tls*/)
 {
-//  globals_lock.lock();
-//  char* tls = (char*) stack;
-//  void** globalsPtr = (void**) &tls[SST_HG_TLS_GLOBAL_MAP];
-//  void* globalsMap = *globalsPtr;
-//  void** tlsPtr = (void**) &tls[SST_HG_TLS_TLS_MAP];
-//  void* tlsMap = *tlsPtr;
-//  if (globalsMap){
-//    GlobalVariable::glblCtx.removeActiveSegment(globalsMap);
-//  }
-//  if (tlsMap){
-//    GlobalVariable::tlsCtx.removeActiveSegment(tlsMap);
-//  }
-//  globals_lock.unlock();
+  // Active-segment teardown is intentionally a no-op today (matches legacy
+  // commented-out behavior). Re-enabling it requires also removing the
+  // segment from GlobalVariableContext::activeGlobalMaps_, which races with
+  // in-flight accessors on other physical threads.
 }
 
 } // end namespace Hg

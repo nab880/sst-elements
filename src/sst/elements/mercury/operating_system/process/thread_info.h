@@ -30,16 +30,20 @@ namespace Hg {
 
 class ThreadInfo {
  public:
-  static void registerUserSpaceVirtualThread(int phys_thread_id, void* stack,
+  // Populate the per-Thread TLS slot and run any pending init functions for
+  // the new globals/TLS segments. `tls` is the Thread's owned SstHgThreadTls
+  // struct (was previously stashed at the bottom of the coroutine stack via
+  // the SP-alignment trick).
+  static void registerUserSpaceVirtualThread(int phys_thread_id,
+                                             SstHgThreadTls* tls,
                                              void* globalsMap, void* tlsMap,
                                              bool isAppStartup, bool isThreadStartup);
 
-  static void deregisterUserSpaceVirtualThread(void* stack);
+  static void deregisterUserSpaceVirtualThread(SstHgThreadTls* tls);
 
   static inline int currentPhysicalThreadId(){
-    uintptr_t localStorage = get_sst_hg_tls();
-    int* tls = (int*) (localStorage + SST_HG_TLS_THREAD_ID);
-    return *tls;
+    SstHgThreadTls* t = sst_hg_current_tls;
+    return t ? t->thread_id : 0;
   }
 
 };

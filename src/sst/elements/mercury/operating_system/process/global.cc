@@ -48,24 +48,23 @@ bool GlobalVariable::validateMaps = []{
   return v && *v && v[0] != '0';
 }();
 
-void validate_global_map_or_abort(void* globalMap, void* stackPtr,
-                                  intptr_t stackTopInt, bool isTls)
+void validate_global_map_or_abort(void* globalMap, bool isTls)
 {
-  // Slow path: only reached when SST_HG_VALIDATE_GLOBALS is on AND the
-  // stack-pointer-aligned lookup pointed at memory that no GlobalVariableContext
-  // ever registered as an active per-app segment. Almost always means a global
-  // was accessed from the main simulator stack (or some other non-coroutine
-  // stack) -- the same class of failure that ASLR exposes as a ~30% MPI_Init
-  // flake on Linux.
+  // Slow path: only reached when SST_HG_VALIDATE_GLOBALS is on AND either:
+  //  (a) sst_hg_current_tls was null when an accessor was called from a
+  //      Mercury user-space context (it should have been installed by the
+  //      OS layer just before resuming the thread), or
+  //  (b) the per-thread context's globals/TLS segment is not registered
+  //      with the matching GlobalVariableContext (corruption / use-after-free).
   sst_hg_abort_printf(
-    "%s access from non-coroutine stack: globalMap=%p (not a registered "
-    "active segment); stackPtr=%p stackTopInt=0x%lx stacksize=%d. "
-    "This typically means a global was touched before / outside a Mercury "
-    "user-space thread switch. Disable SST_HG_VALIDATE_GLOBALS to silence.",
+    "%s access without a valid per-thread Mercury TLS context: "
+    "sst_hg_current_tls=%p, segment=%p. "
+    "This means a global was touched outside a Mercury user-space thread, or "
+    "the OS layer failed to install the TLS pointer at context switch. "
+    "Disable SST_HG_VALIDATE_GLOBALS to silence.",
     isTls ? "TLS" : "global",
-    globalMap, stackPtr,
-    static_cast<unsigned long>(stackTopInt),
-    sst_hg_global_stacksize);
+    (void*) sst_hg_current_tls,
+    globalMap);
 }
 
 int

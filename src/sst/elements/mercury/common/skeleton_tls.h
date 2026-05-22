@@ -15,7 +15,6 @@
 
 #pragma once
 
-//#include <sstmac/common/sstmac_config.h>
 #include <mercury/operating_system/process/tls.h>
 #include <mercury/common/unusedvariablemacro.h>
 
@@ -39,36 +38,36 @@ void allocate_static_init_tls_segment();
 }
 #endif
 
+// Per-coroutine TLS lookups now read through the pthread-thread-local pointer
+// sst_hg_current_tls (installed by the Mercury OS layer around each context
+// switch). When no Mercury thread is active -- e.g. during early static init
+// before any App runs -- we fall back to the global "static init" segments,
+// matching the previous behavior of the SP-trick accessors.
+
 SST_HG_MAYBE_UNUSED
 static SST_HG_INLINE char* get_sst_hg_global_data(){
-  if (sst_hg_global_stacksize == 0){
-    if (static_init_glbls_segment == 0){
-      allocate_static_init_glbls_segment();
-    }
+  struct SstHgThreadTls* t = sst_hg_current_tls;
+  if (!t) {
+    if (!static_init_glbls_segment) allocate_static_init_glbls_segment();
     return static_init_glbls_segment;
-  } else {
-    char** globalMapPtr = (char**)(get_sst_hg_tls() + SST_HG_TLS_GLOBAL_MAP);
-    return *globalMapPtr;
   }
+  return (char*) t->global_map;
 }
 
 SST_HG_MAYBE_UNUSED
 static SST_HG_INLINE char* get_sst_hg_tls_data(){
-  if (sst_hg_global_stacksize == 0){
-    if (static_init_tls_segment == 0){
-      allocate_static_init_tls_segment();
-    }
+  struct SstHgThreadTls* t = sst_hg_current_tls;
+  if (!t) {
+    if (!static_init_tls_segment) allocate_static_init_tls_segment();
     return static_init_tls_segment;
-  } else {
-    char** globalMapPtr = (char**)(get_sst_hg_tls() + SST_HG_TLS_TLS_MAP);
-    return *globalMapPtr;
   }
+  return (char*) t->tls_map;
 }
 
 SST_HG_MAYBE_UNUSED
 static SST_HG_INLINE int get_sst_hg_tls_thread_id(){
-  int* idPtr = (int*)(get_sst_hg_tls() + SST_HG_TLS_THREAD_ID);
-  return *idPtr;
+  struct SstHgThreadTls* t = sst_hg_current_tls;
+  return t ? t->thread_id : 0;
 }
 
 #undef SST_HG_INLINE

@@ -24,6 +24,7 @@
 #include <mercury/operating_system/process/software_id.h>
 #include <mercury/operating_system/process/app_fwd.h>
 #include <mercury/operating_system/libraries/library.h>
+#include <mercury/operating_system/process/tls.h>
 #include <mercury/operating_system/threading/threading_interface.h>
 
 #include <queue>
@@ -124,6 +125,14 @@ class Thread
 
   ThreadContext* context() const {
     return context_;
+  }
+
+  // Per-coroutine TLS context. The Mercury OS layer reads this pointer and
+  // installs it into the pthread-local sst_hg_current_tls immediately before
+  // resuming this Thread on the physical thread, then clears it again on the
+  // way back. Replaces the legacy SP-aligned stack-header trick.
+  SstHgThreadTls* tls() {
+    return &tls_ctx_;
   }
 
   void spawn(Thread* thr);
@@ -364,6 +373,10 @@ class Thread
   detach_t detach_state_;
 
   std::list<omp_context> omp_contexts_;
+
+  // Per-coroutine TLS slot installed into sst_hg_current_tls on context switch.
+  // Populated by ThreadInfo::registerUserSpaceVirtualThread on initThread().
+  SstHgThreadTls tls_ctx_{};
 };
 
 } // end namespace Hg
