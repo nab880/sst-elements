@@ -5,12 +5,10 @@
 // Copyright (c) 2026, NTESS
 // All rights reserved.
 
-
-
 #ifndef _QUETZ_INSN_CLASSIFIER_H
 #define _QUETZ_INSN_CLASSIFIER_H
 
-#include "plugin_state.h"
+#include "../quetz_ipc_types.h"
 
 #include <cstdint>
 
@@ -21,13 +19,10 @@ class InsnClassifier {
 public:
     virtual ~InsnClassifier() = default;
 
-    
     virtual QuetzInsnClass classify(uint32_t enc) const = 0;
 
-    
     virtual bool usesPreciseMemCallbacks() const = 0;
 
-    
     virtual QuetzInsnClass refineMemClass(QuetzInsnClass cls,
                                           uint32_t size) const;
 };
@@ -53,8 +48,6 @@ public:
     QuetzInsnClass refineMemClass(QuetzInsnClass ,
                                   uint32_t size) const override;
 };
-
-InsnClassifier* create_insn_classifier(QuetzISA isa);
 
 } // namespace Quetz
 } // namespace SST
