@@ -96,11 +96,11 @@ MmioForwardRegionHandler::MmioForwardRegionHandler(ComponentId_t id, Params& par
 MemRegionHandler::Action
 MmioForwardRegionHandler::onRead(const QuetzCommand& /*cmd*/, QuetzCoreStats& /*stats*/)
 {
-    return Action::FORWARD;
+    return Action::FORWARD_MMIO;
 }
 
 MemRegionHandler::Action
 MmioForwardRegionHandler::onWrite(const QuetzCommand& /*cmd*/, QuetzCoreStats& /*stats*/)
 {
-    return Action::FORWARD;
+    return Action::FORWARD_MMIO;
 }

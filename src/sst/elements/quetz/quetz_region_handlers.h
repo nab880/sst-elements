@@ -105,15 +105,12 @@ public:
         "quetz",
         "MmioForwardRegionHandler",
         SST_ELI_ELEMENT_VERSION(1, 0, 0),
-        "Forward MMIO range to hierarchy (optional mmio_link port).",
+        "Forward MMIO range via mmio_link_N on QuetzCPU (Action::FORWARD_MMIO).",
         SST::Quetz::MemRegionHandler)
 
     SST_ELI_DOCUMENT_PARAMS(
         { "start", "Inclusive region start address.", "0" },
         { "end",   "Inclusive region end address.",   "0" })
-
-    SST_ELI_DOCUMENT_PORTS(
-        { "mmio_link", "Optional dedicated MMIO StandardMem link.", {} })
 
     MmioForwardRegionHandler(ComponentId_t id, Params& params);
 
