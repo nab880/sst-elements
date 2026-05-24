@@ -38,6 +38,10 @@ echo "=== RISC-V virt GPU trace ==="
 $RV64_CC $RV64_FLAGS riscv_virt_gpu_trace.c -o riscv_virt_gpu_trace
 echo "  -> riscv_virt_gpu_trace"
 
+echo "=== RISC-V virt GPU kernel ==="
+$RV64_CC $RV64_FLAGS riscv_virt_gpu_kernel.c -o riscv_virt_gpu_kernel
+echo "  -> riscv_virt_gpu_kernel"
+
 echo "=== ARM Cortex-M7 hello ==="
 $ARM_CC $ARM_CFLAGS -T link_arm_m7.ld -Wl,--build-id=none \
   arm_m7_startup.S arm_m7_hello.c -o arm_m7_hello
@@ -54,4 +58,5 @@ echo "  -> mips_malta_hello.bin"
 echo ""
 echo "All firmware binaries built successfully."
 ls -lh riscv_virt_hello riscv_virt_uart_echo riscv_virt_mmio_poke \
-        riscv_virt_gpu_trace arm_m7_hello x86_hello mips_malta_hello.bin 2>/dev/null
+        riscv_virt_gpu_trace riscv_virt_gpu_kernel \
+        arm_m7_hello x86_hello mips_malta_hello.bin 2>/dev/null
