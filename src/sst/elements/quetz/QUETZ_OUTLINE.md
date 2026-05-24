@@ -153,7 +153,7 @@ Configuration parsing and QEMU fork/exec live in separate units (below); `quetzc
 - Wide accesses (e.g. RVV) split into multiple `StandardMem` requests; only first 16 bytes of write data forwarded.
 - `max_insts` halts core after instruction count (includes NOPs and filtered ops).
 
-**Done:** per-region policy is a `MemRegionHandler` subcomponent; custom handlers can forward to `mmioEx` via `MmioForwardRegionHandler`.
+**Done:** per-region policy is a `MemRegionHandler` subcomponent; `MmioForwardRegionHandler` returns `Action::FORWARD_MMIO` so traffic uses per-vCPU `mmio_link_N` on `QuetzCPU` (not the handler subcomponent).
 
 ---
 
@@ -161,7 +161,7 @@ Configuration parsing and QEMU fork/exec live in separate units (below); `quetzc
 
 | Responsibility | Details |
 |----------------|---------|
-| API | `MemRegionHandler` SubComponent (`FORWARD` / `CONSUME`) |
+| API | `MemRegionHandler` SubComponent (`FORWARD` / `FORWARD_MMIO` / `CONSUME`) |
 | Built-ins | `ForwardRegionHandler`, `FilteredRegionHandler`, `UartRegionHandler`, `MmioForwardRegionHandler` |
 | Lookup | `MemRegionTable::findHandler()` — first-match over populated `region_handler` slots |
 
@@ -429,6 +429,31 @@ Quetz’s MMIO story is **“filter, don’t model”**:
 - Mark large low memory `filtered` so firmware’s stack/heap traffic does not pollute cache statistics meant for a specific study region—or conversely, only study DRAM by filtering everything else.
 - UART MMIO falls in QEMU’s platform map; plugin sees each LSR poll and THR write as real memory ops.
 
+### 4.3.1 Dedicated MMIO routing (`FORWARD_MMIO`)
+
+P0 adds a second per-vCPU StandardMem port so device doorbells bypass the L1:
+
+| Piece | Role |
+|-------|------|
+| `MmioForwardRegionHandler` | First-match region; returns `Action::FORWARD_MMIO` |
+| `mmio_link_%(vcpu_count)d` | Optional port on `QuetzCPU`; connects to bus or `MemController` |
+| `MemRequestEmitter` | `IssuePath::MMIO`: one transaction, no cache-line split |
+| Stats | `mmio_read_requests`, `mmio_write_requests`, `mmio_*_latency`, `mmio_truncated_writes` |
+
+**SDL pattern** (see `tests/sysmode/basic_quetz_mmio.py`):
+
+```python
+mmio_rh = cpu.setSubComponent("region_handler", "quetz.MmioForwardRegionHandler", 0)
+mmio_rh.addParams({"start": 0x80100000, "end": 0x801003FF})
+sst.Link("cpu_mmio").connect((cpu, "mmio_link_0", "1ns"), (mmio_dev, "highlink", "1ns"))
+```
+
+**Constraints:**
+
+- MMIO write payload is capped at 16 bytes (`QuetzCommand::data`); wider stores increment `mmio_truncated_writes`.
+- `cache_link` and `mmio_link` are **not coherent** with each other; packet scratch for GPU/balar (P3) must share a coherent path or use explicit flush/filter rules.
+- Place the MMIO handler **before** broad `FilteredRegionHandler` entries so doorbell addresses are not swallowed by a larger filtered range.
+
 ### 4.4 Implementation problems
 
 | Problem | Description |
@@ -441,7 +466,7 @@ Quetz’s MMIO story is **“filter, don’t model”**:
 | **Reads to devices forwarded by mistake** | If region typed `memory`, LSR polling hits DRAM model — wrong latency and wrong semantics |
 | **16-byte store cap** | Device drivers using `str`/`stm` with wide stores may not capture full payload in UART sink |
 | **Split across cache lines** | MMIO registers rarely span lines, but generic `issueWrite` could split a device access incorrectly if forwarded |
-| **No integration with `mmioEx`** | Cannot plug Quetz into existing memHierarchy MMIO test patterns without forwarding |
+| **No integration with `mmioEx`** | Use `MmioForwardRegionHandler` + `mmio_link_N` toward `mmioEx` or a bare `MemController` (P0); balar/GPU P3 still needs shared DRAM for packet reads |
 
 **Architectural gap:** Quetz is a **trace feeder**, not an address-space arbiter. Proper MMIO simulation requires either:
 
@@ -540,7 +565,7 @@ Improvements should preserve the **lowering barrier** value: run bare-metal ELFs
 #### P1 — Bare-metal workflow
 
 4. **Platform description file (YAML/JSON)** — Machine name, RAM range, MMIO regions with types (`dram`, `uart`, `ignore`, `device`), QEMU args template. SDL reads one file instead of many env vars.
-5. **First-class `mmioEx` integration** — Use `MmioForwardRegionHandler` + `mmio_link` to forward selected regions to SST devices; keep `filtered` for the rest.
+5. **First-class `mmioEx` integration** — Use `MmioForwardRegionHandler` + `mmio_link_N` to forward selected regions to SST devices; keep `filtered` for the rest.
 6. **Exit detection** — Optional watch on test-finisher MMIO write to call `primaryComponentOKToEndSim` without relying on guest calling `exit()` / plugin atexit.
 
 #### P2 — Fidelity knobs
