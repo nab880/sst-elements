@@ -1,0 +1,8 @@
+# Local unit-test build products (run tests/unit/run_unit_tests.sh).
+unit/_build/
+
+# SST harness crash dumps (should not be committed).
+sst_test_frameworks_crashreport.log
+
+# Scratch stdout from gold refresh experiments.
+usermode/small/**/_tmp.out

@@ -161,10 +161,35 @@ Gold updates are **not** required for every refactor; only when the filtered sta
 | `tests/testsuite_default_quetz.py` | Main harness; matrices for usermode/sysmode |
 | `tests/usermode/` | User-mode QEMU (`qemu-riscv64`, `qemu-aarch64`, `qemu-x86_64`, …) |
 | `tests/sysmode/` | System-mode (`qemu-system-*`), firmware, memmap |
+| `tests/sysmode/firmware/` | Prebuilt bare-metal ELFs for sysmode tests (see below) |
 | `tests/binaries/` | Guest ELFs used by SDL scripts |
 | `tests/sst_test_outputs/` | Generated output (gitignored in normal use) |
 
 Individual tests are Python files that build an SST graph and compare output to `*.gold` files (event-count stats are stable; some timing fields are filtered).
+
+### System-mode firmware (checked in)
+
+Sysmode tests load guest kernels from `tests/sysmode/firmware/` (`riscv_virt_hello`, `riscv_virt_uart_echo`, `riscv_virt_mmio_poke`, …). These ELF binaries are **committed** so CI and `sst-test-elements` do not need a cross-compiler at test time.
+
+If you change a `*.c` / `*.S` source file, rebuild and commit the matching binary:
+
+```bash
+cd src/sst/elements/quetz/tests/sysmode/firmware
+# Default: /opt/riscv/bin/riscv64-unknown-linux-musl-gcc (Docker image)
+# macOS Homebrew: RV64_CC=$(command -v riscv64-elf-gcc) ./build.sh
+./build.sh
+git add riscv_virt_hello riscv_virt_uart_echo riscv_virt_mmio_poke   # plus arm/x86 outputs if changed
+```
+
+`test_quetz_sysmode_mmio_basic` skips when `riscv_virt_mmio_poke` is missing.
+
+Quick local run of the MMIO routing test (after SST + Quetz are installed):
+
+```bash
+export SST_CORE_PREFIX=/opt/sst    # or your SST install prefix
+export SST_ELEMENTS_PREFIX=/opt/sst
+src/sst/elements/quetz/tests/sysmode/run_mmio_test.sh
+```
 
 ---
 

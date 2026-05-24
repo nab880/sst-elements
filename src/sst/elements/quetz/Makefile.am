@@ -102,8 +102,12 @@ libqemu_sst_plugin_la_LDFLAGS = \
     -module \
     -avoid-version \
     -shared \
-    -Wl,-no-as-needed \
     $(AM_LDFLAGS)
+# Linux ld only; Darwin rejects -no-as-needed.
+ifneq ($(findstring darwin,$(host_os)),)
+else
+libqemu_sst_plugin_la_LDFLAGS += -Wl,-no-as-needed
+endif
 
 libqemu_sst_plugin_la_CPPFLAGS = \
     -fPIC \
