@@ -77,6 +77,12 @@ AC_DEFUN([SST_quetz_CONFIG], [
 
     AC_SUBST([QEMU_BIN])
 
+    dnl Linux ld only; Darwin rejects -Wl,-no-as-needed.
+    AS_CASE([$host_os],
+        [darwin*], [QUETZ_PLUGIN_LD_EXTRA=],
+        [QUETZ_PLUGIN_LD_EXTRA=-Wl,-no-as-needed])
+    AC_SUBST([QUETZ_PLUGIN_LD_EXTRA])
+
     dnl -----------------------------------------------------------------------
     dnl Plugin install directory (used in quetzcpu.cc to auto-resolve the
     dnl plugin path when qemu_plugin= is not specified).
