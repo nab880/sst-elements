@@ -182,7 +182,9 @@ public:
 
     SST_ELI_DOCUMENT_PORTS(
         { "cache_link_%(vcpu_count)d",
-          "Per-vCPU link to the first-level cache or memory hierarchy.", {} }
+          "Per-vCPU link to the first-level cache or memory hierarchy.", {} },
+        { "mmio_link_%(vcpu_count)d",
+          "Per-vCPU link for MMIO (MmioForwardRegionHandler); optional.", {} }
     )
 
     SST_ELI_DOCUMENT_STATISTICS(
@@ -276,6 +278,10 @@ public:
           "StandardMem interface to the memory hierarchy "
           "(one slot per vCPU, indexed 0..vcpu_count-1).",
           "SST::Interfaces::StandardMem" },
+        { "mmio",
+          "Optional StandardMem interface for MMIO traffic on mmio_link_N "
+          "(one slot per vCPU, indexed 0..vcpu_count-1).",
+          "SST::Interfaces::StandardMem" },
         { "region_handler",
           "Address-range policy (filter, UART capture, MMIO forward, custom). "
           "First-match wins; more specific regions must use lower slot indices.",
@@ -318,6 +324,7 @@ private:
 
     std::vector<QuetzCore*>                    cores_;
     std::vector<SST::Interfaces::StandardMem*> mem_ifaces_;
+    std::vector<SST::Interfaces::StandardMem*> mmio_ifaces_;
 };
 
 } // namespace Quetz

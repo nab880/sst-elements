@@ -96,6 +96,39 @@ QuetzCPU::QuetzCPU(ComponentId_t id, Params& params)
         }
     }
 
+    mmio_ifaces_.assign(cfg_.vcpu_count, nullptr);
+    SubComponentSlotInfo* mmio_slot = getSubComponentSlotInfo("mmio");
+    for (uint32_t i = 0; i < cfg_.vcpu_count; i++) {
+        char link_buf[128];
+        snprintf(link_buf, sizeof(link_buf), "mmio_link_%" PRIu32, i);
+        bool want_mmio = isPortConnected(link_buf);
+        if (!want_mmio && mmio_slot && mmio_slot->isPopulated(i))
+            want_mmio = true;
+        if (!want_mmio)
+            continue;
+
+        StandardMem* iface = nullptr;
+        if (mmio_slot && mmio_slot->isPopulated(i)) {
+            iface = mmio_slot->create<StandardMem>(i,
+                ComponentInfo::INSERT_STATS, tc,
+                new StandardMem::Handler<QuetzCore,
+                    &QuetzCore::handleMemResponse>(cores_[i]));
+        } else {
+            Params par;
+            par.insert("port", std::string(link_buf));
+            iface = loadAnonymousSubComponent<StandardMem>(
+                "memHierarchy.standardInterface", "mmio", i,
+                ComponentInfo::SHARE_PORTS | ComponentInfo::INSERT_STATS,
+                par, tc,
+                new StandardMem::Handler<QuetzCore,
+                    &QuetzCore::handleMemResponse>(cores_[i]));
+        }
+        mmio_ifaces_[i] = iface;
+        cores_[i]->setMmioLink(iface);
+        output_->verbose(CALL_INFO, 1, 0,
+            "vCPU %" PRIu32 ": mmio_link connected.\n", i);
+    }
+
     registerAsPrimaryComponent();
     primaryComponentDoNotEndSim();
 
@@ -152,8 +185,11 @@ void QuetzCPU::init(unsigned int phase) {
         stop_ticking_ = false;
     }
 
-    for (uint32_t i = 0; i < cfg_.vcpu_count; i++)
+    for (uint32_t i = 0; i < cfg_.vcpu_count; i++) {
         mem_ifaces_[i]->init(phase);
+        if (mmio_ifaces_[i])
+            mmio_ifaces_[i]->init(phase);
+    }
 }
 
 void QuetzCPU::finish() {
