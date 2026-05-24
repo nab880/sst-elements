@@ -39,6 +39,8 @@ libquetz_la_SOURCES = \
     quetz_region_table.h \
     quetz_region_handlers.cc \
     quetz_region_handlers.h \
+    quetz_gpu_device.cc \
+    quetz_gpu_device.h \
     quetz_mem_access.cc \
     quetz_mem_access.h \
     quetz_mem_issue.cc \
