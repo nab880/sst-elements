@@ -26,9 +26,15 @@
 namespace SST {
 namespace Quetz {
 
+enum class IssuePath {
+    CACHED,
+    MMIO,
+};
+
 struct QuetzPendingReq {
     SST::Interfaces::StandardMem::Request* req;
-    uint64_t issue_cycle;
+    uint64_t                               issue_cycle;
+    bool                                   is_mmio;
 };
 
 class MemRequestEmitter {
@@ -43,20 +49,28 @@ public:
         QuetzCoreStats&                  stats);
 
     void setLink(SST::Interfaces::StandardMem* link) { mem_link_ = link; }
+    void setMmioLink(SST::Interfaces::StandardMem* link) { mmio_link_ = link; }
 
-    uint32_t slotsNeeded(uint64_t vaddr, uint32_t size) const;
-    void issueRead (uint64_t vaddr, uint32_t size, uint64_t pc);
+    uint32_t slotsNeeded(uint64_t vaddr, uint32_t size,
+                         IssuePath path = IssuePath::CACHED) const;
+    void issueRead (uint64_t vaddr, uint32_t size, uint64_t pc,
+                    IssuePath path = IssuePath::CACHED);
     void issueWrite(uint64_t vaddr, uint32_t size, uint64_t pc,
-                    const uint8_t* raw_data = nullptr);
+                    const uint8_t* raw_data = nullptr,
+                    IssuePath path = IssuePath::CACHED);
 
     bool handleResponse(SST::Interfaces::StandardMem::Request* resp,
-                        uint64_t& latency_out, bool& was_read_out);
+                        uint64_t& latency_out, bool& was_read_out,
+                        bool& was_mmio_out);
 
     uint32_t pendingCount() const { return pending_count_; }
 
 private:
+    SST::Interfaces::StandardMem* linkFor(IssuePath path) const;
+
     ComponentExtension*               comp_;
     SST::Interfaces::StandardMem*     mem_link_;
+    SST::Interfaces::StandardMem*     mmio_link_;
     SST::Output*                      output_;
     uint32_t                          core_id_;
     SST::TimeConverter                tc_;

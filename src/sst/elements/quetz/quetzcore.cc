@@ -111,6 +111,10 @@ void QuetzCore::setMemLink(SST::Interfaces::StandardMem* link) {
     pipeline_->setMemLink(link);
 }
 
+void QuetzCore::setMmioLink(SST::Interfaces::StandardMem* link) {
+    pipeline_->setMmioLink(link);
+}
+
 void QuetzCore::finishCore() {
     pipeline_->finish();
 }
@@ -118,12 +122,19 @@ void QuetzCore::finishCore() {
 void QuetzCore::handleMemResponse(SST::Interfaces::StandardMem::Request* resp) {
     uint64_t lat = 0;
     bool was_read = false;
-    if (!pipeline_->handleResponse(resp, lat, was_read))
+    bool was_mmio = false;
+    if (!pipeline_->handleResponse(resp, lat, was_read, was_mmio))
         return;
-    if (was_read)
+    if (was_mmio) {
+        if (was_read)
+            stats_.mmio_read_lat->addData(lat);
+        else
+            stats_.mmio_write_lat->addData(lat);
+    } else if (was_read) {
         stats_.read_lat->addData(lat);
-    else
+    } else {
         stats_.write_lat->addData(lat);
+    }
 }
 
 void QuetzCore::tick() {

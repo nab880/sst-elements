@@ -22,8 +22,13 @@ class QuetzCore;
 struct QuetzCoreStats {
     Statistics::Statistic<uint64_t>* read_reqs        = nullptr;
     Statistics::Statistic<uint64_t>* write_reqs       = nullptr;
+    Statistics::Statistic<uint64_t>* mmio_read_reqs   = nullptr;
+    Statistics::Statistic<uint64_t>* mmio_write_reqs  = nullptr;
     Statistics::Statistic<uint64_t>* read_lat         = nullptr;
     Statistics::Statistic<uint64_t>* write_lat        = nullptr;
+    Statistics::Statistic<uint64_t>* mmio_read_lat    = nullptr;
+    Statistics::Statistic<uint64_t>* mmio_write_lat   = nullptr;
+    Statistics::Statistic<uint64_t>* mmio_truncated_writes = nullptr;
     Statistics::Statistic<uint64_t>* read_req_sizes   = nullptr;
     Statistics::Statistic<uint64_t>* write_req_sizes  = nullptr;
     Statistics::Statistic<uint64_t>* split_reads      = nullptr;

@@ -62,8 +62,9 @@ void QuetzEventPipeline::tick() {
     while (!coreQ_.empty()) {
         PipelineEvent& ev = coreQ_.front();
 
+        MemRegionHandler::Action region_action = MemRegionHandler::Action::FORWARD;
         if ((ev.cmd.cmd == QUETZ_CMD_READ || ev.cmd.cmd == QUETZ_CMD_WRITE) &&
-            filter_->handle(ev.cmd, *ctx_.stats))
+            filter_->handle(ev.cmd, *ctx_.stats, region_action))
         {
             ctx_.stats->insn_count->addData(1);
             coreQ_.pop();
@@ -72,7 +73,7 @@ void QuetzEventPipeline::tick() {
             continue;
         }
 
-        switch (transform_->process(ev, *ctx_.stats, op)) {
+        switch (transform_->process(ev, *ctx_.stats, op, region_action)) {
         case PipelineTransform::Result::HALT_EXIT:
             ctx_.out->verbose(CALL_INFO, 1, 0,
                 "QuetzCore %" PRIu32 " processing EXIT — halting.\n",

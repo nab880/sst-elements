@@ -66,10 +66,15 @@ public:
         delegate_->setMemLink(link);
     }
 
+    void setMmioLink(SST::Interfaces::StandardMem* link) override {
+        delegate_->setMmioLink(link);
+    }
+
     bool handleResponse(SST::Interfaces::StandardMem::Request* resp,
                         uint64_t& latency_out,
-                        bool&     was_read_out) override {
-        return delegate_->handleResponse(resp, latency_out, was_read_out);
+                        bool&     was_read_out,
+                        bool&     was_mmio_out) override {
+        return delegate_->handleResponse(resp, latency_out, was_read_out, was_mmio_out);
     }
 
 private:

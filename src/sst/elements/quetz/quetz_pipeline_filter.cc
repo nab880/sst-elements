@@ -36,8 +36,14 @@ public:
             strategy_.reset(new RegionTableMemAccessStrategy(*ctx.region_table));
     }
 
-    bool handle(const QuetzCommand& cmd, QuetzCoreStats& stats) override {
-        return strategy_ && strategy_->handleMemoryAccess(cmd, stats);
+    bool handle(const QuetzCommand& cmd, QuetzCoreStats& stats,
+                MemRegionHandler::Action& region_action_out) override {
+        if (!strategy_) {
+            region_action_out = MemRegionHandler::Action::FORWARD;
+            return false;
+        }
+        region_action_out = strategy_->handleMemoryAccess(cmd, stats);
+        return (region_action_out == MemRegionHandler::Action::CONSUME);
     }
 
     void finish(SST::Output* out, uint32_t core_id) override {
