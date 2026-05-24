@@ -34,6 +34,10 @@ QuetzComponent[/src/sst-elements/src/sst/elements/quetz/quetz_pipeline.cc:116:fi
  cpu.active_cycles.0 : Accumulator : Sum.u64 = 17526; SumSQ.u64 = 17526; Count.u64 = 17526; Min.u64 = 1; Max.u64 = 1; 
  cpu.filtered_reads.0 : Accumulator : Sum.u64 = 0; SumSQ.u64 = 0; Count.u64 = 0; Min.u64 = 0; Max.u64 = 0; 
  cpu.filtered_writes.0 : Accumulator : Sum.u64 = 0; SumSQ.u64 = 0; Count.u64 = 0; Min.u64 = 0; Max.u64 = 0; 
+ cpu.gpu_doorbell_writes.0 : Accumulator : Sum.u64 = 0; SumSQ.u64 = 0; Count.u64 = 0; Min.u64 = 0; Max.u64 = 0; 
+ cpu.gpu_status_polls.0 : Accumulator : Sum.u64 = 0; SumSQ.u64 = 0; Count.u64 = 0; Min.u64 = 0; Max.u64 = 0; 
+ cpu.gpu_other_reads.0 : Accumulator : Sum.u64 = 0; SumSQ.u64 = 0; Count.u64 = 0; Min.u64 = 0; Max.u64 = 0; 
+ cpu.gpu_other_writes.0 : Accumulator : Sum.u64 = 0; SumSQ.u64 = 0; Count.u64 = 0; Min.u64 = 0; Max.u64 = 0; 
  cpu.stall_cycles.0 : Accumulator : Sum.u64 = 0; SumSQ.u64 = 0; Count.u64 = 0; Min.u64 = 0; Max.u64 = 0; 
  cpu.compute_stall_cycles.0 : Accumulator : Sum.u64 = 0; SumSQ.u64 = 0; Count.u64 = 0; Min.u64 = 0; Max.u64 = 0; 
  cpu.int_compute.0 : Accumulator : Sum.u64 = 82086; SumSQ.u64 = 82086; Count.u64 = 82086; Min.u64 = 1; Max.u64 = 1; 
