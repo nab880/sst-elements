@@ -104,6 +104,19 @@ def build_quetz_sysmode_matrix():
           ("sub_ram", 0x00000000, 0x7FFFFFFF, "filtered")],
          b"ABCDE", 120),
 
+        ("riscv64_virt_gpu_trace",
+         "qemu-system-riscv64",
+         f"{fw}/riscv_virt_gpu_trace",
+         "-machine virt -nographic -bios none",
+         "-kernel",
+         0x00000000, 0xFFFFFFFF,
+         # gpu_mmio must precede sub_ram (same ordering rule as uart_echo).
+         [("gpu_mmio", 0x80100000, 0x801003FF, "gpu_trace",
+             {"doorbell_offset": 0, "status_offset": 8}),
+          ("uart0",    0x10000000, 0x10000FFF, "uart"),
+          ("sub_ram",  0x00000000, 0x7FFFFFFF, "filtered")],
+         None, 120),
+
         ("arm_m7_hello",
          "qemu-system-arm",
          f"{fw}/arm_m7_hello",
