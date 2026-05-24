@@ -39,6 +39,10 @@ struct QuetzCoreStats {
     Statistics::Statistic<uint64_t>* active_cycles    = nullptr;
     Statistics::Statistic<uint64_t>* filtered_reads   = nullptr;
     Statistics::Statistic<uint64_t>* filtered_writes  = nullptr;
+    Statistics::Statistic<uint64_t>* gpu_doorbell_writes = nullptr;
+    Statistics::Statistic<uint64_t>* gpu_status_polls    = nullptr;
+    Statistics::Statistic<uint64_t>* gpu_other_reads     = nullptr;
+    Statistics::Statistic<uint64_t>* gpu_other_writes    = nullptr;
     Statistics::Statistic<uint64_t>* stall_cycles         = nullptr;
     Statistics::Statistic<uint64_t>* compute_stall_cycles = nullptr;
     Statistics::Statistic<uint64_t>* int_compute      = nullptr;

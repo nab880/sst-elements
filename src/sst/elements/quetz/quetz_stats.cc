@@ -31,6 +31,10 @@ void QuetzCoreStats::registerAll(QuetzCore* comp, const char* sub_id) {
     active_cycles         = comp->registerStatistic<uint64_t>("active_cycles",       sub_id);
     filtered_reads        = comp->registerStatistic<uint64_t>("filtered_reads",      sub_id);
     filtered_writes       = comp->registerStatistic<uint64_t>("filtered_writes",     sub_id);
+    gpu_doorbell_writes   = comp->registerStatistic<uint64_t>("gpu_doorbell_writes", sub_id);
+    gpu_status_polls      = comp->registerStatistic<uint64_t>("gpu_status_polls",    sub_id);
+    gpu_other_reads       = comp->registerStatistic<uint64_t>("gpu_other_reads",     sub_id);
+    gpu_other_writes      = comp->registerStatistic<uint64_t>("gpu_other_writes",    sub_id);
     stall_cycles          = comp->registerStatistic<uint64_t>("stall_cycles",         sub_id);
     compute_stall_cycles  = comp->registerStatistic<uint64_t>("compute_stall_cycles", sub_id);
     int_compute           = comp->registerStatistic<uint64_t>("int_compute",         sub_id);
