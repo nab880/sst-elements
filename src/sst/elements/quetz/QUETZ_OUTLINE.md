@@ -454,6 +454,32 @@ sst.Link("cpu_mmio").connect((cpu, "mmio_link_0", "1ns"), (mmio_dev, "highlink",
 - `cache_link` and `mmio_link` are **not coherent** with each other; packet scratch for GPU/balar (P3) must share a coherent path or use explicit flush/filter rules.
 - Place the MMIO handler **before** broad `FilteredRegionHandler` entries so doorbell addresses are not swallowed by a larger filtered range.
 
+### 4.3.2 GPU device endpoint (P2.a)
+
+`quetz.QuetzGpuDevice` is a lightweight synthetic GPU MMIO slave for system-mode studies without GPGPU-Sim. It models a doorbell write that starts a configurable **kernel latency** (busy window in device clock cycles), a **STATUS** register (`0` = IDLE, `1` = BUSY), and a monotonic **KERNEL_ID** counter incremented when each kernel completes.
+
+**Register map** (8-byte aligned, offsets from `base_addr`):
+
+| Offset | Name | Access | Behavior |
+|--------|------|--------|----------|
+| `0x00` | DOORBELL | Write | Start kernel; optional payload is not dereferenced in P2.a |
+| `0x08` | STATUS | Read | `1` while busy, `0` when idle |
+| `0x10` | KERNEL_ID | Read | Count of completed kernels |
+| `0x18` | LATENCY_OVERRIDE | Write | Per-launch override of `kernel_latency` (cleared after doorbell) |
+
+**Params:** `base_addr`, `mmio_size` (default `0x400`), `kernel_latency` (cycles, default `5000`), `clock`, `verbose`. `dma_bytes_per_kernel` must be `0` in P2.a (`fatal` if nonzero).
+
+**Topology (P2.a):** point-to-point — `mmio_link_0` → `gpu.iface` (`memHierarchy.standardInterface`) with `setMemoryMappedAddressRegion(base_addr, mmio_size)`. DRAM stays on `cache_link_0`. See `tests/sysmode/basic_quetz_gpu.py` and firmware `riscv_virt_gpu_kernel.c`; testsuite entry `test_quetz_sysmode_gpu_kernel`.
+
+**Stats:** `kernels_launched`, `busy_cycles`, `doorbell_writes`, `status_polls`, `latency_overrides`, `bad_offset_accesses`.
+
+**P2.b — deferred:**
+
+- **DMA path:** add `dma_iface` subcomponent slot and honor `dma_bytes_per_kernel` by issuing `StandardMem::Read` traffic to a shared DRAM bus during the BUSY window.
+- **Shared-bus SDL:** attach `cache_link_0`, `mmio_link_0`, and `dma_iface` to one `memHierarchy.Bus` in front of the DRAM controller (pattern from `balarBlock.buildTestCPU`).
+- **Coherence:** when wiring P3 / `balar.balarMMIO`, DMA and packet reads must observe CPU writeback data — target option (c): shared coherent bus so L1 snoops device reads.
+- **Wide payloads:** doorbell pointers fit in 16 bytes (`QuetzCommand::data`); whole-packet MMIO writes still need scatter/gather or a multi-write protocol.
+
 ### 4.4 Implementation problems
 
 | Problem | Description |
