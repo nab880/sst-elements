@@ -85,10 +85,18 @@ def make_sysmode_env(sst_prefix, sst_libexec, qemu_bin, exe_abs,
     os.environ["QUETZ_STDOUT_FILE"] = stdout_file
     if platform:
         os.environ["QUETZ_PLATFORM"] = platform
-    for n, (_name, start, end, rtype) in enumerate(memmaps):
+    for n, entry in enumerate(memmaps):
+        if len(entry) >= 5:
+            _name, start, end, rtype, extras = entry[0], entry[1], entry[2], entry[3], entry[4]
+        else:
+            _name, start, end, rtype = entry[0], entry[1], entry[2], entry[3]
+            extras = None
         os.environ[f"QUETZ_REGION_HANDLER{n}_START"] = str(start)
         os.environ[f"QUETZ_REGION_HANDLER{n}_END"] = str(end)
         os.environ[f"QUETZ_REGION_HANDLER{n}_TYPE"] = rtype
+        if extras:
+            for key, val in extras.items():
+                os.environ[f"QUETZ_REGION_HANDLER{n}_{key.upper()}"] = str(val)
 
 
 def filtered_stat_lines(outfile):
