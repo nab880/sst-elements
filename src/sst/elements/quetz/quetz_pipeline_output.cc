@@ -35,14 +35,16 @@ public:
     }
 
     uint32_t slotsNeeded(const MemOp& op) const override {
-        return emitter_->slotsNeeded(op.addr, op.size);
+        IssuePath path = op.is_mmio ? IssuePath::MMIO : IssuePath::CACHED;
+        return emitter_->slotsNeeded(op.addr, op.size, path);
     }
 
     void issue(const MemOp& op) override {
+        IssuePath path = op.is_mmio ? IssuePath::MMIO : IssuePath::CACHED;
         if (op.is_read)
-            emitter_->issueRead(op.addr, op.size, op.pc);
+            emitter_->issueRead(op.addr, op.size, op.pc, path);
         else
-            emitter_->issueWrite(op.addr, op.size, op.pc, op.data);
+            emitter_->issueWrite(op.addr, op.size, op.pc, op.data, path);
     }
 
     uint32_t pendingCount() const override {
@@ -53,10 +55,15 @@ public:
         emitter_->setLink(link);
     }
 
+    void setMmioLink(SST::Interfaces::StandardMem* link) override {
+        emitter_->setMmioLink(link);
+    }
+
     bool handleResponse(SST::Interfaces::StandardMem::Request* resp,
                         uint64_t& latency_out,
-                        bool&     was_read_out) override {
-        return emitter_->handleResponse(resp, latency_out, was_read_out);
+                        bool&     was_read_out,
+                        bool&     was_mmio_out) override {
+        return emitter_->handleResponse(resp, latency_out, was_read_out, was_mmio_out);
     }
 
 private:

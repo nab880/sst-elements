@@ -37,7 +37,8 @@ public:
 
     Result process(PipelineEvent& ev,
                    QuetzCoreStats& stats,
-                   MemOp&          op_out) override {
+                   MemOp&          op_out,
+                   MemRegionHandler::Action region_action) override {
         QuetzCommand& cmd = ev.cmd;
 
         if (cmd.cmd == QUETZ_CMD_EXIT)
@@ -67,10 +68,11 @@ public:
             return Result::CONSUMED_NOOP;
         }
 
-        op_out.is_read = (cmd.cmd == QUETZ_CMD_READ);
-        op_out.addr    = cmd.addr;
-        op_out.size    = cmd.size;
-        op_out.pc      = cmd.pc;
+        op_out.is_read  = (cmd.cmd == QUETZ_CMD_READ);
+        op_out.is_mmio  = (region_action == MemRegionHandler::Action::FORWARD_MMIO);
+        op_out.addr     = cmd.addr;
+        op_out.size     = cmd.size;
+        op_out.pc       = cmd.pc;
         memcpy(op_out.data, cmd.data, sizeof(op_out.data));
         return Result::EMIT_MEMOP;
     }

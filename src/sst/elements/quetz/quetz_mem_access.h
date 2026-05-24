@@ -31,8 +31,8 @@ public:
     virtual ~MemAccessStrategy() = default;
 
     
-    virtual bool handleMemoryAccess(const QuetzCommand& cmd,
-                                    QuetzCoreStats& stats) = 0;
+    virtual MemRegionHandler::Action handleMemoryAccess(const QuetzCommand& cmd,
+                                                        QuetzCoreStats& stats) = 0;
 
     virtual void finish(SST::Output* out, uint32_t core_id) = 0;
 };
@@ -41,8 +41,8 @@ class RegionTableMemAccessStrategy : public MemAccessStrategy {
 public:
     explicit RegionTableMemAccessStrategy(const MemRegionTable& table);
 
-    bool handleMemoryAccess(const QuetzCommand& cmd,
-                            QuetzCoreStats& stats) override;
+    MemRegionHandler::Action handleMemoryAccess(const QuetzCommand& cmd,
+                                                QuetzCoreStats& stats) override;
     void finish(SST::Output* out, uint32_t core_id) override;
 
     size_t handlerCount() const { return table_.handlerCount(); }

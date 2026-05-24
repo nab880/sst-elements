@@ -34,10 +34,14 @@ public:
     void setMemLink(SST::Interfaces::StandardMem* link) {
         output_->setMemLink(link);
     }
+    void setMmioLink(SST::Interfaces::StandardMem* link) {
+        output_->setMmioLink(link);
+    }
     bool handleResponse(SST::Interfaces::StandardMem::Request* resp,
                         uint64_t& latency_out,
-                        bool&     was_read_out) {
-        return output_->handleResponse(resp, latency_out, was_read_out);
+                        bool&     was_read_out,
+                        bool&     was_mmio_out) {
+        return output_->handleResponse(resp, latency_out, was_read_out, was_mmio_out);
     }
 
     bool     isHalted()     const { return halted_; }

@@ -55,6 +55,7 @@ public:
     ~QuetzCore();
 
     void setMemLink(SST::Interfaces::StandardMem* link);
+    void setMmioLink(SST::Interfaces::StandardMem* link);
 
     void tick();
     void handleMemResponse(SST::Interfaces::StandardMem::Request* resp);
