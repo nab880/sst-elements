@@ -14,6 +14,10 @@
  *
  * Each handler owns an inclusive [start, end] range.  The pipeline filter
  * stage dispatches READ/WRITE commands to the first matching handler.
+ *
+ * Action::FORWARD      — issue on cache_link_N (cache-line split).
+ * Action::FORWARD_MMIO — issue on mmio_link_N (single transaction, no split).
+ * Action::CONSUME      — count/filter locally; no StandardMem issue.
  */
 
 #ifndef _H_SST_QUETZ_REGION_HANDLER
