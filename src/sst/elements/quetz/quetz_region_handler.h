@@ -35,8 +35,9 @@ public:
     SST_ELI_REGISTER_SUBCOMPONENT_API(SST::Quetz::MemRegionHandler)
 
     enum class Action {
-        FORWARD,  // pass through to memHierarchy (default path)
-        CONSUME,  // handled locally; do not issue StandardMem
+        FORWARD,       // pass through cache_link_N (cache-line split)
+        FORWARD_MMIO,  // pass through mmio_link_N (no cache-line split)
+        CONSUME,       // handled locally; do not issue StandardMem
     };
 
     MemRegionHandler(ComponentId_t id, Params& params)
