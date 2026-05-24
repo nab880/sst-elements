@@ -8,7 +8,9 @@ Region handlers (optional):
   QUETZ_REGION_HANDLER{n}_TYPE   quetz.FilteredRegionHandler | UartRegionHandler | ...
   QUETZ_REGION_HANDLER{n}_START  address (int or 0x hex)
   QUETZ_REGION_HANDLER{n}_END
-  QUETZ_REGION_HANDLER{n}_TX_OFFSET  (uart only, default 0)
+  QUETZ_REGION_HANDLER{n}_TX_OFFSET       (uart only, default 0)
+  QUETZ_REGION_HANDLER{n}_DOORBELL_OFFSET (gpu_trace only)
+  QUETZ_REGION_HANDLER{n}_STATUS_OFFSET   (gpu_trace only)
 """
 
 import sst
@@ -29,9 +31,11 @@ def _parse_addr(s):
     return int(s, 16) if s.startswith("0x") or s.startswith("0X") else int(s)
 
 _LEGACY_TYPE = {
-    "filtered": "quetz.FilteredRegionHandler",
-    "uart":     "quetz.UartRegionHandler",
-    "memory":   "quetz.ForwardRegionHandler",
+    "filtered":  "quetz.FilteredRegionHandler",
+    "uart":      "quetz.UartRegionHandler",
+    "memory":    "quetz.ForwardRegionHandler",
+    "mmio":      "quetz.MmioForwardRegionHandler",
+    "gpu_trace": "quetz.GpuTraceRegionHandler",
 }
 
 sst_home   = _sst_home()
@@ -95,9 +99,16 @@ for n in range(rh_count):
         "start": _parse_addr(os.environ.get(pfx + "START", "0")),
         "end":   _parse_addr(os.environ.get(pfx + "END",   "0")),
     })
-    tx = os.environ.get(pfx + "TX_OFFSET", "")
-    if tx:
-        rh.addParams({"tx_offset": int(tx)})
+    _rh_extra_params = {
+        "TX_OFFSET":       "tx_offset",
+        "DOORBELL_OFFSET": "doorbell_offset",
+        "STATUS_OFFSET":   "status_offset",
+        "MAX_PAYLOAD_LOG": "max_payload_log",
+    }
+    for env_key, param_name in _rh_extra_params.items():
+        val = os.environ.get(pfx + env_key, "")
+        if val:
+            rh.addParams({param_name: int(val)})
 
 cpu.enableAllStatistics()
 
