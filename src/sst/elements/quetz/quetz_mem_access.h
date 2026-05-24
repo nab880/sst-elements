@@ -35,11 +35,11 @@ public:
 
     /**
      * Inspect a READ or WRITE command.
-     * @return true if the access was handled locally and must not be forwarded
-     *         to the memory hierarchy.
+     * @return CONSUME if handled locally; FORWARD_MMIO for MMIO range;
+     *         FORWARD for cached hierarchy path (also when no handler matches).
      */
-    virtual bool handleMemoryAccess(const QuetzCommand& cmd,
-                                    QuetzCoreStats& stats) = 0;
+    virtual MemRegionHandler::Action handleMemoryAccess(const QuetzCommand& cmd,
+                                                        QuetzCoreStats& stats) = 0;
 
     virtual void finish(SST::Output* out, uint32_t core_id) = 0;
 };
@@ -48,8 +48,8 @@ class RegionTableMemAccessStrategy : public MemAccessStrategy {
 public:
     explicit RegionTableMemAccessStrategy(const MemRegionTable& table);
 
-    bool handleMemoryAccess(const QuetzCommand& cmd,
-                            QuetzCoreStats& stats) override;
+    MemRegionHandler::Action handleMemoryAccess(const QuetzCommand& cmd,
+                                                QuetzCoreStats& stats) override;
     void finish(SST::Output* out, uint32_t core_id) override;
 
     size_t handlerCount() const { return table_.handlerCount(); }

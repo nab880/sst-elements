@@ -30,6 +30,7 @@ MemRequestEmitter::MemRequestEmitter(
         QuetzCoreStats&   stats)
     : comp_(comp),
       mem_link_(nullptr),
+      mmio_link_(nullptr),
       output_(out),
       core_id_(coreID),
       tc_(tc),
@@ -39,21 +40,51 @@ MemRequestEmitter::MemRequestEmitter(
       pending_count_(0)
 {}
 
-uint32_t MemRequestEmitter::slotsNeeded(uint64_t vaddr, uint32_t size) const {
+SST::Interfaces::StandardMem* MemRequestEmitter::linkFor(IssuePath path) const {
+    return (path == IssuePath::MMIO) ? mmio_link_ : mem_link_;
+}
+
+uint32_t MemRequestEmitter::slotsNeeded(uint64_t vaddr, uint32_t size,
+                                        IssuePath path) const {
+    if (path == IssuePath::MMIO)
+        return 1;
     if (size == 0) return 1;
     uint64_t first_line = vaddr / cache_line_size_;
     uint64_t last_line  = (vaddr + size - 1) / cache_line_size_;
     return (uint32_t)(last_line - first_line + 1);
 }
 
-void MemRequestEmitter::issueRead(uint64_t vaddr, uint32_t size, uint64_t /*pc*/) {
+void MemRequestEmitter::issueRead(uint64_t vaddr, uint32_t size, uint64_t /*pc*/,
+                                  IssuePath path) {
     output_->verbose(CALL_INFO, 8, 0,
-        "QuetzCore %" PRIu32 " READ  vaddr=0x%016" PRIx64 " size=%" PRIu32 "\n",
-        core_id_, vaddr, size);
+        "QuetzCore %" PRIu32 " READ  vaddr=0x%016" PRIx64 " size=%" PRIu32
+        " path=%s\n",
+        core_id_, vaddr, size,
+        (path == IssuePath::MMIO) ? "mmio" : "cached");
 
-    stats_.read_req_sizes->addData(size);
+    if (path != IssuePath::MMIO)
+        stats_.read_req_sizes->addData(size);
 
     if (size == 0) return;
+
+    StandardMem* link = linkFor(path);
+    if (!link) {
+        comp_->getComponent()->fatal(CALL_INFO, -1,
+            "QuetzCore %" PRIu32 ": %s read to 0x%016" PRIx64 " but %s is not connected.\n",
+            core_id_,
+            (path == IssuePath::MMIO) ? "MMIO" : "cached",
+            vaddr,
+            (path == IssuePath::MMIO) ? "mmio_link" : "cache_link");
+    }
+
+    if (path == IssuePath::MMIO) {
+        auto* req = new StandardMem::Read(vaddr, size, 0, vaddr);
+        pending_txns_[req->getID()] = { req, comp_->getCurrentSimTime(tc_), true };
+        pending_count_++;
+        stats_.mmio_read_reqs->addData(1);
+        link->send(req);
+        return;
+    }
 
     uint64_t addr      = vaddr;
     uint32_t remaining = size;
@@ -65,10 +96,10 @@ void MemRequestEmitter::issueRead(uint64_t vaddr, uint32_t size, uint64_t /*pc*/
                                                           (uint64_t)remaining);
 
         auto* req = new StandardMem::Read(addr, chunk, 0, addr);
-        pending_txns_[req->getID()] = { req, comp_->getCurrentSimTime(tc_) };
+        pending_txns_[req->getID()] = { req, comp_->getCurrentSimTime(tc_), false };
         pending_count_++;
         stats_.read_reqs->addData(1);
-        mem_link_->send(req);
+        link->send(req);
 
         addr      += chunk;
         remaining -= chunk;
@@ -86,16 +117,52 @@ void MemRequestEmitter::issueRead(uint64_t vaddr, uint32_t size, uint64_t /*pc*/
 }
 
 void MemRequestEmitter::issueWrite(uint64_t vaddr, uint32_t size, uint64_t /*pc*/,
-                                   const uint8_t* raw_data) {
+                                   const uint8_t* raw_data, IssuePath path) {
     output_->verbose(CALL_INFO, 8, 0,
-        "QuetzCore %" PRIu32 " WRITE vaddr=0x%016" PRIx64 " size=%" PRIu32 "\n",
-        core_id_, vaddr, size);
+        "QuetzCore %" PRIu32 " WRITE vaddr=0x%016" PRIx64 " size=%" PRIu32
+        " path=%s\n",
+        core_id_, vaddr, size,
+        (path == IssuePath::MMIO) ? "mmio" : "cached");
 
-    stats_.write_req_sizes->addData(size);
+    if (path != IssuePath::MMIO)
+        stats_.write_req_sizes->addData(size);
 
     if (size == 0) return;
 
+    StandardMem* link = linkFor(path);
+    if (!link) {
+        comp_->getComponent()->fatal(CALL_INFO, -1,
+            "QuetzCore %" PRIu32 ": %s write to 0x%016" PRIx64 " but %s is not connected.\n",
+            core_id_,
+            (path == IssuePath::MMIO) ? "MMIO" : "cached",
+            vaddr,
+            (path == IssuePath::MMIO) ? "mmio_link" : "cache_link");
+    }
+
     static constexpr uint32_t kDataCap = (uint32_t)sizeof(QuetzCommand::data);
+
+    if (path == IssuePath::MMIO) {
+        uint32_t issue_size = size;
+        if (size > kDataCap) {
+            stats_.mmio_truncated_writes->addData(1);
+            issue_size = kDataCap;
+            output_->verbose(CALL_INFO, 1, 0,
+                "QuetzCore %" PRIu32 " MMIO WRITE size=%" PRIu32
+                " exceeds plugin data cap %" PRIu32 " — truncating.\n",
+                core_id_, size, kDataCap);
+        }
+
+        std::vector<uint8_t> data(issue_size, 0);
+        if (raw_data && issue_size > 0)
+            memcpy(data.data(), raw_data, issue_size);
+
+        auto* req = new StandardMem::Write(vaddr, issue_size, data, false, 0, vaddr);
+        pending_txns_[req->getID()] = { req, comp_->getCurrentSimTime(tc_), true };
+        pending_count_++;
+        stats_.mmio_write_reqs->addData(1);
+        link->send(req);
+        return;
+    }
 
     uint64_t addr        = vaddr;
     uint32_t remaining   = size;
@@ -115,10 +182,10 @@ void MemRequestEmitter::issueWrite(uint64_t vaddr, uint32_t size, uint64_t /*pc*
         }
 
         auto* req = new StandardMem::Write(addr, chunk, data, false, 0, addr);
-        pending_txns_[req->getID()] = { req, comp_->getCurrentSimTime(tc_) };
+        pending_txns_[req->getID()] = { req, comp_->getCurrentSimTime(tc_), false };
         pending_count_++;
         stats_.write_reqs->addData(1);
-        mem_link_->send(req);
+        link->send(req);
 
         addr        += chunk;
         data_offset += chunk;
@@ -138,13 +205,15 @@ void MemRequestEmitter::issueWrite(uint64_t vaddr, uint32_t size, uint64_t /*pc*
 
 bool MemRequestEmitter::handleResponse(StandardMem::Request* resp,
                                        uint64_t& latency_out,
-                                       bool& was_read_out) {
+                                       bool& was_read_out,
+                                       bool& was_mmio_out) {
     auto it = pending_txns_.find(resp->getID());
     if (it == pending_txns_.end()) {
         output_->verbose(CALL_INFO, 4, 0,
             "QuetzCore %" PRIu32 ": ignoring untracked response id %" PRIu64 "\n",
             core_id_, (uint64_t)resp->getID());
         delete resp;
+        was_mmio_out = false;
         return false;
     }
 
@@ -152,6 +221,7 @@ bool MemRequestEmitter::handleResponse(StandardMem::Request* resp,
     uint64_t now   = comp_->getCurrentSimTime(tc_);
     latency_out    = (now >= issue) ? (now - issue) : 0;
     was_read_out   = (dynamic_cast<StandardMem::ReadResp*>(resp) != nullptr);
+    was_mmio_out   = it->second.is_mmio;
 
     pending_txns_.erase(it);
     pending_count_--;

@@ -25,6 +25,7 @@
 
 #include "quetz_core_backend.h"
 #include "quetz_mem_issue.h"
+#include "quetz_region_handler.h"
 #include "quetz_region_table.h"
 #include "quetz_shmem.h"
 #include "quetz_stats.h"
@@ -39,6 +40,7 @@ struct PipelineEvent {
 
 struct MemOp {
     bool     is_read;
+    bool     is_mmio;
     uint64_t addr;
     uint32_t size;
     uint64_t pc;
@@ -89,7 +91,9 @@ public:
 
     virtual void configure(const QuetzCoreContext& ctx) = 0;
 
-    virtual bool handle(const QuetzCommand& cmd, QuetzCoreStats& stats) = 0;
+  /** @return true if the access was CONSUME (do not issue StandardMem). */
+    virtual bool handle(const QuetzCommand& cmd, QuetzCoreStats& stats,
+                        MemRegionHandler::Action& region_action_out) = 0;
     virtual void finish(SST::Output* out, uint32_t core_id) = 0;
 };
 
@@ -112,7 +116,8 @@ public:
 
     virtual Result process(PipelineEvent& ev,
                            QuetzCoreStats& stats,
-                           MemOp&          op_out) = 0;
+                           MemOp&          op_out,
+                           MemRegionHandler::Action region_action) = 0;
 };
 
 class PipelineOutput : public SST::SubComponent {
@@ -131,10 +136,12 @@ public:
     virtual uint32_t pendingCount() const = 0;
 
     virtual void setMemLink(SST::Interfaces::StandardMem* link) = 0;
+    virtual void setMmioLink(SST::Interfaces::StandardMem* link) = 0;
 
     virtual bool handleResponse(SST::Interfaces::StandardMem::Request* resp,
                                 uint64_t& latency_out,
-                                bool&     was_read_out) = 0;
+                                bool&     was_read_out,
+                                bool&     was_mmio_out) = 0;
 };
 
 } // namespace Quetz
