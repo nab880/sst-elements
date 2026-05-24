@@ -862,3 +862,58 @@ class testcase_quetz_sysmode(SSTTestCase):
         for ch in echo_input:
             self.assertIn(chr(ch), line,
                 "UART capture missing byte {!r}".format(ch))
+
+    # -------------------------------------------------------------------------
+    def test_quetz_sysmode_gpu_trace_capture(self):
+        test_path = self.get_testsuite_dir()
+        sst_prefix  = sstsimulator_conf_get_value("SSTCore", "prefix",     str, "")
+        sst_bindir  = sstsimulator_conf_get_value("SSTCore", "bindir",     str, "")
+        sst_libexec = sstsimulator_conf_get_value("SSTCore", "libexecdir", str, "")
+
+        qemu_target = "qemu-system-riscv64"
+        exe_rel     = "sysmode/firmware/riscv_virt_gpu_trace"
+        import shutil
+        qemu_bin = os.path.join(sst_bindir, qemu_target)
+        if not os.path.exists(qemu_bin):
+            found = shutil.which(qemu_target)
+            if found:
+                qemu_bin = found
+        exe_abs = os.path.normpath(os.path.join(test_path, exe_rel))
+
+        if not os.path.exists(qemu_bin):
+            self.skipTest("{} not found; skipping".format(qemu_target))
+        if not os.path.exists(exe_abs):
+            self.skipTest("gpu trace firmware not found at {}; "
+                          "run sysmode/firmware/build.sh".format(exe_abs))
+
+        outdir = os.path.join(self.get_test_output_run_dir(),
+                              "quetz_sysmode_tests", "gpu_trace_capture")
+        os.makedirs(outdir, exist_ok=True)
+
+        memmaps = [
+            ("gpu_mmio", 0x80100000, 0x801003FF, "gpu_trace",
+                {"doorbell_offset": 0, "status_offset": 8}),
+            ("uart0",    0x10000000, 0x10000FFF, "uart"),
+            ("sub_ram",  0x00000000, 0x7FFFFFFF, "filtered"),
+        ]
+        make_sysmode_env(sst_prefix, sst_libexec, qemu_bin, exe_abs,
+                         "-machine virt -nographic -bios none",
+                         "-kernel", 0, 0xFFFFFFFF, memmaps)
+
+        sdlfile     = os.path.join(test_path, "sysmode", "basic_quetz_sysmode.py")
+        sst_outfile = os.path.join(outdir, "gpu_trace_capture.out")
+        sst_errfile = os.path.join(outdir, "gpu_trace_capture.err")
+        mpifiles    = os.path.join(outdir, "gpu_trace_capture.testfile")
+
+        self.run_sst(sdlfile, sst_outfile, sst_errfile,
+                     mpi_out_files=mpifiles, set_cwd=outdir, timeout_sec=120)
+
+        with open(sst_outfile, "r") as f:
+            raw = f.read()
+        self.assertIn("GPU_TRACE[0]:", raw)
+        idx = raw.find("GPU_TRACE[0]:")
+        self.assertNotEqual(idx, -1)
+        line = raw[idx:raw.find("\n", idx)]
+        self.assertIn("doorbells=1", line)
+        self.assertIn("polls=8", line)
+        self.assertIn("deadbeef", line.lower())
