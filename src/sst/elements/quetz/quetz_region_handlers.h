@@ -15,6 +15,7 @@
 #include "quetz_region_handler.h"
 
 #include <string>
+#include <vector>
 
 namespace SST {
 namespace Quetz {
@@ -96,6 +97,41 @@ public:
 private:
     uint32_t    tx_offset_;
     std::string uart_tx_buf_;
+};
+
+class GpuTraceRegionHandler : public BoundedRegionHandler {
+public:
+    SST_ELI_REGISTER_SUBCOMPONENT(
+        GpuTraceRegionHandler,
+        "quetz",
+        "GpuTraceRegionHandler",
+        SST_ELI_ELEMENT_VERSION(1, 0, 0),
+        "Trace GPU MMIO doorbell/status accesses; do not forward.",
+        SST::Quetz::MemRegionHandler)
+
+    SST_ELI_DOCUMENT_PARAMS(
+        { "start",            "Inclusive region start address.",            "0" },
+        { "end",              "Inclusive region end address.",              "0" },
+        { "doorbell_offset",  "Byte offset of doorbell register within region.", "0" },
+        { "status_offset",    "Byte offset of status register within region.",   "8" },
+        { "max_payload_log",  "Max doorbell payloads to retain for finish().",   "8" })
+
+    GpuTraceRegionHandler(ComponentId_t id, Params& params);
+
+    Action onRead(const QuetzCommand& cmd, QuetzCoreStats& stats) override;
+    Action onWrite(const QuetzCommand& cmd, QuetzCoreStats& stats) override;
+    void   finish(SST::Output* out, uint32_t core_id) override;
+
+private:
+    static uint64_t decodeDoorbellLo(const QuetzCommand& cmd);
+    void            recordDoorbellPayload(uint64_t payload);
+
+    uint32_t              doorbell_offset_;
+    uint32_t              status_offset_;
+    uint32_t              max_payload_log_;
+    uint64_t              doorbell_count_;
+    uint64_t              poll_count_;
+    std::vector<uint64_t> recent_doorbell_lo_;
 };
 
 class MmioForwardRegionHandler : public BoundedRegionHandler {

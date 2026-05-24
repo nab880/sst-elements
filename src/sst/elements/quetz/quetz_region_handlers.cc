@@ -89,6 +89,76 @@ void UartRegionHandler::finish(SST::Output* out, uint32_t core_id) {
 }
 
 // ---------------------------------------------------------------------------
+GpuTraceRegionHandler::GpuTraceRegionHandler(ComponentId_t id, Params& params)
+    : BoundedRegionHandler(id, params),
+      doorbell_offset_(params.find<uint32_t>("doorbell_offset", 0)),
+      status_offset_(params.find<uint32_t>("status_offset", 8)),
+      max_payload_log_(params.find<uint32_t>("max_payload_log", 8)),
+      doorbell_count_(0),
+      poll_count_(0)
+{}
+
+uint64_t GpuTraceRegionHandler::decodeDoorbellLo(const QuetzCommand& cmd)
+{
+    uint64_t val = 0;
+    uint32_t n = cmd.size < 8 ? cmd.size : 8;
+    for (uint32_t i = 0; i < n; ++i)
+        val |= static_cast<uint64_t>(cmd.data[i]) << (8 * i);
+    return val;
+}
+
+void GpuTraceRegionHandler::recordDoorbellPayload(uint64_t payload)
+{
+    recent_doorbell_lo_.push_back(payload);
+    if (recent_doorbell_lo_.size() > max_payload_log_)
+        recent_doorbell_lo_.erase(recent_doorbell_lo_.begin());
+}
+
+MemRegionHandler::Action
+GpuTraceRegionHandler::onRead(const QuetzCommand& cmd, QuetzCoreStats& stats)
+{
+    uint64_t offset = cmd.addr - start_;
+    if (offset == status_offset_) {
+        stats.gpu_status_polls->addData(1);
+        ++poll_count_;
+    } else {
+        stats.gpu_other_reads->addData(1);
+    }
+    return Action::CONSUME;
+}
+
+MemRegionHandler::Action
+GpuTraceRegionHandler::onWrite(const QuetzCommand& cmd, QuetzCoreStats& stats)
+{
+    uint64_t offset = cmd.addr - start_;
+    if (offset == doorbell_offset_) {
+        stats.gpu_doorbell_writes->addData(1);
+        ++doorbell_count_;
+        recordDoorbellPayload(decodeDoorbellLo(cmd));
+    } else {
+        stats.gpu_other_writes->addData(1);
+    }
+    return Action::CONSUME;
+}
+
+void GpuTraceRegionHandler::finish(SST::Output* out, uint32_t core_id)
+{
+    if (doorbell_count_ == 0 && poll_count_ == 0)
+        return;
+
+    out->output("GPU_TRACE[%" PRIu32 "]: doorbells=%" PRIu64
+                " polls=%" PRIu64 " last_doorbells={",
+                core_id, doorbell_count_, poll_count_);
+
+    for (size_t i = 0; i < recent_doorbell_lo_.size(); ++i) {
+        if (i > 0)
+            out->output(",");
+        out->output("0x%" PRIx64, recent_doorbell_lo_[i]);
+    }
+    out->output("}\n");
+}
+
+// ---------------------------------------------------------------------------
 MmioForwardRegionHandler::MmioForwardRegionHandler(ComponentId_t id, Params& params)
     : BoundedRegionHandler(id, params)
 {}
