@@ -20,18 +20,17 @@ RegionTableMemAccessStrategy::RegionTableMemAccessStrategy(
       handlers_for_finish_(table.handlers())
 {}
 
-bool RegionTableMemAccessStrategy::handleMemoryAccess(const QuetzCommand& cmd,
-                                                      QuetzCoreStats& stats) {
+MemRegionHandler::Action
+RegionTableMemAccessStrategy::handleMemoryAccess(const QuetzCommand& cmd,
+                                                 QuetzCoreStats& stats) {
     if (cmd.cmd != QUETZ_CMD_READ && cmd.cmd != QUETZ_CMD_WRITE)
-        return false;
+        return MemRegionHandler::Action::FORWARD;
 
     MemRegionHandler* h = table_.findHandler(cmd.addr);
     if (!h)
-        return false;
+        return MemRegionHandler::Action::FORWARD;
 
-    MemRegionHandler::Action act =
-        (cmd.cmd == QUETZ_CMD_READ) ? h->onRead(cmd, stats) : h->onWrite(cmd, stats);
-    return (act == MemRegionHandler::Action::CONSUME);
+    return (cmd.cmd == QUETZ_CMD_READ) ? h->onRead(cmd, stats) : h->onWrite(cmd, stats);
 }
 
 void RegionTableMemAccessStrategy::finish(SST::Output* out, uint32_t core_id) {
