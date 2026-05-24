@@ -741,6 +741,60 @@ class testcase_quetz_sysmode(SSTTestCase):
             "filtered-only sysmode should record filtered MMIO/RAM ops")
 
     # -------------------------------------------------------------------------
+    def test_quetz_sysmode_mmio_basic(self):
+        """MMIO doorbell write must use mmio_link, not cache_link."""
+        test_path = self.get_testsuite_dir()
+        sst_prefix  = sstsimulator_conf_get_value("SSTCore", "prefix",     str, "")
+        sst_bindir  = sstsimulator_conf_get_value("SSTCore", "bindir",     str, "")
+        sst_libexec = sstsimulator_conf_get_value("SSTCore", "libexecdir", str, "")
+
+        qemu_target = "qemu-system-riscv64"
+        exe_rel     = "sysmode/firmware/riscv_virt_mmio_poke"
+        import shutil
+        qemu_bin = os.path.join(sst_bindir, qemu_target)
+        if not os.path.exists(qemu_bin):
+            found = shutil.which(qemu_target)
+            if found:
+                qemu_bin = found
+        exe_abs = os.path.normpath(os.path.join(test_path, exe_rel))
+
+        if not os.path.exists(qemu_bin):
+            self.skipTest("{} not found; skipping".format(qemu_target))
+        if not os.path.exists(exe_abs):
+            self.skipTest("mmio poke firmware not found at {}; "
+                          "run sysmode/firmware/build.sh".format(exe_abs))
+
+        outdir = os.path.join(self.get_test_output_run_dir(),
+                              "quetz_sysmode_tests", "mmio_basic")
+        os.makedirs(outdir, exist_ok=True)
+
+        sdlfile     = os.path.join(test_path, "sysmode", "basic_quetz_mmio.py")
+        sst_outfile = os.path.join(outdir, "mmio_basic.out")
+        sst_errfile = os.path.join(outdir, "mmio_basic.err")
+        mpifiles    = os.path.join(outdir, "mmio_basic.testfile")
+
+        memmaps = [("sub_ram", 0x00000000, 0x7FFFFFFF, "filtered")]
+        make_sysmode_env(sst_prefix, sst_libexec, qemu_bin, exe_abs,
+                         "-machine virt -nographic -bios none",
+                         "-kernel", 0, 0xFFFFFFFF, memmaps)
+        os.environ["QUETZ_MMIO_START"] = "0x80100000"
+        os.environ["QUETZ_MMIO_END"]   = "0x801003FF"
+        os.environ["QUETZ_REGION_HANDLER_COUNT"] = "1"
+
+        self.run_sst(sdlfile, sst_outfile, sst_errfile,
+                     mpi_out_files=mpifiles, set_cwd=outdir, timeout_sec=120)
+
+        stats = parse_stats(sst_outfile)
+        mmio_writes = stats.get("cpu.mmio_write_requests.0", 0)
+        cache_writes = stats.get("cpu.write_requests.0", 0)
+
+        self.assertGreaterEqual(mmio_writes, 1,
+            "doorbell write should appear on mmio_write_requests")
+        self.assertEqual(cache_writes, 0,
+            "MMIO poke firmware should not forward writes on cache_link "
+            "(UART/testdev are filtered; doorbell uses mmio_link)")
+
+    # -------------------------------------------------------------------------
     def test_quetz_sysmode_uart_capture(self):
         test_path = self.get_testsuite_dir()
         sst_prefix  = sstsimulator_conf_get_value("SSTCore", "prefix",     str, "")

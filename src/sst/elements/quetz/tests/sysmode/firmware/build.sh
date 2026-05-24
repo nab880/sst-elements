@@ -30,6 +30,10 @@ echo "=== RISC-V virt UART echo ==="
 $RV64_CC $RV64_FLAGS riscv_virt_uart_echo.c -o riscv_virt_uart_echo
 echo "  -> riscv_virt_uart_echo"
 
+echo "=== RISC-V virt MMIO poke ==="
+$RV64_CC $RV64_FLAGS riscv_virt_mmio_poke.c -o riscv_virt_mmio_poke
+echo "  -> riscv_virt_mmio_poke"
+
 echo "=== ARM Cortex-M7 hello ==="
 $ARM_CC $ARM_CFLAGS -T link_arm_m7.ld -Wl,--build-id=none \
   arm_m7_startup.S arm_m7_hello.c -o arm_m7_hello
