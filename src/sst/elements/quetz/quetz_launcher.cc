@@ -15,7 +15,9 @@
 #include <sstream>
 #include <vector>
 #include <signal.h>
+#if defined(HAVE_SET_PTRACER)
 #include <sys/prctl.h>
+#endif
 #include <sys/wait.h>
 #include <stdlib.h>
 #include <unistd.h>

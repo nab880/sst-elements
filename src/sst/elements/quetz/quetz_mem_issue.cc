@@ -69,7 +69,7 @@ void MemRequestEmitter::issueRead(uint64_t vaddr, uint32_t size, uint64_t /*pc*/
 
     StandardMem* link = linkFor(path);
     if (!link) {
-        comp_->getComponent()->fatal(CALL_INFO, -1,
+        output_->fatal(CALL_INFO, -1,
             "QuetzCore %" PRIu32 ": %s read to 0x%016" PRIx64 " but %s is not connected.\n",
             core_id_,
             (path == IssuePath::MMIO) ? "MMIO" : "cached",
@@ -131,7 +131,7 @@ void MemRequestEmitter::issueWrite(uint64_t vaddr, uint32_t size, uint64_t /*pc*
 
     StandardMem* link = linkFor(path);
     if (!link) {
-        comp_->getComponent()->fatal(CALL_INFO, -1,
+        output_->fatal(CALL_INFO, -1,
             "QuetzCore %" PRIu32 ": %s write to 0x%016" PRIx64 " but %s is not connected.\n",
             core_id_,
             (path == IssuePath::MMIO) ? "MMIO" : "cached",
