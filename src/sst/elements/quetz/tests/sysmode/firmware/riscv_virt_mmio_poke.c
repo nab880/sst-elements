@@ -1,6 +1,7 @@
 
 
-#define MMIO_TEST   (*(volatile unsigned long*)0x80100000UL)
+#define MMIO_DOORBELL (*(volatile unsigned long*)0x80100000UL)
+#define MMIO_STATUS   (*(volatile unsigned long*)(0x80100000UL + 8))
 
 #define UART0_BASE  0x10000000UL
 #define UART_THR    (*(volatile unsigned char*)(UART0_BASE + 0x00))
@@ -20,7 +21,11 @@ static void uart_puts(const char *s) {
 }
 
 void _start(void) {
-    MMIO_TEST = 0xDEADBEEFUL;
+    volatile unsigned long sink;
+
+    MMIO_DOORBELL = 0xDEADBEEFUL;
+    sink = MMIO_STATUS;
+    (void)sink;
     uart_puts("MMIO poke done\n");
     TESTDEV = TESTDEV_PASS;
     while (1) __asm__ volatile ("wfi");
