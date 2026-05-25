@@ -37,6 +37,8 @@ void _start(void) {
     launch_kernel(1000);
     launch_kernel(5000);
     launch_kernel(20000);
+    
+    launch_kernel(0);
     uart_puts("GPU kernels done\n");
     TESTDEV = TESTDEV_PASS;
     while (1)

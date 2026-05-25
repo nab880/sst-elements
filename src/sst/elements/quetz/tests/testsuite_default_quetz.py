@@ -883,13 +883,14 @@ class testcase_quetz_sysmode(SSTTestCase):
             "GPU doorbell must not escape to cache_link")
         self.assertIsNotNone(kernels_launched,
             "gpu.kernels_launched not found in output")
-        self.assertEqual(kernels_launched, 3,
-            "firmware launches exactly three kernels")
+        self.assertEqual(kernels_launched, 4,
+            "firmware launches four kernels (incl. LATENCY_OVERRIDE=0 fallback)")
         self.assertIsNotNone(busy_cycles,
             "gpu.busy_cycles not found in output")
-        expected_busy_min = 1000 + 5000 + 20000
-        self.assertGreaterEqual(busy_cycles, expected_busy_min - 3,
-            "gpu.busy_cycles should reflect firmware latencies (1000+5000+20000)")
+        default_kernel_latency = 5000
+        expected_busy_min = 1000 + 5000 + 20000 + default_kernel_latency
+        self.assertGreaterEqual(busy_cycles, expected_busy_min - 4,
+            "gpu.busy_cycles should reflect firmware latencies plus default fallback")
         self.assertIsNotNone(doorbell_while_busy,
             "gpu.doorbell_while_busy not found in output")
         self.assertEqual(doorbell_while_busy, 0,
