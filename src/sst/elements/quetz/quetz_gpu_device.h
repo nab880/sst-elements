@@ -52,7 +52,7 @@ public:
         { "status_polls", "Reads of the status register", "requests", 1 },
         { "latency_overrides", "Writes to the latency-override register", "requests", 1 },
         { "doorbell_while_busy",
-          "Doorbell writes while BUSY (queued or dropped if queue full)", "requests", 1 },
+          "Doorbell writes received while BUSY (legacy; should stay 0)", "requests", 1 },
         { "wrong_direction_accesses",
           "Reads/writes to mapped registers with the wrong direction", "requests", 1 },
         { "bad_offset_accesses",
@@ -91,24 +91,18 @@ protected:
     bool tickBusy(SST::Cycle_t cycle);
     void retireIfReady(uint64_t now_clk);
     bool isBusyAt(uint64_t now_clk) const;
-    void ensureClockRunning();
-
     Output out;
 
     TimeConverter tc_;
+    uint64_t gpu_clk_;
     uint64_t base_addr_;
     uint64_t mmio_size_;
     uint64_t kernel_latency_;
     uint64_t busy_until_clk_;
     uint64_t kernel_id_;
     uint64_t latency_override_;
-    uint64_t pending_latency_;
-    bool     pending_valid_;
-
     mmioHandlers* handlers;
     Interfaces::StandardMem* iface;
-    Clock::HandlerBase* clock_handler_;
-    bool clock_registered_;
 
     Statistic<uint64_t>* stat_kernels_launched_;
     Statistic<uint64_t>* stat_busy_cycles_;
