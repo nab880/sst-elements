@@ -107,17 +107,16 @@ mem_be.addParams({
     "mem_size"    : str(dram_end - ram_start + 1) + "B",
 })
 
-mmio_ctrl = sst.Component("mmio_mem", "memHierarchy.MemController")
-mmio_ctrl.addParams({
-    "clock"            : "1GHz",
-    "addr_range_start" : mmio_start,
-    "addr_range_end"   : mmio_end,
+# Synthetic device with immediate MMIO responses (MemController point-to-point
+# can leave mmio_link reads pending in this topology).
+mmio_dev = sst.Component("mmio_dev", "quetz.QuetzGpuDevice")
+mmio_dev.addParams({
+    "base_addr"       : mmio_start,
+    "mmio_size"       : (mmio_end - mmio_start + 1),
+    "kernel_latency"  : 1,
+    "clock"           : clock,
 })
-mmio_be = mmio_ctrl.setSubComponent("backend", "memHierarchy.simpleMem")
-mmio_be.addParams({
-    "access_time" : "50ns",
-    "mem_size"    : str(mmio_end - mmio_start + 1) + "B",
-})
+mmio_if = mmio_dev.setSubComponent("iface", "memHierarchy.standardInterface")
 
 sst.Link("cpu_to_mem").connect(
     (cpu,     "cache_link_0", "1ns"),
@@ -125,7 +124,7 @@ sst.Link("cpu_to_mem").connect(
 
 sst.Link("cpu_to_mmio").connect(
     (cpu,      "mmio_link_0", "1ns"),
-    (mmio_ctrl,"highlink",      "1ns"))
+    (mmio_if,  "port",        "1ns"))
 
 sst.setProgramOption("timebase", "1ps")
 sst.setStatisticLoadLevel(4)
