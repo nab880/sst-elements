@@ -1,8 +1,8 @@
 /*
  * riscv_virt_mmio_poke.c — bare-metal MMIO poke for Quetz P0 routing test.
  *
- * Writes 0xDEADBEEF to a guest MMIO window at 0x80100000 (outside typical
- * DRAM; must be matched by MmioForwardRegionHandler + mmio_link in SDL).
+ * One MMIO write and one MMIO read at 0x80100000 (doorbell + status offset).
+ * Traffic must use mmio_link via MmioForwardRegionHandler, not cache_link.
  *
  * Build (from firmware/):
  *   riscv64-unknown-linux-musl-gcc \
@@ -12,7 +12,8 @@
  *     riscv_virt_mmio_poke.c -o riscv_virt_mmio_poke
  */
 
-#define MMIO_TEST   (*(volatile unsigned long*)0x80100000UL)
+#define MMIO_DOORBELL (*(volatile unsigned long*)0x80100000UL)
+#define MMIO_STATUS   (*(volatile unsigned long*)(0x80100000UL + 8))
 
 #define UART0_BASE  0x10000000UL
 #define UART_THR    (*(volatile unsigned char*)(UART0_BASE + 0x00))
@@ -32,7 +33,11 @@ static void uart_puts(const char *s) {
 }
 
 void _start(void) {
-    MMIO_TEST = 0xDEADBEEFUL;
+    volatile unsigned long sink;
+
+    MMIO_DOORBELL = 0xDEADBEEFUL;
+    sink = MMIO_STATUS;
+    (void)sink;
     uart_puts("MMIO poke done\n");
     TESTDEV = TESTDEV_PASS;
     while (1) __asm__ volatile ("wfi");

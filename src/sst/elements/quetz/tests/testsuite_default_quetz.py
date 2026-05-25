@@ -755,7 +755,7 @@ class testcase_quetz_sysmode(SSTTestCase):
 
     # -------------------------------------------------------------------------
     def test_quetz_sysmode_mmio_basic(self):
-        """MMIO doorbell write must use mmio_link, not cache_link."""
+        """MMIO write and read must use mmio_link, not cache_link."""
         test_path = self.get_testsuite_dir()
         sst_prefix  = sstsimulator_conf_get_value("SSTCore", "prefix",     str, "")
         sst_bindir  = sstsimulator_conf_get_value("SSTCore", "bindir",     str, "")
@@ -799,13 +799,19 @@ class testcase_quetz_sysmode(SSTTestCase):
 
         stats = parse_stats(sst_outfile)
         mmio_writes = stats.get("cpu.mmio_write_requests.0", 0)
+        mmio_reads  = stats.get("cpu.mmio_read_requests.0", 0)
         cache_writes = stats.get("cpu.write_requests.0", 0)
+        cache_reads  = stats.get("cpu.read_requests.0", 0)
 
         self.assertGreaterEqual(mmio_writes, 1,
             "doorbell write should appear on mmio_write_requests")
+        self.assertGreaterEqual(mmio_reads, 1,
+            "status read should appear on mmio_read_requests")
         self.assertEqual(cache_writes, 0,
             "MMIO poke firmware should not forward writes on cache_link "
             "(UART/testdev are filtered; doorbell uses mmio_link)")
+        self.assertEqual(cache_reads, 0,
+            "MMIO poke firmware should not forward reads on cache_link")
 
     # -------------------------------------------------------------------------
     def test_quetz_sysmode_gpu_kernel(self):

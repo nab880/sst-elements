@@ -106,7 +106,9 @@ public:
         "quetz",
         "GpuTraceRegionHandler",
         SST_ELI_ELEMENT_VERSION(1, 0, 0),
-        "Trace GPU MMIO doorbell/status accesses; do not forward.",
+        "Trace GPU MMIO doorbell/status accesses (Action::CONSUME). "
+        "Counts stats and logs payloads at finish(); does not issue "
+        "StandardMem and does not supply read data back to the QEMU guest.",
         SST::Quetz::MemRegionHandler)
 
     SST_ELI_DOCUMENT_PARAMS(

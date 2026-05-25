@@ -91,16 +91,17 @@ void QuetzGpuDevice::setup() {
     iface->setup();
 }
 
-bool QuetzGpuDevice::tickBusy(Cycle_t cycle) {
+bool QuetzGpuDevice::tickBusy(Cycle_t /*cycle*/) {
+    uint64_t now = getCurrentSimCycle();
     if (busy_until_cycle_ != 0) {
-        if (cycle < busy_until_cycle_) {
+        if (now < busy_until_cycle_) {
             stat_busy_cycles_->addData(1);
         } else {
             kernel_id_++;
             busy_until_cycle_ = 0;
             out.verbose(CALL_INFO, 2, 0,
                 "%s: kernel %" PRIu64 " complete at cycle %" PRIu64 "\n",
-                getName().c_str(), kernel_id_, (uint64_t)cycle);
+                getName().c_str(), kernel_id_, now);
         }
     }
     return false;
