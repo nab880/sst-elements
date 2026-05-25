@@ -23,15 +23,12 @@ QuetzGpuDevice::QuetzGpuDevice(ComponentId_t id, Params& params)
       base_addr_(params.find<uint64_t>("base_addr", 0)),
       mmio_size_(params.find<uint64_t>("mmio_size", 0x400)),
       kernel_latency_(params.find<uint64_t>("kernel_latency", 5000)),
+      gpu_clk_(0),
       busy_until_clk_(0),
       kernel_id_(0),
       latency_override_(0),
-      pending_latency_(0),
-      pending_valid_(false),
       handlers(nullptr),
       iface(nullptr),
-      clock_handler_(nullptr),
-      clock_registered_(false),
       stat_kernels_launched_(nullptr),
       stat_busy_cycles_(nullptr),
       stat_doorbell_writes_(nullptr),
@@ -75,9 +72,7 @@ QuetzGpuDevice::QuetzGpuDevice(ComponentId_t id, Params& params)
 
     handlers = new mmioHandlers(this, &out);
 
-    clock_handler_ = new Clock::Handler<QuetzGpuDevice, &QuetzGpuDevice::tickBusy>(this);
-    registerClock(tc_, clock_handler_);
-    clock_registered_ = true;
+    registerClock(tc_, new Clock::Handler<QuetzGpuDevice, &QuetzGpuDevice::tickBusy>(this));
 
     stat_kernels_launched_    = registerStatistic<uint64_t>("kernels_launched");
     stat_busy_cycles_         = registerStatistic<uint64_t>("busy_cycles");
@@ -116,36 +111,17 @@ void QuetzGpuDevice::retireIfReady(uint64_t now_clk) {
         "%s: kernel %" PRIu64 " complete at clk %" PRIu64 "\n",
         getName().c_str(), kernel_id_, now_clk);
 
-    if (pending_valid_) {
-        busy_until_clk_ = now_clk + pending_latency_;
-        pending_valid_ = false;
-        stat_kernels_launched_->addData(1);
-        out.verbose(CALL_INFO, 2, 0,
-            "%s: dequeued kernel — busy for %" PRIu64 " cycles (until %" PRIu64 ")\n",
-            getName().c_str(), pending_latency_, busy_until_clk_);
-    }
 }
 
-bool QuetzGpuDevice::tickBusy(Cycle_t cycle) {
-    uint64_t now_clk = static_cast<uint64_t>(cycle);
+bool QuetzGpuDevice::tickBusy(Cycle_t /*cycle*/) {
+    gpu_clk_++;
+    uint64_t now_clk = gpu_clk_;
 
     if (busy_until_clk_ != 0 && now_clk <= busy_until_clk_)
         stat_busy_cycles_->addData(1);
 
     retireIfReady(now_clk);
-
-    if (busy_until_clk_ == 0 && !pending_valid_) {
-        clock_registered_ = false;
-        return true;
-    }
     return false;
-}
-
-void QuetzGpuDevice::ensureClockRunning() {
-    if (!clock_registered_) {
-        reregisterClock(tc_, clock_handler_);
-        clock_registered_ = true;
-    }
 }
 
 void QuetzGpuDevice::handleEvent(StandardMem::Request* req) {
@@ -180,32 +156,30 @@ void QuetzGpuDevice::mmioHandlers::handle(StandardMem::Write* write) {
         gpu->getName().c_str(), offset, write->size);
 
     if (offset == REG_DOORBELL) {
-        uint64_t now_clk = gpu->getCurrentSimTime(gpu->tc_);
-        gpu->retireIfReady(now_clk);
-        gpu->ensureClockRunning();
-
-        uint64_t latency = gpu->latency_override_ ?
-            gpu->latency_override_ : gpu->kernel_latency_;
+        uint64_t latency = gpu->latency_override_;
+        if (latency == 0)
+            latency = gpu->kernel_latency_;
         gpu->latency_override_ = 0;
 
-        if (gpu->busy_until_clk_ == 0) {
+        while (gpu->isBusyAt(gpu->gpu_clk_)) {
+            gpu->gpu_clk_++;
+            gpu->stat_busy_cycles_->addData(1);
+            gpu->retireIfReady(gpu->gpu_clk_);
+        }
+
+        uint64_t now_clk = gpu->gpu_clk_;
+        gpu->stat_kernels_launched_->addData(1);
+        if (latency == 0) {
+            gpu->kernel_id_++;
+            gpu->busy_until_clk_ = 0;
+            out->verbose(CALL_INFO, 2, 0,
+                "%s: doorbell — zero-latency kernel complete at clk %" PRIu64 "\n",
+                gpu->getName().c_str(), now_clk);
+        } else {
             gpu->busy_until_clk_ = now_clk + latency;
-            gpu->stat_kernels_launched_->addData(1);
             out->verbose(CALL_INFO, 2, 0,
                 "%s: doorbell — busy for %" PRIu64 " cycles (until %" PRIu64 ")\n",
                 gpu->getName().c_str(), latency, gpu->busy_until_clk_);
-        } else if (!gpu->pending_valid_) {
-            gpu->pending_latency_ = latency;
-            gpu->pending_valid_ = true;
-            gpu->stat_doorbell_while_busy_->addData(1);
-            out->verbose(CALL_INFO, 2, 0,
-                "%s: doorbell queued — latency %" PRIu64 " cycles\n",
-                gpu->getName().c_str(), latency);
-        } else {
-            gpu->stat_doorbell_while_busy_->addData(1);
-            out->verbose(CALL_INFO, 2, 0,
-                "%s: doorbell dropped (queue full)\n",
-                gpu->getName().c_str());
         }
         gpu->stat_doorbell_writes_->addData(1);
     } else if (offset == REG_LATENCY_OVERRIDE) {
@@ -227,7 +201,7 @@ void QuetzGpuDevice::mmioHandlers::handle(StandardMem::Write* write) {
 void QuetzGpuDevice::mmioHandlers::handle(StandardMem::Read* read) {
     uint64_t offset = read->pAddr - gpu->base_addr_;
     uint64_t value = 0;
-    uint64_t now_clk = gpu->getCurrentSimTime(gpu->tc_);
+    uint64_t now_clk = gpu->gpu_clk_;
 
     out->verbose(CALL_INFO, 2, 0,
         "%s: Read offset=0x%" PRIx64 " size=%zu\n",
@@ -261,9 +235,9 @@ void QuetzGpuDevice::printStatus(Output& statusOut) {
     statusOut.output("Quetz::QuetzGpuDevice %s\n", getName().c_str());
     statusOut.output("    base_addr=0x%" PRIx64 " mmio_size=0x%" PRIx64 "\n",
         base_addr_, mmio_size_);
-    statusOut.output("    kernel_id=%" PRIu64 " busy_until_clk=%" PRIu64
-        " pending=%d\n",
-        kernel_id_, busy_until_clk_, pending_valid_ ? 1 : 0);
+    statusOut.output("    gpu_clk=%" PRIu64 " kernel_id=%" PRIu64
+        " busy_until_clk=%" PRIu64 "\n",
+        gpu_clk_, kernel_id_, busy_until_clk_);
     iface->printStatus(statusOut);
     statusOut.output("End Quetz::QuetzGpuDevice\n\n");
 }
