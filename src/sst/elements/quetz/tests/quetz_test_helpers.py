@@ -7,8 +7,13 @@ import os
 
 from sst_unittest_support import LineFilter
 
-# instruction_count and no_ops are excluded from gold diffs: they include idle
-# NOP cycles from QEMU startup/shutdown and vary across environments.
+# Timing-sensitive or environment-variable stats excluded from gold diffs:
+#   _latency          — read/write/mmio latency accumulators
+#   .cycles.          — cycle counters (e.g. cpu.cycles.0)
+#   active_cycles     — cycles with memory activity
+#   stall_cycles      — exec/compute stall accumulators
+#   instruction_count — includes QEMU startup/shutdown NOPs
+#   no_ops            — idle NOP cycles, varies across environments
 _TIMING_KEYWORDS = (
     "_latency",
     ".cycles.",
@@ -68,10 +73,36 @@ def make_usermode_env(sst_prefix, sst_libexec, qemu_bin, exe_abs,
     return env
 
 
+def _clear_region_handler_env():
+    """Remove stale QUETZ_REGION_HANDLER* keys from prior tests in this process."""
+    for key in [k for k in os.environ if k.startswith("QUETZ_REGION_HANDLER")]:
+        del os.environ[key]
+
+
+def apply_usermode_region_handlers(memmaps):
+    """Set QUETZ_REGION_HANDLER{n}_* for usermode GPU SDLs (slots 1+ in SDL)."""
+    _clear_region_handler_env()
+    os.environ["QUETZ_REGION_HANDLER_COUNT"] = str(len(memmaps))
+    for n, entry in enumerate(memmaps):
+        if len(entry) >= 5:
+            _name, start, end, rtype, extras = (
+                entry[0], entry[1], entry[2], entry[3], entry[4])
+        else:
+            _name, start, end, rtype = entry[0], entry[1], entry[2], entry[3]
+            extras = None
+        os.environ[f"QUETZ_REGION_HANDLER{n}_START"] = str(start)
+        os.environ[f"QUETZ_REGION_HANDLER{n}_END"] = str(end)
+        os.environ[f"QUETZ_REGION_HANDLER{n}_TYPE"] = rtype
+        if extras:
+            for key, val in extras.items():
+                os.environ[f"QUETZ_REGION_HANDLER{n}_{key.upper()}"] = str(val)
+
+
 def make_sysmode_env(sst_prefix, sst_libexec, qemu_bin, exe_abs,
                      qemu_args, loader, ram_start, ram_end, memmaps,
                      stdin_file="", stdout_file="", platform=""):
     """Populate os.environ for basic_quetz_sysmode.py runs."""
+    _clear_region_handler_env()
     os.environ["QUETZ_EXE"] = exe_abs
     os.environ["QUETZ_QEMU"] = qemu_bin
     os.environ["QUETZ_PLUGIN"] = os.path.join(sst_libexec, "libqemu_sst_plugin.so")

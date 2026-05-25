@@ -787,7 +787,10 @@ class testcase_quetz_sysmode(SSTTestCase):
         sst_errfile = os.path.join(outdir, "mmio_basic.err")
         mpifiles    = os.path.join(outdir, "mmio_basic.testfile")
 
-        memmaps = [("sub_ram", 0x00000000, 0x7FFFFFFF, "filtered")]
+        memmaps = [
+            ("kernel_dram", 0x80000000, 0x800FFFFF, "filtered"),
+            ("sub_ram",     0x00000000, 0x7FFFFFFF, "filtered"),
+        ]
         make_sysmode_env(sst_prefix, sst_libexec, qemu_bin, exe_abs,
                          "-machine virt -nographic -bios none",
                          "-kernel", 0, 0xFFFFFFFF, memmaps)
@@ -916,7 +919,12 @@ class testcase_quetz_sysmode(SSTTestCase):
 
         if not os.path.exists(qemu_bin):
             self.skipTest("{} not found; skipping".format(qemu_target))
+        src_abs = os.path.normpath(os.path.join(
+            test_path, "usermode", "sources", "gpu_kernel_user.c"))
         if not os.path.exists(exe_abs):
+            if os.path.exists(src_abs):
+                self.fail("gpu_kernel_user binary missing at {}; "
+                          "run usermode/sources/build.sh".format(exe_abs))
             self.skipTest("gpu_kernel_user not found at {}; "
                           "run usermode/sources/build.sh".format(exe_abs))
 
@@ -989,7 +997,12 @@ class testcase_quetz_sysmode(SSTTestCase):
 
         if not os.path.exists(qemu_bin):
             self.skipTest("{} not found; skipping".format(qemu_target))
+        src_abs = os.path.normpath(os.path.join(
+            test_path, "usermode", "sources", "gpu_trace_user.c"))
         if not os.path.exists(exe_abs):
+            if os.path.exists(src_abs):
+                self.fail("gpu_trace_user binary missing at {}; "
+                          "run usermode/sources/build.sh".format(exe_abs))
             self.skipTest("gpu_trace_user not found at {}; "
                           "run usermode/sources/build.sh".format(exe_abs))
 
