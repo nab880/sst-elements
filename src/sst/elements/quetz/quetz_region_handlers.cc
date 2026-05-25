@@ -11,6 +11,7 @@
 
 #include "quetz_region_handlers.h"
 
+#include <algorithm>
 #include <inttypes.h>
 
 using namespace SST;
@@ -101,7 +102,9 @@ GpuTraceRegionHandler::GpuTraceRegionHandler(ComponentId_t id, Params& params)
 uint64_t GpuTraceRegionHandler::decodeDoorbellLo(const QuetzCommand& cmd)
 {
     uint64_t val = 0;
-    uint32_t n = cmd.size < 8 ? cmd.size : 8;
+    uint32_t cap = static_cast<uint32_t>(
+        std::min<size_t>(sizeof(cmd.data), sizeof(uint64_t)));
+    uint32_t n = cmd.size < cap ? cmd.size : cap;
     for (uint32_t i = 0; i < n; ++i)
         val |= static_cast<uint64_t>(cmd.data[i]) << (8 * i);
     return val;
@@ -111,7 +114,7 @@ void GpuTraceRegionHandler::recordDoorbellPayload(uint64_t payload)
 {
     recent_doorbell_lo_.push_back(payload);
     if (recent_doorbell_lo_.size() > max_payload_log_)
-        recent_doorbell_lo_.erase(recent_doorbell_lo_.begin());
+        recent_doorbell_lo_.pop_front();
 }
 
 MemRegionHandler::Action

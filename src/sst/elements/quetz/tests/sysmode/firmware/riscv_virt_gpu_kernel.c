@@ -49,6 +49,8 @@ void _start(void) {
     launch_kernel(1000);
     launch_kernel(5000);
     launch_kernel(20000);
+    /* LATENCY_OVERRIDE=0 must fall back to kernel_latency (device default). */
+    launch_kernel(0);
     uart_puts("GPU kernels done\n");
     TESTDEV = TESTDEV_PASS;
     while (1)

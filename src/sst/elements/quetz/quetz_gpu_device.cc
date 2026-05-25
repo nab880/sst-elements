@@ -30,12 +30,15 @@ QuetzGpuDevice::QuetzGpuDevice(ComponentId_t id, Params& params)
       pending_valid_(false),
       handlers(nullptr),
       iface(nullptr),
+      clock_handler_(nullptr),
+      clock_registered_(false),
       stat_kernels_launched_(nullptr),
       stat_busy_cycles_(nullptr),
       stat_doorbell_writes_(nullptr),
       stat_status_polls_(nullptr),
       stat_latency_overrides_(nullptr),
       stat_doorbell_while_busy_(nullptr),
+      stat_wrong_direction_accesses_(nullptr),
       stat_bad_offset_accesses_(nullptr)
 {
     out.init("", params.find<int>("verbose", 0), 0, Output::STDOUT);
@@ -72,7 +75,9 @@ QuetzGpuDevice::QuetzGpuDevice(ComponentId_t id, Params& params)
 
     handlers = new mmioHandlers(this, &out);
 
-    registerClock(tc_, new Clock::Handler<QuetzGpuDevice, &QuetzGpuDevice::tickBusy>(this));
+    clock_handler_ = new Clock::Handler<QuetzGpuDevice, &QuetzGpuDevice::tickBusy>(this);
+    registerClock(tc_, clock_handler_);
+    clock_registered_ = true;
 
     stat_kernels_launched_    = registerStatistic<uint64_t>("kernels_launched");
     stat_busy_cycles_         = registerStatistic<uint64_t>("busy_cycles");
@@ -80,6 +85,8 @@ QuetzGpuDevice::QuetzGpuDevice(ComponentId_t id, Params& params)
     stat_status_polls_        = registerStatistic<uint64_t>("status_polls");
     stat_latency_overrides_   = registerStatistic<uint64_t>("latency_overrides");
     stat_doorbell_while_busy_ = registerStatistic<uint64_t>("doorbell_while_busy");
+    stat_wrong_direction_accesses_ =
+        registerStatistic<uint64_t>("wrong_direction_accesses");
     stat_bad_offset_accesses_ = registerStatistic<uint64_t>("bad_offset_accesses");
 
     out.verbose(CALL_INFO, 1, 0,
@@ -96,7 +103,7 @@ void QuetzGpuDevice::setup() {
 }
 
 bool QuetzGpuDevice::isBusyAt(uint64_t now_clk) const {
-    return busy_until_clk_ != 0 && now_clk < busy_until_clk_;
+    return busy_until_clk_ != 0 && now_clk <= busy_until_clk_;
 }
 
 void QuetzGpuDevice::retireIfReady(uint64_t now_clk) {
@@ -122,11 +129,23 @@ void QuetzGpuDevice::retireIfReady(uint64_t now_clk) {
 bool QuetzGpuDevice::tickBusy(Cycle_t cycle) {
     uint64_t now_clk = static_cast<uint64_t>(cycle);
 
-    if (isBusyAt(now_clk))
+    if (busy_until_clk_ != 0 && now_clk <= busy_until_clk_)
         stat_busy_cycles_->addData(1);
 
     retireIfReady(now_clk);
+
+    if (busy_until_clk_ == 0 && !pending_valid_) {
+        clock_registered_ = false;
+        return true;
+    }
     return false;
+}
+
+void QuetzGpuDevice::ensureClockRunning() {
+    if (!clock_registered_) {
+        reregisterClock(tc_, clock_handler_);
+        clock_registered_ = true;
+    }
 }
 
 void QuetzGpuDevice::handleEvent(StandardMem::Request* req) {
@@ -163,6 +182,7 @@ void QuetzGpuDevice::mmioHandlers::handle(StandardMem::Write* write) {
     if (offset == REG_DOORBELL) {
         uint64_t now_clk = gpu->getCurrentSimTime(gpu->tc_);
         gpu->retireIfReady(now_clk);
+        gpu->ensureClockRunning();
 
         uint64_t latency = gpu->latency_override_ ?
             gpu->latency_override_ : gpu->kernel_latency_;
@@ -194,6 +214,8 @@ void QuetzGpuDevice::mmioHandlers::handle(StandardMem::Write* write) {
         out->verbose(CALL_INFO, 2, 0,
             "%s: latency_override=%" PRIu64 "\n",
             gpu->getName().c_str(), gpu->latency_override_);
+    } else if (offset == REG_STATUS || offset == REG_KERNEL_ID) {
+        gpu->stat_wrong_direction_accesses_->addData(1);
     } else {
         gpu->stat_bad_offset_accesses_->addData(1);
     }
@@ -218,6 +240,9 @@ void QuetzGpuDevice::mmioHandlers::handle(StandardMem::Read* read) {
     } else if (offset == REG_KERNEL_ID) {
         gpu->retireIfReady(now_clk);
         value = gpu->kernel_id_;
+    } else if (offset == REG_DOORBELL || offset == REG_LATENCY_OVERRIDE) {
+        gpu->stat_wrong_direction_accesses_->addData(1);
+        value = 0;
     } else {
         gpu->stat_bad_offset_accesses_->addData(1);
         value = 0;

@@ -60,6 +60,8 @@ public:
         { "latency_overrides", "Writes to the latency-override register", "requests", 1 },
         { "doorbell_while_busy",
           "Doorbell writes while BUSY (queued or dropped if queue full)", "requests", 1 },
+        { "wrong_direction_accesses",
+          "Reads/writes to mapped registers with the wrong direction", "requests", 1 },
         { "bad_offset_accesses",
           "Reads/writes to offsets not in the register map", "requests", 1 })
 
@@ -96,6 +98,7 @@ protected:
     bool tickBusy(SST::Cycle_t cycle);
     void retireIfReady(uint64_t now_clk);
     bool isBusyAt(uint64_t now_clk) const;
+    void ensureClockRunning();
 
     Output out;
 
@@ -111,6 +114,8 @@ protected:
 
     mmioHandlers* handlers;
     Interfaces::StandardMem* iface;
+    Clock::HandlerBase* clock_handler_;
+    bool clock_registered_;
 
     Statistic<uint64_t>* stat_kernels_launched_;
     Statistic<uint64_t>* stat_busy_cycles_;
@@ -118,6 +123,7 @@ protected:
     Statistic<uint64_t>* stat_status_polls_;
     Statistic<uint64_t>* stat_latency_overrides_;
     Statistic<uint64_t>* stat_doorbell_while_busy_;
+    Statistic<uint64_t>* stat_wrong_direction_accesses_;
     Statistic<uint64_t>* stat_bad_offset_accesses_;
 
     static constexpr uint64_t REG_DOORBELL         = 0x00;

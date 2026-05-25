@@ -14,6 +14,7 @@
 
 #include "quetz_region_handler.h"
 
+#include <deque>
 #include <string>
 #include <vector>
 
@@ -133,7 +134,7 @@ private:
     uint32_t              max_payload_log_;
     uint64_t              doorbell_count_;
     uint64_t              poll_count_;
-    std::vector<uint64_t> recent_doorbell_lo_;
+    std::deque<uint64_t> recent_doorbell_lo_;
 };
 
 class MmioForwardRegionHandler : public BoundedRegionHandler {
