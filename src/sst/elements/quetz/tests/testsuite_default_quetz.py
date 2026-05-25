@@ -24,6 +24,7 @@ import os
 
 from quetz_test_helpers import (
     assert_class_balance,
+    apply_usermode_region_handlers,
     compare_gold,
     filtered_stat_lines,
     make_sysmode_env,
@@ -872,6 +873,7 @@ class testcase_quetz_sysmode(SSTTestCase):
 
         kernels_launched = stat_sum(raw_output, "gpu.kernels_launched")
         busy_cycles = stat_sum(raw_output, "gpu.busy_cycles")
+        doorbell_while_busy = stat_sum(raw_output, "gpu.doorbell_while_busy")
 
         self.assertGreaterEqual(mmio_writes, 6,
             "expected doorbell + latency_override MMIO writes")
@@ -885,8 +887,145 @@ class testcase_quetz_sysmode(SSTTestCase):
             "firmware launches exactly three kernels")
         self.assertIsNotNone(busy_cycles,
             "gpu.busy_cycles not found in output")
+        expected_busy_min = 1000 + 5000 + 20000
+        self.assertGreaterEqual(busy_cycles, expected_busy_min - 3,
+            "gpu.busy_cycles should reflect firmware latencies (1000+5000+20000)")
+        self.assertIsNotNone(doorbell_while_busy,
+            "gpu.doorbell_while_busy not found in output")
+        self.assertEqual(doorbell_while_busy, 0,
+            "cooperative firmware should not queue doorbells while BUSY")
+
+    # -------------------------------------------------------------------------
+    def test_quetz_usermode_gpu_kernel(self):
+        """User-mode QuetzGpuDevice: mmio_link doorbell + timed BUSY/IDLE."""
+        test_path = self.get_testsuite_dir()
+        sst_prefix  = sstsimulator_conf_get_value("SSTCore", "prefix",     str, "")
+        sst_bindir  = sstsimulator_conf_get_value("SSTCore", "bindir",     str, "")
+        sst_libexec = sstsimulator_conf_get_value("SSTCore", "libexecdir", str, "")
+
+        qemu_target = "qemu-riscv64"
+        exe_rel     = "binaries/gpu_kernel_user"
+        import shutil
+        qemu_bin = os.path.join(sst_bindir, qemu_target)
+        if not os.path.exists(qemu_bin):
+            found = shutil.which(qemu_target)
+            if found:
+                qemu_bin = found
+        exe_abs = os.path.normpath(os.path.join(test_path, exe_rel))
+
+        if not os.path.exists(qemu_bin):
+            self.skipTest("{} not found; skipping".format(qemu_target))
+        if not os.path.exists(exe_abs):
+            self.skipTest("gpu_kernel_user not found at {}; "
+                          "run usermode/sources/build.sh".format(exe_abs))
+
+        outdir = os.path.join(self.get_test_output_run_dir(),
+                              "quetz_tests", "usermode_gpu_kernel")
+        os.makedirs(outdir, exist_ok=True)
+
+        sdlfile     = os.path.join(test_path, "usermode", "basic_quetz_gpu.py")
+        sst_outfile = os.path.join(outdir, "usermode_gpu_kernel.out")
+        sst_errfile = os.path.join(outdir, "usermode_gpu_kernel.err")
+        mpifiles    = os.path.join(outdir, "usermode_gpu_kernel.testfile")
+
+        make_usermode_env(sst_prefix, sst_libexec, qemu_bin, exe_abs,
+                          with_l1=False, isa="", detailed=False)
+        os.environ["QUETZ_MMIO_START"] = "0x80100000"
+        os.environ["QUETZ_MMIO_END"]   = "0x801003FF"
+        apply_usermode_region_handlers([
+            ("kernel_dram", 0x80000000, 0x800FFFFF, "filtered"),
+            ("sub_ram",     0x00000000, 0x7FFFFFFF, "filtered"),
+            # QEMU user-mode stack/heap live above 4 GiB; filter so MMIO stats stay clean.
+            ("user_high",   0x80100400, (1 << 48) - 1, "filtered"),
+        ])
+
+        self.run_sst(sdlfile, sst_outfile, sst_errfile,
+                     mpi_out_files=mpifiles, set_cwd=outdir, timeout_sec=180)
+
+        stats = parse_stats(sst_outfile)
+        with open(sst_outfile, "r") as f:
+            raw_output = f.read()
+
+        mmio_writes = stats.get("cpu.mmio_write_requests.0", 0)
+        mmio_reads  = stats.get("cpu.mmio_read_requests.0", 0)
+        cache_writes = stats.get("cpu.write_requests.0", 0)
+
+        kernels_launched = stat_sum(raw_output, "gpu.kernels_launched")
+        busy_cycles = stat_sum(raw_output, "gpu.busy_cycles")
+
+        self.assertGreaterEqual(mmio_writes, 6,
+            "expected doorbell + latency_override MMIO writes")
+        self.assertGreaterEqual(mmio_reads, 3,
+            "expected KERNEL_ID reads (user-mode guest does not spin on STATUS)")
+        self.assertEqual(cache_writes, 0,
+            "GPU doorbell must not escape to cache_link")
+        self.assertIsNotNone(kernels_launched,
+            "gpu.kernels_launched not found in output")
+        self.assertEqual(kernels_launched, 3,
+            "guest launches exactly three kernels")
+        self.assertIsNotNone(busy_cycles,
+            "gpu.busy_cycles not found in output")
         self.assertGreater(busy_cycles, 0,
             "GPU should accumulate busy_cycles during kernel runs")
+
+    # -------------------------------------------------------------------------
+    def test_quetz_usermode_gpu_trace_capture(self):
+        """User-mode GpuTraceRegionHandler: doorbell + status poll capture."""
+        test_path = self.get_testsuite_dir()
+        sst_prefix  = sstsimulator_conf_get_value("SSTCore", "prefix",     str, "")
+        sst_bindir  = sstsimulator_conf_get_value("SSTCore", "bindir",     str, "")
+        sst_libexec = sstsimulator_conf_get_value("SSTCore", "libexecdir", str, "")
+
+        qemu_target = "qemu-riscv64"
+        exe_rel     = "binaries/gpu_trace_user"
+        import shutil
+        qemu_bin = os.path.join(sst_bindir, qemu_target)
+        if not os.path.exists(qemu_bin):
+            found = shutil.which(qemu_target)
+            if found:
+                qemu_bin = found
+        exe_abs = os.path.normpath(os.path.join(test_path, exe_rel))
+
+        if not os.path.exists(qemu_bin):
+            self.skipTest("{} not found; skipping".format(qemu_target))
+        if not os.path.exists(exe_abs):
+            self.skipTest("gpu_trace_user not found at {}; "
+                          "run usermode/sources/build.sh".format(exe_abs))
+
+        outdir = os.path.join(self.get_test_output_run_dir(),
+                              "quetz_tests", "usermode_gpu_trace")
+        os.makedirs(outdir, exist_ok=True)
+
+        sdlfile     = os.path.join(test_path, "usermode", "basic_quetz_gpu_trace.py")
+        sst_outfile = os.path.join(outdir, "usermode_gpu_trace.out")
+        sst_errfile = os.path.join(outdir, "usermode_gpu_trace.err")
+        mpifiles    = os.path.join(outdir, "usermode_gpu_trace.testfile")
+
+        make_usermode_env(sst_prefix, sst_libexec, qemu_bin, exe_abs,
+                          with_l1=False, isa="", detailed=False)
+        os.environ["QUETZ_MMIO_START"] = "0x80100000"
+        os.environ["QUETZ_MMIO_END"]   = "0x801003FF"
+        apply_usermode_region_handlers([
+            ("sub_ram",   0x00000000, 0x7FFFFFFF, "filtered"),
+            ("user_high", 0x80100400, (1 << 48) - 1, "filtered"),
+        ])
+
+        self.run_sst(sdlfile, sst_outfile, sst_errfile,
+                     mpi_out_files=mpifiles, set_cwd=outdir, timeout_sec=120)
+
+        stats = parse_stats(sst_outfile)
+        with open(sst_outfile, "r") as f:
+            raw = f.read()
+
+        self.assertEqual(stats.get("cpu.gpu_doorbell_writes.0", 0), 1)
+        self.assertEqual(stats.get("cpu.gpu_status_polls.0", 0), 8)
+        self.assertIn("GPU_TRACE[0]:", raw)
+        idx = raw.find("GPU_TRACE[0]:")
+        self.assertNotEqual(idx, -1)
+        line = raw[idx:raw.find("\n", idx)]
+        self.assertIn("doorbells=1", line)
+        self.assertIn("polls=8", line)
+        self.assertIn("deadbeef", line.lower())
 
     # -------------------------------------------------------------------------
     def test_quetz_sysmode_uart_capture(self):
