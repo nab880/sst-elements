@@ -1,6 +1,9 @@
 """
 basic_quetz_gpu.py — sysmode SDL for QuetzGpuDevice (P2.a kernel-latency test).
 
+Slot 0 is reserved for the MmioForwardRegionHandler on the GPU MMIO window.
+QUETZ_REGION_HANDLER{n}_* entries (n >= 0) are loaded into slots 1+.
+
 Expects QUETZ_* env vars like basic_quetz_sysmode.py, plus:
   QUETZ_MMIO_START / QUETZ_MMIO_END  — MMIO window for handler + GPU device
   QUETZ_GPU_LATENCY                  — default kernel_latency cycles (optional)
@@ -66,7 +69,7 @@ cpu.addParams(cpu_params)
 mmio_rh = cpu.setSubComponent("region_handler", "quetz.MmioForwardRegionHandler", 0)
 mmio_rh.addParams({"start": mmio_start, "end": mmio_end})
 
-rh_count = int(os.environ.get("QUETZ_REGION_HANDLER_COUNT", "1"))
+rh_count = int(os.environ.get("QUETZ_REGION_HANDLER_COUNT", "0"))
 for n in range(rh_count):
     pfx = f"QUETZ_REGION_HANDLER{n}_"
     rh_type = os.environ.get(pfx + "TYPE", "")
