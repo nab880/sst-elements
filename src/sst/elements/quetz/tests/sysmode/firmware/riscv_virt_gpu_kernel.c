@@ -37,6 +37,13 @@ static void uart_puts(const char *s) {
     while (*s) uart_putc(*s++);
 }
 
+/* NOTE: The qemu_sst_plugin in sysmode does not deliver SST MMIO read response
+ * payloads back to the guest, so STATUS reads observe 0 from QEMU's default
+ * MMIO behavior, not the SST device's BUSY/IDLE flag.  This loop is therefore
+ * a polite hint to the model rather than a real wait.  The QuetzGpuDevice
+ * model queues back-to-back doorbells (FIFO) and drains them via tickBusy,
+ * holding the simulation open via primaryComponentDoNotEndSim() until all
+ * queued launches retire.  See test_quetz_sysmode_gpu_kernel. */
 static void launch_kernel(unsigned long latency_cycles) {
     GPU_LATENCY_OVR = latency_cycles;
     GPU_DOORBELL = 0;

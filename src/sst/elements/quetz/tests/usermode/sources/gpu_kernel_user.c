@@ -2,18 +2,15 @@
  * gpu_kernel_user.c — user-mode driver for quetz.QuetzGpuDevice.
  *
  * mmap(MAP_FIXED) at 0x80100000 so QEMU user-mode delivers MMIO loads/stores
- * to the SST plugin.  Three kernel launches with LATENCY_OVERRIDE, matching
- * sysmode riscv_virt_gpu_kernel.c register layout.
- *
- * Build: run build.sh in this directory.
+ * to the SST plugin.  STATUS read payloads are NOT delivered to the guest in
+ * user-mode (linux-user SIGSEGV hook is deferred), so we cannot spin on
+ * STATUS — use a host-side delay loop between back-to-back doorbells.
  */
 
 #include <stdint.h>
 #include <sys/mman.h>
 #include <unistd.h>
 
-/* Give the GPU device clock time to retire kernels between back-to-back
- * doorbells (user-mode does not spin on STATUS). */
 static void gpu_sync_delay(void) {
     for (volatile int i = 0; i < 500000; i++) { }
 }
@@ -31,8 +28,6 @@ static volatile uint64_t *mmio;
 static void launch_kernel(unsigned long latency_cycles) {
     mmio[OFF_LATENCY_OVR / 8] = latency_cycles;
     mmio[OFF_DOORBELL / 8] = 0;
-    /* Do not spin on STATUS in user-mode: QuetzGpuDevice read responses are
-     * not written back into the guest mmap page (SST models timing only). */
     (void)mmio[OFF_KERNEL_ID / 8];
 }
 
