@@ -26,6 +26,7 @@ from quetz_test_helpers import (
     assert_class_balance,
     apply_usermode_region_handlers,
     compare_gold,
+    enable_mmio_payload_delivery,
     filtered_stat_lines,
     make_sysmode_env,
     make_usermode_env,
@@ -796,6 +797,7 @@ class testcase_quetz_sysmode(SSTTestCase):
                          "-kernel", 0, 0xFFFFFFFF, memmaps)
         os.environ["QUETZ_MMIO_START"] = "0x80100000"
         os.environ["QUETZ_MMIO_END"]   = "0x801003FF"
+        enable_mmio_payload_delivery()
 
         self.run_sst(sdlfile, sst_outfile, sst_errfile,
                      mpi_out_files=mpifiles, set_cwd=outdir, timeout_sec=120)
@@ -807,12 +809,12 @@ class testcase_quetz_sysmode(SSTTestCase):
         cache_reads  = stats.get("cpu.read_requests.0", 0)
 
         self.assertGreaterEqual(mmio_writes, 1,
-            "doorbell write should appear on mmio_write_requests")
+            "MMIO write should appear on mmio_write_requests")
         self.assertGreaterEqual(mmio_reads, 1,
-            "status read should appear on mmio_read_requests")
+            "MMIO read should appear on mmio_read_requests (mmioEx returns 9 for write 3)")
         self.assertEqual(cache_writes, 0,
             "MMIO poke firmware should not forward writes on cache_link "
-            "(UART/testdev are filtered; doorbell uses mmio_link)")
+            "(UART/testdev are filtered; MMIO uses mmio_link)")
         self.assertEqual(cache_reads, 0,
             "MMIO poke firmware should not forward reads on cache_link")
 
@@ -860,6 +862,7 @@ class testcase_quetz_sysmode(SSTTestCase):
                          "-kernel", 0, 0xFFFFFFFF, memmaps)
         os.environ["QUETZ_MMIO_START"] = "0x80100000"
         os.environ["QUETZ_MMIO_END"]   = "0x801003FF"
+        enable_mmio_payload_delivery()
 
         self.run_sst(sdlfile, sst_outfile, sst_errfile,
                      mpi_out_files=mpifiles, set_cwd=outdir, timeout_sec=180)
@@ -878,8 +881,8 @@ class testcase_quetz_sysmode(SSTTestCase):
 
         self.assertGreaterEqual(mmio_writes, 6,
             "expected doorbell + latency_override MMIO writes")
-        self.assertGreaterEqual(mmio_reads, 6,
-            "expected status polls + KERNEL_ID reads")
+        self.assertGreater(mmio_reads, 4,
+            "STATUS spin should issue one mmio read per poll iteration")
         self.assertEqual(cache_writes, 0,
             "GPU doorbell must not escape to cache_link")
         self.assertIsNotNone(kernels_launched,
@@ -890,13 +893,12 @@ class testcase_quetz_sysmode(SSTTestCase):
             "gpu.busy_cycles not found in output")
         default_kernel_latency = 5000
         expected_busy_min = 1000 + 5000 + 20000 + default_kernel_latency
-        # STATUS polls and tickBusy both advance gpu_clk_; allow small slack.
-        self.assertGreaterEqual(busy_cycles, expected_busy_min - 600,
+        self.assertGreaterEqual(busy_cycles, expected_busy_min - 4,
             "gpu.busy_cycles should reflect firmware latencies plus default fallback")
         self.assertIsNotNone(doorbell_while_busy,
             "gpu.doorbell_while_busy not found in output")
         self.assertEqual(doorbell_while_busy, 0,
-            "cooperative firmware should not queue doorbells while BUSY")
+            "guest STATUS spin must see real payloads before each doorbell")
 
     # -------------------------------------------------------------------------
     def test_quetz_usermode_gpu_kernel(self):
@@ -940,6 +942,7 @@ class testcase_quetz_sysmode(SSTTestCase):
                           with_l1=False, isa="", detailed=False)
         os.environ["QUETZ_MMIO_START"] = "0x80100000"
         os.environ["QUETZ_MMIO_END"]   = "0x801003FF"
+        # NOTE: usermode SIGSEGV hook deferred — plugin trace path only.
         apply_usermode_region_handlers([
             ("kernel_dram", 0x80000000, 0x800FFFFF, "filtered"),
             ("sub_ram",     0x00000000, 0x7FFFFFFF, "filtered"),
