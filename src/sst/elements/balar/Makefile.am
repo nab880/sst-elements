@@ -21,7 +21,9 @@ libbalar_la_SOURCES = \
 	util.cc \
 	util.h \
 	testcpu/balarTestCPU.cc \
-	testcpu/balarTestCPU.h
+	testcpu/balarTestCPU.h \
+	testcpu/quetzTestCPU.cc \
+	testcpu/quetzTestCPU.h
 
 EXTRA_DIST = \
 	tests/refFiles/test_gpgpu_rodinia-2.0-backprop-1024.out \
@@ -74,8 +76,10 @@ EXTRA_DIST = \
 	tests/testBalar-vanadis.py \
 	tests/testBalar-doorbell.py \
 	tests/testBalar-malloc-free.py \
-	tests/testBalar-coherent-bus.py \
 	tests/testBalar-wide-packet.py \
+	tests/testQuetz-balar-doorbell.py \
+	tests/testQuetz-balar-malloc-free.py \
+	tests/testQuetz-balar-wide-packet.py \
 	tests/balar_test_topology.py \
 	tests/traces/doorbell_malloc.trace \
 	tests/traces/malloc_free.trace \
