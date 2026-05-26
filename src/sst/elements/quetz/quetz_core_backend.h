@@ -23,6 +23,9 @@
 
 #include <stdint.h>
 
+#include <deque>
+#include <functional>
+
 #include "quetz_shmem.h"
 
 namespace SST {
@@ -50,8 +53,13 @@ public:
     void updateSimTime(uint64_t sim_time_ns) override;
     void incrementCycles() override;
 
+    using MmioSyncHandler = std::function<bool(uint32_t, const QuetzCommand&)>;
+    void setMmioSyncHandler(MmioSyncHandler handler) { mmio_sync_handler_ = std::move(handler); }
+
 private:
     QuetzTunnel* tunnel_;
+    MmioSyncHandler mmio_sync_handler_;
+    std::deque<QuetzCommand> deferred_[QUETZ_MAX_MMIO_VCORES];
 };
 
 } // namespace Quetz

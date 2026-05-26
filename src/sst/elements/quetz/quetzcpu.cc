@@ -13,6 +13,7 @@
 #include "quetzcpu.h"
 
 #include "quetz_config_manager.h"
+#include "quetz_core_backend.h"
 
 #include <inttypes.h>
 
@@ -125,6 +126,9 @@ QuetzCPU::QuetzCPU(ComponentId_t id, Params& params)
         }
         mmio_ifaces_[i] = iface;
         cores_[i]->setMmioLink(iface);
+        cores_[i]->setMmioSyncCompleter([this, i](StandardMem::Request* r) {
+            return completeMmioSyncResponse(i, r);
+        });
         output_->verbose(CALL_INFO, 1, 0,
             "vCPU %" PRIu32 ": mmio_link connected.\n", i);
     }
@@ -213,6 +217,8 @@ bool QuetzCPU::tick(SST::Cycle_t /*cycle*/) {
     QuetzCoreBackend* backend = frontend_->coreBackend();
     backend->updateSimTime(getCurrentSimTimeNano());
     backend->incrementCycles();
+
+    pollMmioSyncMailbox();
 
     for (uint32_t i = 0; i < cfg_.vcpu_count; i++) {
         bool was_halted = cores_[i]->isCoreHalted();

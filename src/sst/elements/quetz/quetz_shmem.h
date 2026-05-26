@@ -28,6 +28,7 @@
 #include "quetz_command_buffer.h"
 #include "quetz_sync_manager.h"
 #include "quetz_statistics_collector.h"
+#include "quetz_mmio_sync.h"
 
 namespace SST {
 namespace Quetz {
@@ -55,9 +56,12 @@ public:
         uint32_t childnum = Base::initialize(shmPtr);
         sync_.bind(sharedData);
         statistics_.bindShared(sharedData);
+        mmio_sync_.bind(sharedData);
         if (isMaster()) {
             sync_.initMaster(getNumBuffers());
             statistics_.initMaster();
+            for (size_t i = 0; i < QUETZ_MAX_MMIO_VCORES; i++)
+                mmio_sync_.clearSlot((uint32_t)i);
         } else {
             sync_.announceAttach();
         }
@@ -86,11 +90,13 @@ public:
     const QuetzCommandBuffer& commands() const { return commands_; }
     QuetzSyncManager&               sync()           { return sync_; }
     QuetzStatisticsCollector&       statistics()     { return statistics_; }
+    QuetzMmioSync&                  mmioSync()       { return mmio_sync_; }
 
 private:
     QuetzCommandBuffer commands_;
     QuetzSyncManager         sync_;
     QuetzStatisticsCollector statistics_;
+    QuetzMmioSync            mmio_sync_;
 };
 
 } // namespace Quetz
