@@ -76,6 +76,10 @@ int qemu_plugin_install(qemu_plugin_id_t id,
             g_shmem_name = std::string(argv[i] + 8);
         else if (strncmp(argv[i], "detailed=", 9) == 0)
             g_detailed = (argv[i][9] == '1');
+        else if (strncmp(argv[i], "mmio_base=", 10) == 0)
+            g_mmio_sync_base = strtoull(argv[i] + 10, nullptr, 0);
+        else if (strncmp(argv[i], "mmio_size=", 10) == 0)
+            g_mmio_sync_size = strtoull(argv[i] + 10, nullptr, 0);
     }
 
     if (g_detailed && !g_insn_classifier->usesPreciseMemCallbacks()) {
