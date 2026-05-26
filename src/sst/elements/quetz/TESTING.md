@@ -2,7 +2,7 @@
 
 This document describes how to **build** the Quetz SST element and QEMU plugin and **run** the in-tree regression suite. The workflow below matches what was used to validate the compartmentalized layout on branch `quetz-refactor` (Docker image build + `sst-test-elements`).
 
-For day-to-day development, use the **Docker** path in the [raptor](https://github.com/nab880/sst-elements) repo (`docker/` at the repository root that contains `sst-elements/`). A native host build is possible but not covered here.
+For day-to-day development, use the **quetz-docker** repo (`quetz-docker/` sibling to `sst-elements/` in your workspace). A native host build is possible but not covered here.
 
 ---
 
@@ -24,15 +24,15 @@ The Docker image installs:
 
 ## Quick start (recommended)
 
-From the **raptor repo root** (parent of `sst-elements/`):
+From the **workspace root** (parent of `sst-elements/` and `quetz-docker/`):
 
 ```bash
-./docker/build-and-test.sh
+./quetz-docker/build-and-test.sh
 ```
 
 This script:
 
-1. Builds the Docker image `raptor-quetz-test` from `docker/Dockerfile`
+1. Builds the Docker image `raptor-quetz-test` from `quetz-docker/Dockerfile`
 2. Runs the Quetz testsuite inside a container with `sst-elements/` mounted at `/src/sst-elements`
 
 **Success** ends with:
@@ -52,14 +52,14 @@ In a clean run you should see **all integration tests passing** (matrix usermode
 
 ```bash
 cd /path/to/raptor
-docker build -t raptor-quetz-test -f docker/Dockerfile .
+docker build -t raptor-quetz-test -f quetz-docker/Dockerfile .
 ```
 
 Override the image name if needed:
 
 ```bash
 export RAPTOR_QUETZ_IMAGE=my-quetz-test
-docker build -t "${RAPTOR_QUETZ_IMAGE}" -f docker/Dockerfile .
+docker build -t "${RAPTOR_QUETZ_IMAGE}" -f quetz-docker/Dockerfile .
 ```
 
 The Dockerfile compiles QEMU with plugin support, then SST-Core and SST-Elements (including Quetz). Rebuild is required after changing **build system** files (`Makefile.am`, `configure.m4`) or when the image does not yet contain your sources.
@@ -69,7 +69,7 @@ The Dockerfile compiles QEMU with plugin support, then SST-Core and SST-Elements
 **Option A — combined script (build + test):**
 
 ```bash
-./docker/build-and-test.sh
+./quetz-docker/build-and-test.sh
 ```
 
 **Option B — test only** (image already built; use live `sst-elements` sources on the host):
@@ -85,7 +85,7 @@ The mount means Python tests and guest binaries under `tests/` are read from you
 
 ### 3. What runs inside the container
 
-`docker/run-quetz-tests.sh` sets `SST_HOME=/opt/sst` and invokes:
+`quetz-docker/run-quetz-tests.sh` sets `SST_HOME=/opt/sst` and invokes:
 
 ```bash
 sst-test-elements -p /src/sst-elements/src/sst/elements/quetz/tests/testsuite_default_quetz.py
@@ -100,7 +100,7 @@ It also prints QEMU versions and confirms `libquetz.so` / `libqemu_sst_plugin.so
 | Change type | Action |
 |-------------|--------|
 | Python tests, SDL, gold files only | Re-run §2 Option B (no image rebuild) |
-| Quetz C++ / plugin / `Makefile.am` | Rebuild image: `./docker/build-and-test.sh` or `docker build ...` |
+| Quetz C++ / plugin / `Makefile.am` | Rebuild image: `./quetz-docker/build-and-test.sh` or `docker build ...` |
 | Faster iteration on C++ only | Rebuild SST-Elements layer inside a running container (advanced); simplest path is full `docker build` |
 
 After a successful image build, a **test-only** run with the volume mount took on the order of **~10 seconds** in this session.
@@ -126,7 +126,7 @@ A failing usermode test with a fast exit (~0.2 s), guest `Hello World` in the lo
 1. **Build the image** so `/opt/sst` contains your C++ / plugin changes (gold refresh alone is not enough after `Makefile.am` or tunnel changes):
 
    ```bash
-   ./docker/build-and-test.sh
+   ./quetz-docker/build-and-test.sh
    ```
 
    Expect some failures on the first run if gold is stale; that is normal.
@@ -134,7 +134,7 @@ A failing usermode test with a fast exit (~0.2 s), guest `Hello World` in the lo
 2. **Regenerate gold** from the same Docker image and mounted `sst-elements` tree:
 
    ```bash
-   UPDATE_GOLD=1 ./docker/build-and-test.sh
+   UPDATE_GOLD=1 ./quetz-docker/build-and-test.sh
    ```
 
    Or, if the image is already built:
@@ -257,7 +257,7 @@ export QEMU_PLUGIN_DIR=/opt/qemu/lib/qemu/plugins
 python3 src/sst/elements/quetz/tests/validate_against_libmem.py
 ```
 
-Skipped automatically when `libmem.so` is absent. `docker/run-quetz-tests.sh` runs this after unit + integration tests (warn-only on failure).
+Skipped automatically when `libmem.so` is absent. `quetz-docker/run-quetz-tests.sh` runs this after unit + integration tests (warn-only on failure).
 
 ---
 
@@ -313,4 +313,4 @@ Quetz `configure` must find `qemu-plugin.h` and a plugin-capable QEMU. The Docke
 
 - [README.md](README.md) — component usage, parameters, QEMU version table
 - [QUETZ_OUTLINE.md](QUETZ_OUTLINE.md) — architecture and source map
-- [`docker/README.md`](../../../../../docker/README.md) — Docker image details (raptor repo root)
+- [`quetz-docker/README.md`](https://github.com/nab880/quetz-docker/blob/main/README.md) — Docker image details (quetz-docker repo)
