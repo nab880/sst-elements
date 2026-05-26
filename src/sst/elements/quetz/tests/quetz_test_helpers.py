@@ -56,9 +56,15 @@ def stat_sum(output, stat_substr, default=None):
     return default
 
 
+def enable_mmio_payload_delivery():
+    """Enable QEMU bridge / linux-user MMIO sync (launcher reads these)."""
+    os.environ["QUETZ_MMIO_PAYLOAD"] = "1"
+
+
 def make_usermode_env(sst_prefix, sst_libexec, qemu_bin, exe_abs,
                       with_l1=False, isa="", detailed=True):
     """Populate os.environ for basic_quetz.py usermode runs."""
+    os.environ.pop("QUETZ_MMIO_PAYLOAD", None)
     env = {
         "QUETZ_EXE": exe_abs,
         "QUETZ_QEMU": qemu_bin,
@@ -103,6 +109,7 @@ def make_sysmode_env(sst_prefix, sst_libexec, qemu_bin, exe_abs,
                      stdin_file="", stdout_file="", platform=""):
     """Populate os.environ for basic_quetz_sysmode.py runs."""
     _clear_region_handler_env()
+    os.environ.pop("QUETZ_MMIO_PAYLOAD", None)
     os.environ["QUETZ_EXE"] = exe_abs
     os.environ["QUETZ_QEMU"] = qemu_bin
     os.environ["QUETZ_PLUGIN"] = os.path.join(sst_libexec, "libqemu_sst_plugin.so")
