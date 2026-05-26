@@ -12,6 +12,8 @@
 #include <sst_config.h>
 #include "quetz_launcher.h"
 
+#include <cstdlib>
+#include <inttypes.h>
 #include <sstream>
 #include <vector>
 #include <signal.h>
@@ -52,12 +54,40 @@ pid_t QemuLauncher::spawn(const QuetzConfig& cfg,
     if (detailed_tracking)
         plugin_arg += ",detailed=1";
 
+    const char* mmio_start_env = getenv("QUETZ_MMIO_START");
+    const char* mmio_end_env   = getenv("QUETZ_MMIO_END");
+    const char* mmio_payload   = getenv("QUETZ_MMIO_PAYLOAD");
+    uint64_t mmio_base = 0;
+    uint64_t mmio_size = 0;
+    if (mmio_payload && mmio_payload[0] == '1' && mmio_start_env && mmio_end_env) {
+        mmio_base = strtoull(mmio_start_env, nullptr, 0);
+        uint64_t mmio_end = strtoull(mmio_end_env, nullptr, 0);
+        if (mmio_end >= mmio_base)
+            mmio_size = mmio_end - mmio_base + 1;
+        char plug_mmio[128];
+        snprintf(plug_mmio, sizeof(plug_mmio),
+            ",mmio_base=0x%" PRIx64 ",mmio_size=0x%" PRIx64, mmio_base, mmio_size);
+        plugin_arg += plug_mmio;
+    }
+
     std::vector<std::string> argv_strs;
     argv_strs.reserve(8 + cfg.qemu_extra_args.size() + cfg.app_args.size());
     argv_strs.push_back(cfg.qemu_bin);
     for (const auto& a : cfg.qemu_extra_args) argv_strs.push_back(a);
     argv_strs.push_back("-plugin");
     argv_strs.push_back(plugin_arg);
+
+    // Sysmode only: -device sst-mmio-bridge.
+    // Linux-user SIGSEGV hook is deferred; QUETZ_MMIO_PAYLOAD has no effect there.
+    if (mmio_size != 0 && cfg.system_mode) {
+        char dev[256];
+        snprintf(dev, sizeof(dev),
+            "sst-mmio-bridge,shmname=%s,base=0x%" PRIx64 ",size=0x%" PRIx64 ",vcpu_id=0",
+            shmem_region_name.c_str(), mmio_base, mmio_size);
+        argv_strs.push_back("-device");
+        argv_strs.push_back(dev);
+    }
+
     if (cfg.system_mode && !cfg.system_mode_loader.empty())
         argv_strs.push_back(cfg.system_mode_loader);
     argv_strs.push_back(cfg.executable);
