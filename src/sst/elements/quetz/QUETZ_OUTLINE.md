@@ -471,6 +471,8 @@ sst.Link("cpu_mmio").connect((cpu, "mmio_link_0", "1ns"), (mmio_dev, "highlink",
 
 **Topology (P2.a):** point-to-point — `mmio_link_0` → `gpu.iface` (`memHierarchy.standardInterface`) with `setMemoryMappedAddressRegion(base_addr, mmio_size)`. DRAM stays on `cache_link_0`. See `tests/sysmode/basic_quetz_gpu.py` and firmware `riscv_virt_gpu_kernel.c`; testsuite entry `test_quetz_sysmode_gpu_kernel`.
 
+**User-mode (same C++ path):** `MmioForwardRegionHandler`, `GpuTraceRegionHandler`, and `QuetzGpuDevice` do not depend on `system_mode`. Wire `tests/usermode/basic_quetz_gpu.py` (device + `mmio_link_0`) or `basic_quetz_gpu_trace.py` (CONSUME only). The guest must `mmap(MAP_FIXED | MAP_ANONYMOUS, …)` at the MMIO base so QEMU user-mode does not fault before the plugin sees loads/stores; host page contents are irrelevant for trace, while the device path needs STATUS reads on `mmio_link`. Test programs: `tests/usermode/sources/gpu_kernel_user.c`, `gpu_trace_user.c`; build with `tests/usermode/sources/build.sh`; testsuite `test_quetz_usermode_gpu_kernel`, `test_quetz_usermode_gpu_trace_capture`. Follow-up: plugin-side address intercept could remove the mmap requirement.
+
 **Stats:** `kernels_launched`, `busy_cycles`, `doorbell_writes`, `status_polls`, `latency_overrides`, `bad_offset_accesses`.
 
 **P2.b — deferred:**
