@@ -20,6 +20,8 @@
 
 #include <stdint.h>
 
+#include <functional>
+
 #include "quetz_core_backend.h"
 #include "quetz_pipeline.h"
 #include "quetz_pipeline_api.h"
@@ -56,9 +58,13 @@ public:
 
     void setMemLink(SST::Interfaces::StandardMem* link);
     void setMmioLink(SST::Interfaces::StandardMem* link);
+    using MmioSyncCompleter = std::function<bool(SST::Interfaces::StandardMem::Request*)>;
+    void setMmioSyncCompleter(MmioSyncCompleter fn);
 
     void tick();
     void handleMemResponse(SST::Interfaces::StandardMem::Request* resp);
+
+    void recordMmioSyncRequest(bool is_read);
 
     bool     isCoreHalted()  const;
     uint32_t pendingCount()  const;
@@ -89,6 +95,8 @@ private:
     PipelineTransform*     pipeline_transform_;
     PipelineOutput*        pipeline_output_;
     QuetzEventPipeline*    pipeline_;
+
+    MmioSyncCompleter mmio_sync_completer_;
 };
 
 } // namespace Quetz

@@ -29,6 +29,8 @@ libquetz_la_SOURCES = \
     quetz_platform_profiles.cc \
     quetz_core_backend.cc \
     quetz_core_backend.h \
+    quetzcpu_mmio_sync.cc \
+    quetz_mmio_sync.h \
     quetz_frontend.h \
     quetz_qemu_frontend.cc \
     quetz_qemu_frontend.h \
