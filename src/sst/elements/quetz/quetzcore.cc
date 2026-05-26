@@ -115,11 +115,18 @@ void QuetzCore::setMmioLink(SST::Interfaces::StandardMem* link) {
     pipeline_->setMmioLink(link);
 }
 
+void QuetzCore::setMmioSyncCompleter(MmioSyncCompleter fn) {
+    mmio_sync_completer_ = std::move(fn);
+}
+
 void QuetzCore::finishCore() {
     pipeline_->finish();
 }
 
 void QuetzCore::handleMemResponse(SST::Interfaces::StandardMem::Request* resp) {
+    if (mmio_sync_completer_ && mmio_sync_completer_(resp))
+        return;
+
     uint64_t lat = 0;
     bool was_read = false;
     bool was_mmio = false;
@@ -135,6 +142,13 @@ void QuetzCore::handleMemResponse(SST::Interfaces::StandardMem::Request* resp) {
     } else {
         stats_.write_lat->addData(lat);
     }
+}
+
+void QuetzCore::recordMmioSyncRequest(bool is_read) {
+    if (is_read)
+        stats_.mmio_read_reqs->addData(1);
+    else
+        stats_.mmio_write_reqs->addData(1);
 }
 
 void QuetzCore::tick() {

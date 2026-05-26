@@ -321,8 +321,17 @@ public:
     void emergencyShutdown()        override;
     bool tick(SST::Cycle_t cycle);
 
+    
+    bool completeMmioSyncResponse(uint32_t vcpu, SST::Interfaces::StandardMem::Request* resp);
+
 private:
     void loadRegionHandlers();
+    void initMmioSyncState();
+    void pollMmioSyncMailbox();
+    bool handleMmioSyncCommand(uint32_t vcpu, const QuetzCommand& cmd);
+
+    struct MmioSyncState;
+    MmioSyncState* mmio_sync_state_ = nullptr;
 
     QuetzConfig cfg_;
     SST::Output* output_;
