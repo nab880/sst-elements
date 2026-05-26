@@ -4,7 +4,6 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-
 static void gpu_sync_delay(void) {
     for (volatile int i = 0; i < 500000; i++) { }
 }
@@ -22,7 +21,6 @@ static volatile uint64_t *mmio;
 static void launch_kernel(unsigned long latency_cycles) {
     mmio[OFF_LATENCY_OVR / 8] = latency_cycles;
     mmio[OFF_DOORBELL / 8] = 0;
-    
     (void)mmio[OFF_KERNEL_ID / 8];
 }
 

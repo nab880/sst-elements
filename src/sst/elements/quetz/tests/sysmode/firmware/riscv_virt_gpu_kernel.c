@@ -25,6 +25,7 @@ static void uart_puts(const char *s) {
     while (*s) uart_putc(*s++);
 }
 
+
 static void launch_kernel(unsigned long latency_cycles) {
     GPU_LATENCY_OVR = latency_cycles;
     GPU_DOORBELL = 0;
