@@ -21,6 +21,8 @@ std::atomic<bool>   g_mem_seen[PLUGIN_MAX_VCPUS];
 QuetzInsnClass      g_prev_cls[PLUGIN_MAX_VCPUS];
 InsnClassifier*     g_insn_classifier  = nullptr;
 MemAccessHandler*   g_mem_handler      = nullptr;
+uint64_t            g_mmio_sync_base   = 0;
+uint64_t            g_mmio_sync_size   = 0;
 
 void write_cmd(unsigned vcpu, QuetzShmemCmd type,
                uint32_t size, uint64_t pc, uint64_t addr,

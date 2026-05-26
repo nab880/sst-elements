@@ -35,6 +35,9 @@ extern QuetzInsnClass       g_prev_cls[PLUGIN_MAX_VCPUS];
 extern InsnClassifier*      g_insn_classifier;
 extern MemAccessHandler*    g_mem_handler;
 
+extern uint64_t             g_mmio_sync_base;
+extern uint64_t             g_mmio_sync_size;
+
 void write_cmd(unsigned vcpu, QuetzShmemCmd type,
                uint32_t size, uint64_t pc, uint64_t addr,
                QuetzInsnClass cls = QUETZ_INSN_OTHER,

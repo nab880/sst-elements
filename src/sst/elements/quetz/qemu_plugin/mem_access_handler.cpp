@@ -30,6 +30,11 @@ void QemuMemAccessHandler::handle(unsigned int vcpu_index,
     uint32_t size     = (shift < 8) ? (1u << shift) : 128u;
     uint64_t pc       = (uint64_t)(uintptr_t)userdata;
 
+    if (g_mmio_sync_size != 0 && vaddr >= g_mmio_sync_base &&
+        vaddr < g_mmio_sync_base + g_mmio_sync_size) {
+        return;
+    }
+
     g_mem_seen[vcpu_index].store(true, std::memory_order_relaxed);
 
     if (g_insn_classifier && !g_insn_classifier->usesPreciseMemCallbacks())
