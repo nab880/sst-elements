@@ -16,6 +16,7 @@
 #include <sst/core/interfaces/stdMem.h>
 #include <sst/core/output.h>
 
+#include <deque>
 #include <stdint.h>
 #include <vector>
 
@@ -52,7 +53,7 @@ public:
         { "status_polls", "Reads of the status register", "requests", 1 },
         { "latency_overrides", "Writes to the latency-override register", "requests", 1 },
         { "doorbell_while_busy",
-          "Doorbell writes received while BUSY (legacy; should stay 0)", "requests", 1 },
+          "Doorbell writes while BUSY (queued or dropped if queue full)", "requests", 1 },
         { "wrong_direction_accesses",
           "Reads/writes to mapped registers with the wrong direction", "requests", 1 },
         { "bad_offset_accesses",
@@ -91,6 +92,9 @@ protected:
     bool tickBusy(SST::Cycle_t cycle);
     void retireIfReady(uint64_t now_clk);
     bool isBusyAt(uint64_t now_clk) const;
+    bool hasOutstandingWork() const;
+    void startKernel(uint64_t now_clk, uint64_t latency);
+    void updatePrimaryHold(bool allow_ok_to_end);
     Output out;
 
     TimeConverter tc_;
@@ -101,6 +105,8 @@ protected:
     uint64_t busy_until_clk_;
     uint64_t kernel_id_;
     uint64_t latency_override_;
+    bool holding_sim_;
+    std::deque<uint64_t> pending_latencies_;
     mmioHandlers* handlers;
     Interfaces::StandardMem* iface;
 
@@ -113,6 +119,7 @@ protected:
     Statistic<uint64_t>* stat_wrong_direction_accesses_;
     Statistic<uint64_t>* stat_bad_offset_accesses_;
 
+    static constexpr size_t kMaxPendingLaunches = 8;
     static constexpr uint64_t REG_DOORBELL         = 0x00;
     static constexpr uint64_t REG_STATUS           = 0x08;
     static constexpr uint64_t REG_KERNEL_ID        = 0x10;
