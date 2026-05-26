@@ -34,4 +34,7 @@ TEST_CASE("IPC enums") {
 TEST_CASE("QuetzSharedData layout") {
     CHECK(sizeof(QuetzSharedData) >= 24);
     CHECK(offsetof(QuetzSharedData, numCores) == 0);
+    CHECK(offsetof(QuetzSharedData, mmio_slot) == 32);
+    CHECK(QuetzShmemCmd::QUETZ_CMD_MMIO_READ_REQ == 4);
+    CHECK(QuetzShmemCmd::QUETZ_CMD_MMIO_WRITE_REQ == 5);
 }
