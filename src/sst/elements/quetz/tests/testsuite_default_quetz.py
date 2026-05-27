@@ -922,7 +922,7 @@ class testcase_quetz_sysmode(SSTTestCase):
             "guest STATUS spin must see real payloads before each doorbell")
 
     # -------------------------------------------------------------------------
-    def _quetz_balar_sysmode_template(self, testname, sdl_name, timeout_sec):
+    def _quetz_balar_sysmode_template(self, testname, timeout_sec):
         if not os.environ.get("GPGPUSIM_ROOT"):
             self.skipTest("GPGPUSIM_ROOT not set; skipping sysmode_balar test")
 
@@ -960,7 +960,7 @@ class testcase_quetz_sysmode(SSTTestCase):
                               "quetz_sysmode_tests", testname)
         os.makedirs(outdir, exist_ok=True)
 
-        sdlfile = os.path.join(test_path, "sysmode", sdl_name)
+        sdlfile = os.path.join(test_path, "sysmode", "basic_quetz_balar.py")
         sst_outfile = os.path.join(outdir, testname + ".out")
         sst_errfile = os.path.join(outdir, testname + ".err")
         mpifiles = os.path.join(outdir, testname + ".testfile")
@@ -997,7 +997,7 @@ class testcase_quetz_sysmode(SSTTestCase):
     # -------------------------------------------------------------------------
     def test_quetz_balar_smoke(self):
         raw, stats, _flushes = self._quetz_balar_sysmode_template(
-            "quetz_balar_smoke", "test_quetz_balar_smoke.py", 60 * 20)
+            "quetz_balar_smoke", 60 * 20)
         self.assertGreaterEqual(stats.get("cpu.mmio_write_requests.0", 0), 1)
         self.assertIn("Handling CUDA API Call", raw,
             "Balar did not log any CUDA API packet handling")
@@ -1005,7 +1005,7 @@ class testcase_quetz_sysmode(SSTTestCase):
     # -------------------------------------------------------------------------
     def test_quetz_balar_vectoradd(self):
         raw, _stats, flushes = self._quetz_balar_sysmode_template(
-            "quetz_balar_vectoradd", "test_quetz_balar_vectoradd.py", 60 * 40)
+            "quetz_balar_vectoradd", 60 * 40)
         self.assertIn("Kernel_done", raw,
             "GPGPU-Sim/vectorAdd completion marker not observed")
         self.assertIn("correct_memD2H_ratio=", raw,
