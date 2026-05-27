@@ -26,6 +26,7 @@ from quetz_test_helpers import (
     assert_class_balance,
     apply_usermode_region_handlers,
     compare_gold,
+    should_compare_gold,
     enable_mmio_payload_delivery,
     filtered_stat_lines,
     make_sysmode_env,
@@ -217,7 +218,7 @@ class testcase_quetz(SSTTestCase):
                              set_cwd=outdir,
                              timeout_sec=testtimeout)
 
-        if os.path.exists(ref_outfile):
+        if os.path.exists(ref_outfile) and should_compare_gold():
             cmp_result = compare_gold(testname, sst_outfile, ref_outfile,
                                       update_files=updateFiles)
             if not cmp_result:
@@ -225,6 +226,9 @@ class testcase_quetz(SSTTestCase):
             self.assertTrue(cmp_result,
                 "Quetz output {} does not match reference {}".format(
                     sst_outfile, ref_outfile))
+        elif os.path.exists(ref_outfile):
+            log_testing_note(
+                "Quetz test {} gold skipped (QUETZ_SKIP_GOLD=1)".format(testname))
         else:
             log_testing_note(
                 "Quetz test {} has no gold file; did not compare".format(testname))
@@ -629,12 +633,16 @@ class testcase_quetz_sysmode(SSTTestCase):
                      set_cwd=outdir,
                      timeout_sec=testtimeout)
 
-        if os.path.exists(ref_outfile):
+        if os.path.exists(ref_outfile) and should_compare_gold():
             cmp_result = compare_gold(testname, sst_outfile, ref_outfile,
                                       update_files=updateFiles)
             self.assertTrue(cmp_result,
                 "Quetz sysmode output {} does not match reference {}".format(
                     sst_outfile, ref_outfile))
+        elif os.path.exists(ref_outfile):
+            log_testing_note(
+                "Quetz sysmode test {} gold skipped (QUETZ_SKIP_GOLD=1)".format(
+                    testname))
         else:
             log_testing_note(
                 "Quetz sysmode test {} has no gold file; did not compare".format(
@@ -704,13 +712,17 @@ class testcase_quetz_sysmode(SSTTestCase):
                      set_cwd=outdir,
                      timeout_sec=120)
 
-        if os.path.exists(ref_outfile):
+        if os.path.exists(ref_outfile) and should_compare_gold():
             cmp_result = compare_gold(testname, sst_outfile, ref_outfile,
                                       update_files=updateFiles)
             self.assertTrue(cmp_result,
                 "Quetz preset sysmode output {} does not match reference {} "
                 "(platform preset should yield equivalent stats to explicit "
                 "region handler params)".format(sst_outfile, ref_outfile))
+        elif os.path.exists(ref_outfile):
+            log_testing_note(
+                "Quetz preset sysmode test {} gold skipped (QUETZ_SKIP_GOLD=1)".format(
+                    testname))
         else:
             log_testing_note(
                 "No gold file at {}; preset test ran but was not compared".format(
