@@ -23,6 +23,12 @@ _TIMING_KEYWORDS = (
     "no_ops",
 )
 
+# Round 2 Balar doorbell stats: zero in non-Balar tests and absent from pre-r2 gold.
+_GOLD_EXCLUDE_KEYWORDS = (
+    "mmio_doorbell_flushes",
+    "mmio_doorbell_flush_cycles",
+)
+
 
 class QuetzStatsFilter(LineFilter):
     """Keep only deterministic event-count statistics from QuetzComponent."""
@@ -30,10 +36,15 @@ class QuetzStatsFilter(LineFilter):
     def filter(self, line):
         if not line.startswith(" cpu."):
             return None
-        for kw in _TIMING_KEYWORDS:
+        for kw in _TIMING_KEYWORDS + _GOLD_EXCLUDE_KEYWORDS:
             if kw in line:
                 return None
         return line
+
+
+def should_compare_gold():
+    """False when cross-stack CI skips stat gold (see QUETZ_SKIP_GOLD)."""
+    return os.getenv("QUETZ_SKIP_GOLD", "0") != "1"
 
 
 def parse_stats(outfile):
