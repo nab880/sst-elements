@@ -910,6 +910,109 @@ class testcase_quetz_sysmode(SSTTestCase):
             "guest STATUS spin must see real payloads before each doorbell")
 
     # -------------------------------------------------------------------------
+    def _quetz_balar_sysmode_template(self, testname, sdl_name, timeout_sec):
+        if not os.environ.get("GPGPUSIM_ROOT"):
+            self.skipTest("GPGPUSIM_ROOT not set; skipping sysmode_balar test")
+
+        test_path = self.get_testsuite_dir()
+        sst_prefix  = sstsimulator_conf_get_value("SSTCore", "prefix",     str, "")
+        sst_bindir  = sstsimulator_conf_get_value("SSTCore", "bindir",     str, "")
+        sst_libexec = sstsimulator_conf_get_value("SSTCore", "libexecdir", str, "")
+
+        qemu_target = "qemu-system-riscv64"
+        exe_rel = "sysmode/firmware/riscv_virt_balar_kernel"
+        import shutil
+        qemu_bin = os.path.join(sst_bindir, qemu_target)
+        if not os.path.exists(qemu_bin):
+            found = shutil.which(qemu_target)
+            if found:
+                qemu_bin = found
+
+        exe_abs = os.path.normpath(os.path.join(test_path, exe_rel))
+        balar_tests = os.path.normpath(os.path.join(test_path, "../../balar/tests"))
+        cfg_file = os.path.join(balar_tests, "gpu-v100-mem.cfg")
+        cuda_exe = os.path.join(balar_tests, "balar_trace", "vectorAdd")
+
+        if not os.path.exists(qemu_bin):
+            self.skipTest("{} not found; skipping".format(qemu_target))
+        if not os.path.exists(exe_abs):
+            self.skipTest("balar firmware not found at {}; "
+                          "run sysmode/firmware/build.sh".format(exe_abs))
+        if not os.path.exists(cfg_file):
+            self.skipTest("Balar GPGPU-Sim config not found at {}".format(cfg_file))
+        if not os.path.exists(cuda_exe):
+            self.skipTest("Balar vectorAdd binary not found at {}; "
+                          "build balar/tests/balar_trace".format(cuda_exe))
+
+        outdir = os.path.join(self.get_test_output_run_dir(),
+                              "quetz_sysmode_tests", testname)
+        os.makedirs(outdir, exist_ok=True)
+
+        sdlfile = os.path.join(test_path, "sysmode", sdl_name)
+        sst_outfile = os.path.join(outdir, testname + ".out")
+        sst_errfile = os.path.join(outdir, testname + ".err")
+        mpifiles = os.path.join(outdir, testname + ".testfile")
+
+        make_sysmode_env(sst_prefix, sst_libexec, qemu_bin, exe_abs,
+                         "-machine virt -nographic -bios none",
+                         "-kernel", 0, 0xFFFFFFFF, [])
+        os.environ["QUETZ_MMIO_START"] = "0x70000000"
+        os.environ["QUETZ_MMIO_END"] = "0x700005FF"
+        os.environ["BALAR_CONFIG"] = cfg_file
+        os.environ["BALAR_CUDA_EXE_PATH"] = cuda_exe
+        os.environ["BALAR_VERBOSE"] = "1"
+        os.environ["BALAR_DMA_VERBOSE"] = "0"
+        os.environ.pop("QUETZ_PLATFORM", None)
+        enable_mmio_payload_delivery()
+
+        self.run_sst(sdlfile, sst_outfile, sst_errfile,
+                     mpi_out_files=mpifiles, set_cwd=outdir,
+                     timeout_sec=timeout_sec)
+
+        with open(sst_outfile, "r") as f:
+            raw = f.read()
+        if os.path.exists(sst_errfile):
+            with open(sst_errfile, "r") as f:
+                raw += "\n" + f.read()
+        self.assertNotIn("FATAL", raw)
+
+        stats = parse_stats(sst_outfile)
+        flushes = stats.get("cpu.mmio_doorbell_flushes.0", 0)
+        self.assertGreaterEqual(flushes, 1,
+            "balar doorbell path did not issue any FlushAddr(inv) requests")
+        return raw, stats, flushes
+
+    # -------------------------------------------------------------------------
+    def test_quetz_balar_smoke(self):
+        raw, stats, _flushes = self._quetz_balar_sysmode_template(
+            "quetz_balar_smoke", "test_quetz_balar_smoke.py", 60 * 20)
+        self.assertGreaterEqual(stats.get("cpu.mmio_write_requests.0", 0), 1)
+        self.assertIn("Handling CUDA API Call", raw,
+            "Balar did not log any CUDA API packet handling")
+
+    # -------------------------------------------------------------------------
+    def test_quetz_balar_vectoradd(self):
+        raw, _stats, flushes = self._quetz_balar_sysmode_template(
+            "quetz_balar_vectoradd", "test_quetz_balar_vectoradd.py", 60 * 40)
+        self.assertIn("Kernel_done", raw,
+            "GPGPU-Sim/vectorAdd completion marker not observed")
+        self.assertIn("correct_memD2H_ratio=", raw,
+            "firmware did not print D2H correctness ratio")
+
+        marker = "correct_memD2H_ratio="
+        start = raw.rfind(marker)
+        ratio_text = raw[start + len(marker):].splitlines()[0]
+        correct_s, total_s = ratio_text.split("/", 1)
+        correct = float(correct_s)
+        total = float(total_s)
+        self.assertGreater(total, 0)
+        self.assertGreaterEqual(correct / total, 0.95)
+        self.assertGreaterEqual(raw.count("Handling CUDA API Call"), 18,
+            "expected the full firmware CUDA packet stream to reach Balar")
+        self.assertGreaterEqual(flushes, 18,
+            "expected at least one doorbell flush per CUDA API packet")
+
+    # -------------------------------------------------------------------------
     def test_quetz_usermode_gpu_kernel(self):
         """User-mode QuetzGpuDevice: mmio_link doorbell + timed BUSY/IDLE."""
         test_path = self.get_testsuite_dir()
