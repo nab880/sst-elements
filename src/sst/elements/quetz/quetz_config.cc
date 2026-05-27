@@ -30,6 +30,13 @@ QuetzConfig QuetzConfig::fromParams(Params& params, SST::Output* out) {
     cfg.cache_line_sz  = params.find<uint64_t>("cachelinesize", 64);
     cfg.cpu_clock      = params.find<std::string>("clock", "1GHz");
 
+    cfg.balar_doorbell_addr =
+        params.find<uint64_t>("balar_doorbell_addr", 0);
+    cfg.balar_doorbell_size =
+        params.find<uint64_t>("balar_doorbell_size", 8);
+    cfg.balar_packet_flush_bytes =
+        params.find<uint64_t>("balar_packet_flush_bytes", 4096);
+
     cfg.system_mode        = params.find<bool>("system_mode", false);
     cfg.system_mode_loader = params.find<std::string>("system_mode_loader", "-kernel");
     cfg.qemu_bin           = params.find<std::string>("qemu", "qemu-riscv64");
