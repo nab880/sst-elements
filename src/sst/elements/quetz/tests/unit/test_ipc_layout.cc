@@ -7,6 +7,7 @@
 #include "../../quetz_ipc_types.h"
 
 using SST::Quetz::QuetzCommand;
+using SST::Quetz::QUETZ_CMD_DATA_BYTES;
 using SST::Quetz::QuetzInsnClass;
 using SST::Quetz::QuetzSharedData;
 using SST::Quetz::QuetzShmemCmd;
@@ -20,7 +21,7 @@ TEST_CASE("QuetzCommand layout") {
     CHECK(offsetof(QuetzCommand, addr) == 16);
     CHECK(offsetof(QuetzCommand, insn_class) == 24);
     CHECK(offsetof(QuetzCommand, data) == 32);
-    CHECK(sizeof(QuetzCommand::data) == 16);
+    CHECK(sizeof(QuetzCommand::data) == QUETZ_CMD_DATA_BYTES);
 }
 
 TEST_CASE("IPC enums") {
