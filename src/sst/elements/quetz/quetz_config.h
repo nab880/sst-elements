@@ -41,6 +41,10 @@ struct QuetzConfig {
     uint64_t cache_line_sz    = 64;
     std::string cpu_clock     = "1GHz";
 
+    uint64_t balar_doorbell_addr       = 0;
+    uint64_t balar_doorbell_size       = 8;
+    uint64_t balar_packet_flush_bytes  = 4096;
+
     bool        system_mode         = false;
     std::string system_mode_loader  = "-kernel";
     std::string qemu_bin            = "qemu-riscv64";
