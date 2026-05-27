@@ -65,6 +65,8 @@ public:
     void handleMemResponse(SST::Interfaces::StandardMem::Request* resp);
 
     void recordMmioSyncRequest(bool is_read);
+    void recordMmioDoorbellFlush();
+    void recordMmioDoorbellFlushCycles(uint64_t cycles);
 
     bool     isCoreHalted()  const;
     uint32_t pendingCount()  const;

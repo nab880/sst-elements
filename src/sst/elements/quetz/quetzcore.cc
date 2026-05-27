@@ -151,6 +151,14 @@ void QuetzCore::recordMmioSyncRequest(bool is_read) {
         stats_.mmio_write_reqs->addData(1);
 }
 
+void QuetzCore::recordMmioDoorbellFlush() {
+    stats_.mmio_doorbell_flushes->addData(1);
+}
+
+void QuetzCore::recordMmioDoorbellFlushCycles(uint64_t cycles) {
+    stats_.mmio_doorbell_flush_cycles->addData(cycles);
+}
+
 void QuetzCore::tick() {
     pipeline_->tick();
 }

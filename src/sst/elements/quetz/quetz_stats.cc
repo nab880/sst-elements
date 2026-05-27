@@ -21,6 +21,9 @@ void QuetzCoreStats::registerAll(QuetzCore* comp, const char* sub_id) {
     mmio_read_lat         = comp->registerStatistic<uint64_t>("mmio_read_latency",   sub_id);
     mmio_write_lat        = comp->registerStatistic<uint64_t>("mmio_write_latency",  sub_id);
     mmio_truncated_writes = comp->registerStatistic<uint64_t>("mmio_truncated_writes", sub_id);
+    mmio_doorbell_flushes = comp->registerStatistic<uint64_t>("mmio_doorbell_flushes", sub_id);
+    mmio_doorbell_flush_cycles =
+        comp->registerStatistic<uint64_t>("mmio_doorbell_flush_cycles", sub_id);
     read_req_sizes        = comp->registerStatistic<uint64_t>("read_request_sizes",  sub_id);
     write_req_sizes       = comp->registerStatistic<uint64_t>("write_request_sizes", sub_id);
     split_reads           = comp->registerStatistic<uint64_t>("split_read_requests", sub_id);

@@ -86,6 +86,18 @@ public:
         { "cachelinesize",
           "Cache line size in bytes (used when splitting wide accesses).",
           "64" },
+        { "balar_doorbell_addr",
+          "Optional MMIO address of the balar doorbell. When non-zero, "
+          "synchronous MMIO writes in this range flush the scratch packet "
+          "range on cache_link before forwarding the doorbell on mmio_link.",
+          "0" },
+        { "balar_doorbell_size",
+          "Size in bytes of the balar doorbell MMIO aperture.",
+          "8" },
+        { "balar_packet_flush_bytes",
+          "Number of bytes to FlushAddr(inv) from the scratch address before "
+          "forwarding a configured balar doorbell write.",
+          "4096" },
         { "executable",
           "Path to the guest binary to run under QEMU.", "" },
         { "qemu",
@@ -224,8 +236,14 @@ public:
           "Cumulative round-trip latency of mmio_link write requests (cycles).",
           "cycles", 1 },
         { "mmio_truncated_writes",
-          "MMIO writes truncated to the QuetzCommand data cap (16 bytes).",
+          "MMIO writes truncated to the QuetzCommand data cap.",
           "requests", 1 },
+        { "mmio_doorbell_flushes",
+          "FlushAddr(inv) requests issued before configured balar doorbells.",
+          "requests", 1 },
+        { "mmio_doorbell_flush_cycles",
+          "Cycles spent waiting for configured balar doorbell flushes.",
+          "cycles", 1 },
         { "read_request_sizes",
           "Size distribution of read requests in bytes.",
           "bytes", 1 },
@@ -340,6 +358,7 @@ private:
     void initMmioSyncState();
     void pollMmioSyncMailbox();
     bool handleMmioSyncCommand(uint32_t vcpu, const QuetzCommand& cmd);
+    void forwardMmioSyncWrite(uint32_t vcpu, SST::Interfaces::StandardMem::Write* req);
 
     struct MmioSyncState;
     MmioSyncState* mmio_sync_state_ = nullptr;
