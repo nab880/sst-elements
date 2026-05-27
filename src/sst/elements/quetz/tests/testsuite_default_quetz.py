@@ -166,6 +166,15 @@ class testcase_quetz(SSTTestCase):
     @parameterized.expand(quetz_test_matrix, name_func=gen_custom_name)
     def test_quetz_usermode(self, testnum, testname, qemu_target, exe_rel,
                             with_l1, isa, timeout_sec):
+        # Prebuilt aarch64/x86_64 binaries produce host-glibc-sensitive syscall
+        # traces. Their gold files were recorded on the lightweight (Ubuntu
+        # 24.04) image; on other hosts (e.g. balar Ubuntu 22.04 amd64), stat
+        # counts diverge even though the program output is correct.
+        if os.getenv("QUETZ_SKIP_PREBUILT_USERMODE", "0") == "1" \
+                and testname in ("aarch64_hello", "x86_64_hello"):
+            self.skipTest("QUETZ_SKIP_PREBUILT_USERMODE=1: prebuilt binary "
+                          "stats are glibc/host-sensitive; covered by the "
+                          "lightweight image where gold was recorded")
         log_debug("Quetz test #{} ({}): qemu={} with_l1={} isa={}".format(
             testnum, testname, qemu_target, with_l1, isa))
         self._quetz_test_template(testnum, testname, qemu_target, exe_rel,
