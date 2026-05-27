@@ -45,6 +45,8 @@ enum QuetzInsnClass : uint32_t {
     QUETZ_INSN_CLASS_COUNT  = 8
 };
 
+static constexpr unsigned QUETZ_CMD_DATA_BYTES = 64;
+
 struct QuetzCommand {
     QuetzShmemCmd cmd;
     uint32_t      size;
@@ -52,7 +54,7 @@ struct QuetzCommand {
     uint64_t      addr;
     uint32_t      insn_class;
     uint32_t      _pad;
-    uint8_t       data[16];
+    uint8_t       data[QUETZ_CMD_DATA_BYTES];
 };
 
 /** Per-vCPU slot for blocking MMIO round-trips (QEMU bridge / linux-user hook). */
