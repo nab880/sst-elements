@@ -30,7 +30,11 @@ def _parse_addr(s):
 
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 BALAR_TESTS_DIR = os.path.abspath(
-    os.path.join(THIS_DIR, "..", "..", "..", "..", "balar", "tests"))
+    os.path.join(THIS_DIR, "..", "..", "..", "balar", "tests"))
+if not os.path.isfile(os.path.join(BALAR_TESTS_DIR, "balarBlock.py")):
+    raise RuntimeError(
+        "balarBlock.py not found at {}; expected balar/tests sibling of "
+        "quetz/tests".format(BALAR_TESTS_DIR))
 sys.path.insert(0, BALAR_TESTS_DIR)
 import balarBlock  # noqa: E402
 
