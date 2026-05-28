@@ -990,8 +990,20 @@ class testcase_quetz_sysmode(SSTTestCase):
 
         stats = parse_stats(sst_outfile)
         flushes = stats.get("cpu.mmio_doorbell_flushes.0", 0)
+        # Surface what the sim actually did so a flushes==0 failure is debuggable
+        # without re-running locally. These are the breadcrumbs the handoff asks
+        # for first: did the guest even reach the doorbell?
+        mmio_writes  = stats.get("cpu.mmio_write_requests.0", 0)
+        mmio_reads   = stats.get("cpu.mmio_read_requests.0", 0)
+        plugin_attached = "Plugin attached!" in raw
+        diag = (
+            "mmio_doorbell_flushes={f} mmio_writes={w} mmio_reads={r} "
+            "plugin_attached={a} stat_lines={n}"
+        ).format(f=flushes, w=mmio_writes, r=mmio_reads,
+                 a=plugin_attached, n=len(stats))
         self.assertGreaterEqual(flushes, 1,
-            "balar doorbell path did not issue any FlushAddr(inv) requests")
+            "balar doorbell path did not issue any FlushAddr(inv) requests; "
+            + diag)
         return raw, stats, flushes
 
     # -------------------------------------------------------------------------
