@@ -73,6 +73,13 @@ dma_mmio_size = _parse_addr(os.environ.get("BALAR_DMA_MMIO_SIZE", "0x200"))
 mmio_start = _parse_addr(os.environ.get("QUETZ_MMIO_START", hex(balar_mmio_addr)))
 mmio_end = _parse_addr(
     os.environ.get("QUETZ_MMIO_END", hex(dma_mmio_addr + dma_mmio_size - 1)))
+
+# RAM ranges for the coherent fabric. RISC-V virt firmware lives at 0x80000000+
+# (see firmware/link_rv64.ld). We MUST NOT advertise the MMIO window through
+# the directory/L1/memctrl on the same chiprtr, or MemNIC routing fights with
+# balar.balarMMIO and the doorbell never makes it through.
+ram_start = _parse_addr(os.environ.get("QUETZ_RAM_START", "0x80000000"))
+ram_end = _parse_addr(os.environ.get("QUETZ_RAM_END", "0xFFFFFFFF"))
 cfg_file = os.environ.get(
     "BALAR_CONFIG", os.path.join(BALAR_TESTS_DIR, "gpu-v100-mem.cfg"))
 cuda_exe = os.environ.get(
@@ -131,8 +138,8 @@ l1.addParams({
     "coherence_protocol": "mesi",
     "replacement_policy": "lru",
     "cache_line_size": 64,
-    "addr_range_start": 0x00000000,
-    "addr_range_end": 0xFFFFFFFF,
+    "addr_range_start": ram_start,
+    "addr_range_end": ram_end,
 })
 l1_cpu = l1.setSubComponent("highlink", "memHierarchy.MemLink")
 l1_nic = l1.setSubComponent("lowlink", "memHierarchy.MemNIC")
@@ -188,13 +195,13 @@ chiprtr.setSubComponent("topology", "merlin.singlerouter")
 memctrl = sst.Component("memory", "memHierarchy.MemController")
 memctrl.addParams({
     "clock": "1GHz",
-    "addr_range_start": 0x00000000,
-    "addr_range_end": 0xFFFFFFFF,
+    "addr_range_start": ram_start,
+    "addr_range_end": ram_end,
 })
 mem_be = memctrl.setSubComponent("backend", "memHierarchy.simpleMem")
 mem_be.addParams({
     "access_time": "100 ns",
-    "mem_size": "4GiB",
+    "mem_size": str(ram_end - ram_start + 1) + "B",
 })
 mem_hi = memctrl.setSubComponent("highlink", "memHierarchy.MemLink")
 
@@ -205,8 +212,8 @@ directory.addParams({
     "cache_line_size": 64,
     "entry_cache_size": 32768,
     "mshr_num_entries": 16,
-    "addr_range_start": 0x00000000,
-    "addr_range_end": 0xFFFFFFFF,
+    "addr_range_start": ram_start,
+    "addr_range_end": ram_end,
 })
 dir_nic = directory.setSubComponent("highlink", "memHierarchy.MemNIC")
 dir_nic.addParams({
