@@ -973,9 +973,14 @@ class testcase_quetz_sysmode(SSTTestCase):
         sst_errfile = os.path.join(outdir, testname + ".err")
         mpifiles = os.path.join(outdir, testname + ".testfile")
 
+        # RISC-V virt RAM (and the firmware link base) start at 0x80000000.
+        # make_sysmode_env exports these as QUETZ_RAM_START/END, which the SDL
+        # uses to bound the coherent fabric (L1/memctrl/directory). It MUST NOT
+        # start at 0, or the directory advertises [0, 0xFFFFFFFF] and overlaps
+        # balar's MMIO window (0x70000000) -> merlin routing-table FATAL.
         make_sysmode_env(sst_prefix, sst_libexec, qemu_bin, exe_abs,
                          "-machine virt -nographic -bios none",
-                         "-kernel", 0, 0xFFFFFFFF, [])
+                         "-kernel", 0x80000000, 0xFFFFFFFF, [])
         os.environ["QUETZ_MMIO_START"] = "0x70000000"
         os.environ["QUETZ_MMIO_END"] = "0x700005FF"
         os.environ["BALAR_CONFIG"] = cfg_file
