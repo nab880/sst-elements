@@ -981,11 +981,15 @@ class testcase_quetz_sysmode(SSTTestCase):
                      mpi_out_files=mpifiles, set_cwd=outdir,
                      timeout_sec=timeout_sec)
 
-        with open(sst_outfile, "r") as f:
-            raw = f.read()
+        raw = ""
+        if os.path.exists(sst_outfile):
+            with open(sst_outfile, "r") as f:
+                raw += f.read()
+        err_text = ""
         if os.path.exists(sst_errfile):
             with open(sst_errfile, "r") as f:
-                raw += "\n" + f.read()
+                err_text = f.read()
+            raw += "\n" + err_text
         self.assertNotIn("FATAL", raw)
 
         stats = parse_stats(sst_outfile)
@@ -1001,6 +1005,14 @@ class testcase_quetz_sysmode(SSTTestCase):
             "plugin_attached={a} stat_lines={n}"
         ).format(f=flushes, w=mmio_writes, r=mmio_reads,
                  a=plugin_attached, n=len(stats))
+        # If the sim produced no stats at all, SST almost certainly aborted
+        # during SDL config (a Python exception in basic_quetz_balar.py /
+        # balarBlock.build) — which does NOT contain "FATAL". Embed the tail of
+        # stdout/stderr right in the failure so the CI test log shows the real
+        # error without needing downloadable artifacts.
+        if flushes < 1 and len(stats) == 0:
+            tail = "\n".join((err_text or raw).splitlines()[-40:])
+            diag += "\n--- SST output tail ---\n" + tail
         self.assertGreaterEqual(flushes, 1,
             "balar doorbell path did not issue any FlushAddr(inv) requests; "
             + diag)
