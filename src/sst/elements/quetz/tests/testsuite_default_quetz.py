@@ -944,6 +944,10 @@ class testcase_quetz_sysmode(SSTTestCase):
         balar_tests = os.path.normpath(os.path.join(test_path, "../../balar/tests"))
         cfg_file = os.path.join(balar_tests, "gpu-v100-mem.cfg")
         cuda_exe = os.path.join(balar_tests, "balar_trace", "vectorAdd")
+        # GPGPU-Sim reads a file literally named "gpgpusim.config" from the
+        # process CWD at init; the balar testsuite symlinks it into its run dir.
+        # We run with set_cwd=outdir, so it must be present there too.
+        gpgpusim_cfg = os.path.join(balar_tests, "gpgpusim.config")
 
         if not os.path.exists(qemu_bin):
             self.skipTest("{} not found; skipping".format(qemu_target))
@@ -952,6 +956,8 @@ class testcase_quetz_sysmode(SSTTestCase):
                           "run sysmode/firmware/build.sh".format(exe_abs))
         if not os.path.exists(cfg_file):
             self.skipTest("Balar GPGPU-Sim config not found at {}".format(cfg_file))
+        if not os.path.exists(gpgpusim_cfg):
+            self.skipTest("gpgpusim.config not found at {}".format(gpgpusim_cfg))
         if not os.path.exists(cuda_exe):
             self.skipTest("Balar vectorAdd binary not found at {}; "
                           "build balar/tests/balar_trace".format(cuda_exe))
@@ -959,6 +965,8 @@ class testcase_quetz_sysmode(SSTTestCase):
         outdir = os.path.join(self.get_test_output_run_dir(),
                               "quetz_sysmode_tests", testname)
         os.makedirs(outdir, exist_ok=True)
+        import shutil as _shutil
+        _shutil.copy(gpgpusim_cfg, os.path.join(outdir, "gpgpusim.config"))
 
         sdlfile = os.path.join(test_path, "sysmode", "basic_quetz_balar.py")
         sst_outfile = os.path.join(outdir, testname + ".out")
