@@ -272,7 +272,24 @@ static uint32_t verify_result(void)
     return correct;
 }
 
-void _start(void)
+/* QEMU virt with `-bios none -kernel` enters at the ELF entry with an
+ * undefined sp. This firmware makes nested calls with large stack-allocated
+ * packet structs, so sp MUST be valid before any C runs. Set it from the
+ * linker-provided _stack_top (high DRAM) in a naked stub, then enter C. */
+extern char _stack_top[];
+
+__attribute__((naked, used, section(".text.boot"))) void _start(void)
+{
+    /* Use lla (PC-relative auipc+addi), NOT la: la emits a GOT load which is
+     * never populated in this bare-metal image, leaving sp=0 -> store fault. */
+    __asm__ volatile(
+        "lla sp, _stack_top\n\t"
+        "call kernel_main\n\t"
+        "1:\twfi\n\t"
+        "j 1b\n\t");
+}
+
+void kernel_main(void)
 {
     init_vectors();
 

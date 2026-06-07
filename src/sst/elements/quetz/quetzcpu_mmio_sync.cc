@@ -222,7 +222,7 @@ bool QuetzCPU::completeMmioSyncResponse(uint32_t vcpu_hint,
         if (dit->second.remaining > 0)
             dit->second.remaining--;
 
-        output_->verbose(CALL_INFO, 1, 0,
+        output_->verbose(CALL_INFO, 4, 0,
             "vCPU %" PRIu32 ": balar doorbell flush response received,"
             " remaining=%" PRIu32 "\n",
             vcpu, dit->second.remaining);
