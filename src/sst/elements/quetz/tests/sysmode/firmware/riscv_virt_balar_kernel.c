@@ -97,7 +97,7 @@ static uint64_t mmio_read64(uint64_t addr)
     return *(volatile uint64_t*)(uintptr_t)addr;
 }
 
-static BalarCudaCallReturnPacket_t *issue_packet(BalarCudaCallPacket_t *pkt, size_t extra_bytes)
+static uint64_t issue_packet(BalarCudaCallPacket_t *pkt, size_t extra_bytes)
 {
     size_t total = sizeof(*pkt) + extra_bytes;
     if (total > SCRATCH_BYTES) {
@@ -109,8 +109,7 @@ static BalarCudaCallReturnPacket_t *issue_packet(BalarCudaCallPacket_t *pkt, siz
 
     fw_memcpy(scratch, pkt, sizeof(*pkt));
     mmio_write64(BALAR_DOORBELL, (uint64_t)(uintptr_t)scratch);
-    uint64_t ret_addr = mmio_read64(BALAR_DOORBELL);
-    return (BalarCudaCallReturnPacket_t*)(uintptr_t)ret_addr;
+    return mmio_read64(BALAR_DOORBELL);
 }
 
 static void init_vectors(void)
@@ -118,7 +117,6 @@ static void init_vectors(void)
     for (uint32_t i = 0; i < VECTOR_N; i++) {
         host_a[i] = i;
         host_b[i] = VECTOR_N - i;
-        host_c[i] = 0;
     }
 }
 
@@ -130,8 +128,7 @@ static void packet_reg_fatbin(void)
     pkt.isSSTmem = false;
     fw_strcpy(pkt.register_fatbin.file_name, "vectorAdd", BALAR_CUDA_MAX_FILE_NAME);
 
-    BalarCudaCallReturnPacket_t *ret = issue_packet(&pkt, 0);
-    fatbin_handle = ret->fat_cubin_handle;
+    fatbin_handle = issue_packet(&pkt, 0);
 }
 
 static uint64_t packet_malloc(void)
@@ -144,8 +141,7 @@ static uint64_t packet_malloc(void)
     pkt.cuda_malloc.devPtr = (void**)&dev;
     pkt.cuda_malloc.size = VECTOR_BYTES;
 
-    BalarCudaCallReturnPacket_t *ret = issue_packet(&pkt, 0);
-    return ret->cudamalloc.malloc_addr;
+    return issue_packet(&pkt, 0);
 }
 
 static void packet_memcpy_h2d(uint64_t dst, const uint32_t *src)
@@ -177,6 +173,13 @@ static void packet_memcpy_d2h(uint32_t *dst, uint64_t src)
     pkt.cuda_memcpy.payload = 0;
 
     (void)issue_packet(&pkt, 0);
+    for (size_t off = 0; off < VECTOR_BYTES; off += sizeof(uint64_t)) {
+        uint64_t chunk = mmio_read64(BALAR_DOORBELL);
+        size_t n = VECTOR_BYTES - off;
+        if (n > sizeof(chunk))
+            n = sizeof(chunk);
+        fw_memcpy((uint8_t*)dst + off, &chunk, n);
+    }
 }
 
 static void packet_reg_function(void)

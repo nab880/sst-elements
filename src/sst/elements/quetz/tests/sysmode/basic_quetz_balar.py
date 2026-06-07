@@ -121,10 +121,11 @@ subram_rh = cpu.setSubComponent("region_handler", "quetz.FilteredRegionHandler",
 subram_rh.addParams({"start": ram_start, "end": ram_low_end})
 cpu.enableAllStatistics()
 
-builder = balarBlock.Builder({"BALAR_CUDA_EXE_PATH": cuda_exe})
-_, balar_mmio_iface = builder.build(
+balar_builder = balarBlock.Builder({"BALAR_CUDA_EXE_PATH": cuda_exe})
+balar, balar_mmio_iface = balar_builder.build(
     cfg_file, balar_mmio_addr, dma_mmio_addr,
     verbosity=int(os.environ.get("BALAR_VERBOSE", "0")))
+balar.addParams({"compact_return_value": True})
 
 dma = sst.Component("dmaEngine", "balar.dmaEngine")
 dma.addParams({
