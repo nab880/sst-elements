@@ -74,12 +74,14 @@ mmio_start = _parse_addr(os.environ.get("QUETZ_MMIO_START", hex(balar_mmio_addr)
 mmio_end = _parse_addr(
     os.environ.get("QUETZ_MMIO_END", hex(dma_mmio_addr + dma_mmio_size - 1)))
 
-# RAM ranges for the coherent fabric. RISC-V virt firmware lives at 0x80000000+
-# (see firmware/link_rv64.ld). We MUST NOT advertise the MMIO window through
-# the directory/L1/memctrl on the same chiprtr, or MemNIC routing fights with
-# balar.balarMMIO and the doorbell never makes it through.
-ram_start = _parse_addr(os.environ.get("QUETZ_RAM_START", "0x80000000"))
+# RAM ranges for the coherent fabric. Low boot/device accesses (e.g. RISC-V
+# virt reset vector at 0x1000) must route to memory timing, while the firmware
+# and packet scratch buffer live in DRAM at 0x80000000+ (see link_rv64.ld).
+# Keep balar's MMIO window as a disjoint network peer in the gap.
+ram_start = _parse_addr(os.environ.get("QUETZ_RAM_START", "0"))
+ram_high_start = _parse_addr(os.environ.get("QUETZ_RAM_HIGH_START", "0x80000000"))
 ram_end = _parse_addr(os.environ.get("QUETZ_RAM_END", "0xFFFFFFFF"))
+ram_low_end = balar_mmio_addr - 1
 cfg_file = os.environ.get(
     "BALAR_CONFIG", os.path.join(BALAR_TESTS_DIR, "gpu-v100-mem.cfg"))
 cuda_exe = os.environ.get(
@@ -184,7 +186,7 @@ chiprtr.addParams({
     "xbar_bw": "1GB/s",
     "id": "0",
     "input_buf_size": "1KB",
-    "num_ports": "6",
+    "num_ports": "7",
     "flit_size": "72B",
     "output_buf_size": "1KB",
     "link_bw": "1GB/s",
@@ -195,13 +197,13 @@ chiprtr.setSubComponent("topology", "merlin.singlerouter")
 memctrl = sst.Component("memory", "memHierarchy.MemController")
 memctrl.addParams({
     "clock": "1GHz",
-    "addr_range_start": ram_start,
+    "addr_range_start": ram_high_start,
     "addr_range_end": ram_end,
 })
 mem_be = memctrl.setSubComponent("backend", "memHierarchy.simpleMem")
 mem_be.addParams({
     "access_time": "100 ns",
-    "mem_size": str(ram_end - ram_start + 1) + "B",
+    "mem_size": str(ram_end - ram_high_start + 1) + "B",
 })
 mem_hi = memctrl.setSubComponent("highlink", "memHierarchy.MemLink")
 
@@ -212,7 +214,7 @@ directory.addParams({
     "cache_line_size": 64,
     "entry_cache_size": 32768,
     "mshr_num_entries": 16,
-    "addr_range_start": ram_start,
+    "addr_range_start": ram_high_start,
     "addr_range_end": ram_end,
 })
 dir_nic = directory.setSubComponent("highlink", "memHierarchy.MemNIC")
@@ -222,14 +224,46 @@ dir_nic.addParams({
     "network_bw": NETWORK_BW,
 })
 
+memctrl_lo = sst.Component("memory_lo", "memHierarchy.MemController")
+memctrl_lo.addParams({
+    "clock": "1GHz",
+    "addr_range_start": ram_start,
+    "addr_range_end": ram_low_end,
+})
+mem_lo_be = memctrl_lo.setSubComponent("backend", "memHierarchy.simpleMem")
+mem_lo_be.addParams({
+    "access_time": "100 ns",
+    "mem_size": str(ram_low_end - ram_start + 1) + "B",
+})
+mem_lo_hi = memctrl_lo.setSubComponent("highlink", "memHierarchy.MemLink")
+
+directory_lo = sst.Component("directory_lo", "memHierarchy.DirectoryController")
+directory_lo.addParams({
+    "clock": "1GHz",
+    "coherence_protocol": "MESI",
+    "cache_line_size": 64,
+    "entry_cache_size": 32768,
+    "mshr_num_entries": 16,
+    "addr_range_start": ram_start,
+    "addr_range_end": ram_low_end,
+})
+dir_lo_nic = directory_lo.setSubComponent("highlink", "memHierarchy.MemNIC")
+dir_lo_nic.addParams({
+    "group": MEMORY_GROUP,
+    "sources": MEMORY_SRC,
+    "network_bw": NETWORK_BW,
+})
+
 sst.Link("cpu_l1").connect((cpu, "cache_link_0", "1ns"), (l1_cpu, "port", "1ns"))
 sst.Link("mem_bus").connect((mem_hi, "port", "1ns"), (directory, "lowlink", "1ns"))
+sst.Link("mem_bus_lo").connect((mem_lo_hi, "port", "1ns"), (directory_lo, "lowlink", "1ns"))
 sst.Link("quetz_l1_rtr").connect((l1_nic, "port", "1ns"), (chiprtr, "port0", "1ns"))
 sst.Link("quetz_cpu_mmio_rtr").connect((cpu_mmio_nic, "port", "1ns"), (chiprtr, "port1", "1ns"))
 sst.Link("quetz_balar_mmio_rtr").connect((balar_mmio_nic, "port", "1ns"), (chiprtr, "port2", "1ns"))
 sst.Link("quetz_dma_mem_rtr").connect((dma_mem_nic, "port", "1ns"), (chiprtr, "port3", "1ns"))
 sst.Link("quetz_dma_mmio_rtr").connect((dma_mmio_nic, "port", "1ns"), (chiprtr, "port4", "1ns"))
 sst.Link("quetz_dir_rtr").connect((dir_nic, "port", "1ns"), (chiprtr, "port5", "1ns"))
+sst.Link("quetz_dir_lo_rtr").connect((dir_lo_nic, "port", "1ns"), (chiprtr, "port6", "1ns"))
 
 sst.setProgramOption("timebase", "1ps")
 sst.setStatisticLoadLevel(4)
