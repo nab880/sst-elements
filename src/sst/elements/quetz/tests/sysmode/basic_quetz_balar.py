@@ -113,6 +113,10 @@ cpu.addParams(cpu_params)
 
 mmio_rh = cpu.setSubComponent("region_handler", "quetz.MmioForwardRegionHandler", 0)
 mmio_rh.addParams({"start": mmio_start, "end": mmio_end})
+testdev_rh = cpu.setSubComponent("region_handler", "quetz.FilteredRegionHandler", 1)
+testdev_rh.addParams({"start": 0x100000, "end": 0x100003})
+uart_rh = cpu.setSubComponent("region_handler", "quetz.UartRegionHandler", 2)
+uart_rh.addParams({"start": 0x10000000, "end": 0x10000FFF})
 cpu.enableAllStatistics()
 
 builder = balarBlock.Builder({"BALAR_CUDA_EXE_PATH": cuda_exe})
