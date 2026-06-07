@@ -1039,8 +1039,6 @@ class testcase_quetz_sysmode(SSTTestCase):
 
     # -------------------------------------------------------------------------
     def test_quetz_balar_vectoradd(self):
-        self.skipTest("Balar vectorAdd data-path correctness is tracked "
-                      "separately; smoke gates doorbell FlushAddr behavior")
         raw, _stats, flushes = self._quetz_balar_sysmode_template(
             "quetz_balar_vectoradd", 60 * 40)
         self.assertIn("Kernel_done", raw,
