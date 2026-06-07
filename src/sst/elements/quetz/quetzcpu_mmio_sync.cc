@@ -128,6 +128,14 @@ bool QuetzCPU::handleMmioSyncCommand(uint32_t vcpu, const QuetzCommand& cmd)
             cmd.addr >= doorbell_start && cmd.addr < doorbell_end &&
             mem_ifaces_[vcpu] != nullptr;
 
+        output_->verbose(CALL_INFO, 1, 0,
+            "vCPU %" PRIu32 ": MMIO sync write addr=0x%016" PRIx64
+            " size=%" PRIu32 " doorbell=[0x%016" PRIx64 ",0x%016" PRIx64
+            ") mem_iface=%s is_balar_doorbell=%d flush_bytes=%" PRIu64 "\n",
+            vcpu, cmd.addr, cmd.size, doorbell_start, doorbell_end,
+            mem_ifaces_[vcpu] ? "yes" : "no", is_balar_doorbell ? 1 : 0,
+            cfg_.balar_packet_flush_bytes);
+
         if (!is_balar_doorbell || cfg_.balar_packet_flush_bytes == 0) {
             forwardMmioSyncWrite(vcpu, req);
             return true;
@@ -143,6 +151,12 @@ bool QuetzCPU::handleMmioSyncCommand(uint32_t vcpu, const QuetzCommand& cmd)
         const uint64_t line_size = cfg_.cache_line_sz;
         const uint64_t first_line = (scratch / line_size) * line_size;
         const uint64_t end = scratch + cfg_.balar_packet_flush_bytes;
+
+        output_->verbose(CALL_INFO, 1, 0,
+            "vCPU %" PRIu32 ": balar doorbell scratch=0x%016" PRIx64
+            " flush_range=[0x%016" PRIx64 ",0x%016" PRIx64
+            ") line_size=%" PRIu64 "\n",
+            vcpu, scratch, first_line, end, line_size);
 
         DoorbellFlushPending ctx{};
         ctx.vcpu = vcpu;
@@ -163,6 +177,10 @@ bool QuetzCPU::handleMmioSyncCommand(uint32_t vcpu, const QuetzCommand& cmd)
             return true;
         }
 
+        output_->verbose(CALL_INFO, 1, 0,
+            "vCPU %" PRIu32 ": waiting for %" PRIu32
+            " balar doorbell flush responses before forwarding doorbell\n",
+            vcpu, ctx.remaining);
         mmio_sync_state_->doorbell_flushes[vcpu] = ctx;
         return true;
     }
@@ -204,6 +222,11 @@ bool QuetzCPU::completeMmioSyncResponse(uint32_t vcpu_hint,
         if (dit->second.remaining > 0)
             dit->second.remaining--;
 
+        output_->verbose(CALL_INFO, 1, 0,
+            "vCPU %" PRIu32 ": balar doorbell flush response received,"
+            " remaining=%" PRIu32 "\n",
+            vcpu, dit->second.remaining);
+
         delete resp;
 
         if (dit->second.remaining == 0) {
@@ -212,6 +235,10 @@ bool QuetzCPU::completeMmioSyncResponse(uint32_t vcpu_hint,
             StandardMem::Write* doorbell = dit->second.doorbell;
             cores_[vcpu]->recordMmioDoorbellFlushCycles(elapsed);
             mmio_sync_state_->doorbell_flushes.erase(dit);
+            output_->verbose(CALL_INFO, 1, 0,
+                "vCPU %" PRIu32 ": all balar doorbell flush responses complete,"
+                " forwarding doorbell after %" PRIu64 " cycles\n",
+                vcpu, elapsed);
             forwardMmioSyncWrite(vcpu, doorbell);
         }
         return true;
