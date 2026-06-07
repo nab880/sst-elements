@@ -267,7 +267,20 @@ static uint32_t verify_result(void)
     return correct;
 }
 
-void _start(void)
+
+extern char _stack_top[];
+
+__attribute__((naked, used, section(".text.boot"))) void _start(void)
+{
+    
+    __asm__ volatile(
+        "lla sp, _stack_top\n\t"
+        "call kernel_main\n\t"
+        "1:\twfi\n\t"
+        "j 1b\n\t");
+}
+
+void kernel_main(void)
 {
     init_vectors();
 
