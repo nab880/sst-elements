@@ -174,7 +174,9 @@ EXTERN_C DIRECT_FN STATIC  int sumi_stx_open(struct fid_domain *dom,
 				   struct fi_tx_attr *tx_attr,
 				   struct fid_stx **stx, void *context)
 {
-	int ret = FI_SUCCESS;
+	// Shared TX contexts are not implemented (body disabled below). Advertise
+	// as unsupported rather than returning success with an uninitialized *stx.
+	int ret = -FI_ENOSYS;
 #if 0
 	struct sumi_fid_domain *domain;
 	struct sumi_fid_stx *stx_priv;
@@ -328,6 +330,9 @@ sumi_domain_ops_open(struct fid *fid, const char *ops_name, uint64_t flags,
 extern "C" DIRECT_FN  int sumi_domain_open(struct fid_fabric *fabric, struct fi_info *info,
              struct fid_domain **dom_ptr, void *context)
 {
+  if (!info || !info->domain_attr){
+    return -FI_EINVAL;
+  }
   if (info->domain_attr->mr_mode & FI_MR_SCALABLE){
     return -FI_EINVAL;
   }

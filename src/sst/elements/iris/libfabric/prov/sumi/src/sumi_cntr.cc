@@ -246,7 +246,10 @@ extern "C" DIRECT_FN  int sumi_cntr_open(struct fid_domain *domain,
 			     struct fi_cntr_attr *attr,
 			     struct fid_cntr **cntr, void *context)
 {
-	int ret = FI_SUCCESS;
+	// Counters are not implemented in the simulator: the body below is
+	// disabled and every counter op is a no-op. Advertise the feature as
+	// unsupported rather than returning success with an uninitialized *cntr.
+	int ret = -FI_ENOSYS;
 #if 0
   struct sumi_fid_domain *domain_priv;
   struct sumi_fid_cntr *cntr_priv;

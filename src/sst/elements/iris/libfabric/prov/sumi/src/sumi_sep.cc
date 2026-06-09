@@ -289,7 +289,8 @@ static int sumi_sep_tx_ctx(struct fid_ep *sep, int index,
 			   struct fi_tx_attr *attr,
 			   struct fid_ep **tx_ep, void *context)
 {
-	int ret = FI_SUCCESS;
+	// Scalable-endpoint TX contexts are not implemented (body disabled).
+	int ret = -FI_ENOSYS;
 #if 0
 	struct sumi_fid_sep *sep_priv;
 	struct sumi_fid_ep *ep_priv = NULL;
@@ -419,7 +420,8 @@ static int sumi_sep_rx_ctx(struct fid_ep *sep, int index,
 			   struct fi_rx_attr *attr,
 			   struct fid_ep **rx_ep, void *context)
 {
-	int ret = FI_SUCCESS;
+	// Scalable-endpoint RX contexts are not implemented (body disabled).
+	int ret = -FI_ENOSYS;
 #if 0
 	struct sumi_fid_sep *sep_priv;
 	struct sumi_fid_ep *ep_priv = NULL;
@@ -749,7 +751,9 @@ static int sumi_sep_close(fid_t fid)
 extern "C" int sumi_sep_open(struct fid_domain *domain, struct fi_info *info,
 		 struct fid_ep **sep, void *context)
 {
-	int ret = FI_SUCCESS;
+	// Scalable endpoints are not implemented (body disabled). Advertise as
+	// unsupported rather than returning success with an uninitialized *sep.
+	int ret = -FI_ENOSYS;
 #if 0
 	struct sumi_fid_sep *sep_priv = NULL;
 	struct sumi_fid_domain *domain_priv = NULL;

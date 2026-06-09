@@ -201,7 +201,9 @@ EXTERN_C DIRECT_FN STATIC  int sumi_setname(fid_t fid, void *addr, size_t addrle
 
 	memcpy(ep_name, addr, len);
 #endif
-	return FI_SUCCESS;
+	// Not implemented; endpoint names are derived from the simulated rank via
+	// sumi_getname, so there is nothing to set here.
+	return -FI_ENOSYS;
 }
 
 EXTERN_C DIRECT_FN STATIC  int sumi_getpeer(struct fid_ep *ep, void *addr,
@@ -256,13 +258,17 @@ EXTERN_C DIRECT_FN STATIC  int sumi_getpeer(struct fid_ep *ep, void *addr,
 
 	*addrlen = len;
 #endif
-	return (len == cpylen) ? FI_SUCCESS : -FI_ETOOSMALL;
+	// Not implemented (body disabled); previously returned success without
+	// touching addr/addrlen.
+	return -FI_ENOSYS;
 }
 
 EXTERN_C DIRECT_FN STATIC  int sumi_connect(struct fid_ep *ep, const void *addr,
 				  const void *param, size_t paramlen)
 {
-	int ret = 0, errno_keep;
+	// Connection management is not implemented (body disabled). Report
+	// unsupported instead of faking a successful connect that never completes.
+	int ret = -FI_ENOSYS, errno_keep;
 #if 0
   struct sumi_fid_ep *ep_priv;
 	struct sockaddr_in saddr;
@@ -416,7 +422,8 @@ err_unlock:
 EXTERN_C DIRECT_FN STATIC  int sumi_accept(struct fid_ep *ep, const void *param,
 				 size_t paramlen)
 {
-	int ret = 0, errno_keep;
+	// Connection management is not implemented (body disabled).
+	int ret = -FI_ENOSYS, errno_keep;
 #if 0
   struct sumi_vc *vc;
   struct sumi_fid_ep *ep_priv;
@@ -545,7 +552,8 @@ err_unlock:
 
 DIRECT_FN STATIC int sumi_shutdown(struct fid_ep *ep, uint64_t flags)
 {
-	int ret = 0;
+	// Connection management is not implemented (body disabled).
+	int ret = -FI_ENOSYS;
 #if 0
   struct sumi_fid_ep *ep_priv;
 	struct fi_eq_cm_entry eq_entry = {0};
@@ -857,7 +865,9 @@ extern "C" DIRECT_FN  int sumi_pep_open(struct fid_fabric *fabric,
 
   SUMI_DEBUG(FI_LOG_EP_CTRL, "Opened PEP: %p\n", pep_priv);
 #endif
-	return FI_SUCCESS;
+	// Passive endpoints are not implemented (body disabled). Advertise as
+	// unsupported rather than returning success with an uninitialized *pep.
+	return -FI_ENOSYS;
 }
 
 
