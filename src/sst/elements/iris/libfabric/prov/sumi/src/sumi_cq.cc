@@ -21,6 +21,7 @@
 #include "sumi_wait.h"
 
 #include <sumi_fabric.hpp>
+#include <mercury/common/errors.h>
 #include <mercury/components/operating_system.h>
 
 // Simulated idle (in ns) applied to non-blocking CQ reads that find no
@@ -180,7 +181,10 @@ static ssize_t sstmaci_cq_read(bool blocking,
       break;
     }
     if (src_addr){
-      src_addr[done] = msg->sender();
+      // Return a properly encoded fi_addr_t (rank in the high bits) so the value
+      // matches AV-inserted addresses and can be reused as a send destination.
+      // The sender's CQ/queue is not known here, so those bits stay zero.
+      src_addr[done] = ADDR_RANK_BITS((uint64_t) msg->sender());
     }
     buf = sstmaci_fill_cq_entry(cq_impl->format, buf, static_cast<FabricMessage*>(msg));
     rq->progress.pop();
@@ -220,8 +224,8 @@ DIRECT_FN STATIC ssize_t sumi_cq_readerr(struct fid_cq *cq,
 					 struct fi_cq_err_entry *buf,
 					 uint64_t flags)
 {
-  //there are never any errors in the simulator!
-  return -FI_EINVAL;
+  //there are never any errors in the simulator; nothing to report
+  return -FI_EAGAIN;
 }
 
 DIRECT_FN STATIC const char *sumi_cq_strerror(struct fid_cq *cq, int prov_errno,
@@ -293,7 +297,13 @@ void RecvQueue::finishMatch(void* buf, uint32_t size, FabricMessage *msg)
     }
     progress.incoming(msg);
   } else {
-    delete msg;
+    // Posted receive buffer is smaller than the incoming message. Real libfabric
+    // reports FI_ETRUNC via an error completion, but the simulator does not model
+    // the error CQ path. Fail loudly rather than silently dropping the message,
+    // which would hang the receiver waiting on a completion that never arrives.
+    sst_hg_abort_printf("sumi recv truncation: posted buffer %u bytes < message %llu bytes; "
+                        "FI_ETRUNC is not modeled by the sumi provider",
+                        size, (unsigned long long) msg->payloadBytes());
   }
 }
 
