@@ -118,6 +118,12 @@ extern "C" DIRECT_FN  int sumi_eq_open(struct fid_fabric *fabric, struct fi_eq_a
   if (!attr->size)
     attr->size = GNIX_EQ_DEFAULT_SIZE;
 
+  // Record the owning fabric and attributes before they are needed: the
+  // FI_WAIT_UNSPEC path dereferences eq->fabric, and sumi_ep_bind compares
+  // eq->fabric against the endpoint's domain fabric.
+  eq->fabric = (sumi_fid_fabric*) fabric;
+  eq->attr = *attr;
+
   // Only support FI_WAIT_SET and FI_WAIT_UNSPEC
   switch (attr->wait_obj) {
   case FI_WAIT_NONE:
@@ -133,7 +139,7 @@ extern "C" DIRECT_FN  int sumi_eq_open(struct fid_fabric *fabric, struct fi_eq_a
   }
   case FI_WAIT_UNSPEC: {
     struct fi_wait_attr requested = {
-      .wait_obj = eq->attr.wait_obj,
+      .wait_obj = attr->wait_obj,
       .flags = 0
     };
     sumi_wait_open(&eq->fabric->fab_fid, &requested, &eq->wait);
@@ -148,10 +154,11 @@ extern "C" DIRECT_FN  int sumi_eq_open(struct fid_fabric *fabric, struct fi_eq_a
   eq->eq_fid.fid.context = context;
   eq->eq_fid.fid.ops = &sumi_fi_eq_ops;
   eq->eq_fid.ops = &sumi_eq_ops;
-  eq->attr = *attr;
 
   *eq_ptr = (fid_eq*) &eq->eq_fid;
 
+  // Opened successfully: dismiss the error-path guard so the EQ is not freed.
+  err.success();
   return FI_SUCCESS;
 }
 
