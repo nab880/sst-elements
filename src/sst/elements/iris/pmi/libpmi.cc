@@ -29,6 +29,13 @@ int PMI_Get_size(int* ret)
 }
 
 static SST::Hg::thread_lock kvs_lock;
+// Process-global key-value store shared by every simulated rank in this OS
+// process. This assumes single-process (serial) simulation: a PMI_KVS_Put on
+// one rank is immediately visible to every other rank's PMI_KVS_Get, and
+// PMI_KVS_Commit / PMI2_KVS_Fence are therefore no-ops. Under MPI-parallel SST
+// (ranks partitioned across simulator processes) this map is per-process, so a
+// real collective exchange of committed entries at commit/fence time would be
+// required for puts to become globally visible.
 static std::unordered_map<std::string,
             std::unordered_map<std::string, std::string>> kvs;
 
@@ -60,6 +67,24 @@ static std::string current_jobid_str()
   char buf[64];
   snprintf(buf, sizeof(buf), "app%d", api->sid().app_);
   return std::string(buf);
+}
+
+// Publishes the PMI_process_mapping KVS entry. Shared by PMI_Init and PMI2_Init
+// so both bootstrap paths expose the same mapping to applications.
+static void pmi_record_process_mapping(SST::Iris::sumi::Transport* tport)
+{
+  int nproc = tport->nproc();
+  // TODO: multi-node topology. The mapping "(vector,(0,nproc,1))" assumes a
+  // single node with all ranks contiguous starting at node 0. Revisit when
+  // multi-node runs are exercised so that apps consuming PMI_process_mapping
+  // see a PPN/node layout that matches the simulated platform.
+  char mapping[64];
+  snprintf(mapping, sizeof(mapping), "(vector,(%d,%d,%d))", 0, nproc, 1);
+  char kvsname[256];
+  snprintf(kvsname, sizeof(kvsname), "app%d", tport->sid().app_);
+  kvs_lock.lock();
+  kvs[kvsname]["PMI_process_mapping"] = mapping;
+  kvs_lock.unlock();
 }
 
 int
@@ -162,6 +187,7 @@ PMI2_Init(int *spawned, int *size, int *rank, int *appnum)
   auto api = sstmac_pmi();
   api->init();
   pmi_flag_set(pmi_initialized_map, true);
+  pmi_record_process_mapping(api);
   *size = api->nproc();
   *rank = api->rank();
   *appnum = 0;
@@ -184,10 +210,10 @@ int PMI_Initialized( PMI_BOOL *initialized )
 int
 PMI2_Finalize()
 {
-  pmi_flag_set(pmi_finalized_map, true);
-  pmi_flag_set(pmi_initialized_map, false);
   auto api = sstmac_pmi();
   api->finish();
+  pmi_flag_set(pmi_initialized_map, false);
+  pmi_flag_set(pmi_finalized_map, true);
   return PMI_SUCCESS;
 }
 
@@ -205,18 +231,7 @@ int PMI_Init(int* spawned)
   pmi_flag_set(pmi_initialized_map, true);
   *spawned = 0;
 
-  int nproc = tport->nproc();
-  // TODO: multi-node topology. The mapping "(vector,(0,nproc,1))" assumes a
-  // single node with all ranks contiguous starting at node 0. Revisit when
-  // multi-node runs are exercised so that apps consuming PMI_process_mapping
-  // see a PPN/node layout that matches the simulated platform.
-  char mapping[64];
-  snprintf(mapping, sizeof(mapping), "(vector,(%d,%d,%d))", 0, nproc, 1);
-  char kvsname[256];
-  snprintf(kvsname, sizeof(kvsname), "app%d", tport->sid().app_);
-  kvs_lock.lock();
-  kvs[kvsname]["PMI_process_mapping"] = mapping;
-  kvs_lock.unlock();
+  pmi_record_process_mapping(tport);
 
   return PMI_SUCCESS;
 }
@@ -234,7 +249,14 @@ int PMI_Allgather(void *in, void *out, int len)
 {
   auto tport = sstmac_pmi();
   int init_tag = tport->engine()->allocateGlobalCollectiveTag();
-  auto* msg = tport->engine()->allgather(out, in, len, 1, init_tag, SST::Iris::sumi::Message::default_cq, nullptr);
+  // The collective call returns a non-null done message when it completes
+  // inline (e.g. nproc==1, which posts nothing to the CQ); otherwise it returns
+  // null and the completion is delivered to the CQ, so we must block for it.
+  // Without this wait, `out` would be read before the gather finishes.
+  auto* msg = tport->engine()->allgather(out, in, len, 1, init_tag,
+                                         SST::Iris::sumi::Message::default_cq, nullptr);
+  if (!msg)
+    msg = tport->engine()->blockUntilNext(SST::Iris::sumi::Message::default_cq);
   if (msg) delete msg;
   return PMI_SUCCESS;
 }
@@ -243,8 +265,12 @@ int PMI_Barrier()
 {
   auto api = sstmac_pmi();
   int init_tag = api->engine()->allocateGlobalCollectiveTag();
-  api->engine()->barrier(init_tag, SST::Iris::sumi::Message::default_cq, nullptr);
-  auto* msg = api->engine()->blockUntilNext(SST::Iris::sumi::Message::default_cq);
+  // Block only when the barrier did not complete inline. For nproc==1 the
+  // engine completes the barrier inline and posts nothing to the CQ, so an
+  // unconditional blockUntilNext would deadlock.
+  auto* msg = api->engine()->barrier(init_tag, SST::Iris::sumi::Message::default_cq, nullptr);
+  if (!msg)
+    msg = api->engine()->blockUntilNext(SST::Iris::sumi::Message::default_cq);
   if (msg) delete msg;
   return PMI_SUCCESS;
 }
@@ -253,8 +279,15 @@ int PMI_Ibarrier()
 {
   auto api = sstmac_pmi();
   int init_tag = api->engine()->allocateGlobalCollectiveTag();
-  api->engine()->barrier(init_tag, SST::Iris::sumi::Message::default_cq, nullptr);
-  pmi_flag_set(ibarrier_pending_map, true);
+  auto* msg = api->engine()->barrier(init_tag, SST::Iris::sumi::Message::default_cq, nullptr);
+  if (msg){
+    // Completed inline (e.g. nproc==1): nothing will arrive on the CQ, so there
+    // is nothing for PMI_Wait to block on.
+    delete msg;
+    pmi_flag_set(ibarrier_pending_map, false);
+  } else {
+    pmi_flag_set(ibarrier_pending_map, true);
+  }
   return PMI_SUCCESS;
 }
 
