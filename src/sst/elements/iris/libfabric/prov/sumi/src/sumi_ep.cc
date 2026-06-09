@@ -494,8 +494,10 @@ DIRECT_FN STATIC ssize_t
 sumi_ep_write(struct fid_ep *ep, const void *buf, size_t len, void *desc,
 	      fi_addr_t dest_addr, uint64_t addr, uint64_t key, void *context)
 {
+  // Plain fi_write carries no immediate data, so no FI_REMOTE_CQ_DATA flag
+  // (that belongs to fi_writedata). Matches sumi_ep_writev.
   return sstmaci_ep_write(ep, buf, len, dest_addr, addr, context,
-                          FabricMessage::no_imm_data, FI_REMOTE_CQ_DATA);
+                          FabricMessage::no_imm_data, 0);
 }
 
 DIRECT_FN STATIC ssize_t
@@ -869,6 +871,9 @@ extern "C" DIRECT_FN  int sumi_ep_bind(fid_t fid, struct fid *bfid, uint64_t fla
 extern "C" DIRECT_FN  int sumi_ep_open(struct fid_domain *domain, struct fi_info *info,
 			   struct fid_ep **ep, void *context)
 {
+  if (!info || !info->ep_attr){
+    return -FI_EINVAL;
+  }
   sumi_fid_ep* ep_impl = (sumi_fid_ep*) calloc(1, sizeof(sumi_fid_ep));
   ep_impl->ep_fid.fid.fclass = FI_CLASS_EP;
   ep_impl->ep_fid.fid.context = context;
@@ -881,11 +886,14 @@ extern "C" DIRECT_FN  int sumi_ep_open(struct fid_domain *domain, struct fi_info
   ep_impl->ep_fid.atomic = &sumi_ep_atomic_ops;
   ep_impl->domain = (sumi_fid_domain*) domain;
   ep_impl->caps = info->caps;
+  // Accumulate op_flags from both directions; a single op_flags field is shared
+  // by the tx and rx paths, so assigning (rather than OR-ing) the second would
+  // drop the first direction's flags.
   if (info->tx_attr){
-    ep_impl->op_flags = info->tx_attr->op_flags;
+    ep_impl->op_flags |= info->tx_attr->op_flags;
   }
   if (info->rx_attr){
-    ep_impl->op_flags = info->rx_attr->op_flags;
+    ep_impl->op_flags |= info->rx_attr->op_flags;
   }
 
   ep_impl->type = info->ep_attr->type;
