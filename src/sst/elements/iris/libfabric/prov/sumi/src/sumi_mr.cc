@@ -56,6 +56,7 @@ extern "C" DIRECT_FN  int sumi_mr_reg(struct fid *fid, const void *buf, size_t l
   mr_impl->fid.ops = &fi_sumi_mr_ops;
   mr_impl->mem_desc = mr_impl; //just point to self
   mr_impl->key = (uint64_t) buf;
+  *mr = mr_impl;
   //yeah, sure, great, always succeeds
   return FI_SUCCESS;
 }
@@ -71,6 +72,7 @@ extern "C" DIRECT_FN  int sumi_mr_regv(struct fid *fid, const struct iovec *iov,
   mr_impl->fid.ops = &fi_sumi_mr_ops;
   mr_impl->mem_desc = mr_impl; //just point to self
   mr_impl->key = (uint64_t) iov;
+  *mr = mr_impl;
   //yeah, sure, great, always succeeds
   return FI_SUCCESS;
 }
@@ -84,6 +86,7 @@ extern "C" DIRECT_FN  int sumi_mr_regattr(struct fid *fid, const struct fi_mr_at
   mr_impl->fid.ops = &fi_sumi_mr_ops;
   mr_impl->mem_desc = mr_impl; //just point to self
   mr_impl->key = attr->requested_key;
+  *mr = mr_impl;
   //yeah, sure, great, always succeeds
   return FI_SUCCESS;
 }
