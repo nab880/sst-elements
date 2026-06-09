@@ -126,13 +126,15 @@ EXTERN_C DIRECT_FN STATIC  int sumi_av_lookup(struct fid_av *av, fi_addr_t fi_ad
   sumi_fid_av* av_impl = (sumi_fid_av*) av;
   if (av_impl->domain->addr_format == FI_ADDR_SSTMAC){
     if (*addrlen < sizeof(uint64_t)){
-      return -FI_EINVAL;
+      *addrlen = sizeof(uint64_t);
+      return -FI_ETOOSMALL;
     }
     uint64_t* addr_int = (uint64_t*) addr;
     *addr_int = fi_addr;
   } else if (av_impl->domain->addr_format == FI_ADDR_STR){
     if (*addrlen < SUMI_MAX_ADDR_LEN){
-      return -FI_EINVAL;
+      *addrlen = SUMI_MAX_ADDR_LEN;
+      return -FI_ETOOSMALL;
     }
     uint32_t rank = ADDR_RANK(fi_addr);
     uint16_t cq   = ADDR_CQ(fi_addr);
@@ -152,7 +154,7 @@ EXTERN_C DIRECT_FN STATIC  int sumi_av_insert(struct fid_av *av, const void *add
   if (av_impl->domain->addr_format == FI_ADDR_STR){
     static bool warned_legacy_addr = false;
     char* addr_str = (char*) addr;
-    for (int i=0; i < count; ++i){
+    for (size_t i=0; i < count; ++i){
       // Each slot must be NUL-terminated inside SUMI_MAX_ADDR_LEN bytes.
       if (strnlen(addr_str, SUMI_MAX_ADDR_LEN) == (size_t)SUMI_MAX_ADDR_LEN){
         return -FI_EINVAL;
@@ -174,7 +176,7 @@ EXTERN_C DIRECT_FN STATIC  int sumi_av_insert(struct fid_av *av, const void *add
     }
   } else if (av_impl->domain->addr_format == FI_ADDR_SSTMAC) {
     uint64_t* addr_list = (uint64_t*) addr;
-    for (int i=0; i < count; ++i){
+    for (size_t i=0; i < count; ++i){
       fi_addr[i] = addr_list[i];
     }
   } else {
