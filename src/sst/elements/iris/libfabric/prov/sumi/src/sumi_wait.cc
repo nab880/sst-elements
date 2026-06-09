@@ -87,7 +87,8 @@ extern "C" DIRECT_FN  int sumi_wait_wait(struct fid_wait *wait, int timeout)
 
 extern "C" int sumi_wait_close(struct fid *wait)
 {
-  free(wait);
+  // Allocated with new in sumi_wait_open; delete runs the std::vector dtor.
+  delete (sumi_fid_wait_set*) wait;
 	return FI_SUCCESS;
 }
 
@@ -95,7 +96,9 @@ DIRECT_FN int sumi_wait_open(struct fid_fabric *fabric,
 			     struct fi_wait_attr *attr,
 			     struct fid_wait **waitset)
 {
-  struct sumi_fid_wait_set* waiter = (struct sumi_fid_wait_set*) calloc(1,sizeof(struct sumi_fid_wait_set));
+  // Use new (not calloc): sumi_fid_wait_set holds a std::vector that must be
+  // constructed/destructed. Value-init zeroes the POD members.
+  struct sumi_fid_wait_set* waiter = new sumi_fid_wait_set();
   waiter->wait.fid.fclass = FI_CLASS_WAIT;
   waiter->wait.fid.ops = &sumi_fi_ops;
   waiter->fabric = fabric;
