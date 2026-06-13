@@ -70,6 +70,19 @@ class GpuLibrary : public GpuComputeAPI, public Library
   void setDevice(int dev) override;
 
  private:
+  // Block the active thread for `seconds` and accumulate the rank total.
+  void chargeTime(double seconds);
+
+  // Fixed per-call modeled costs (seconds), read from params. The stub charges
+  // these regardless of grid/block/per-thread costs; the real calibration and
+  // roofline model (which uses those) is Phase 3/4.
+  double kernel_time_;
+  double memcpy_time_;
+  double launch_overhead_;
+
+  // Cumulative modeled GPU time charged on this rank (seconds).
+  double total_gpu_time_;
+
   // Per-rank device-pointer cookie bump-allocator (CUDA_PLAN.md D6): high
   // canonical-invalid-ish base so an accidental host dereference faults loudly.
   uint64_t cookie_next_;

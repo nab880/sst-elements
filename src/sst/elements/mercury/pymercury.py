@@ -113,6 +113,9 @@ class HgOS(TemplateBase):
                                            "use_put_window",
                                            "compute_library_access_width",
                                            "compute_library_loop_overhead",
+                                           "gpu_kernel_time",
+                                           "gpu_memcpy_time",
+                                           "gpu_kernel_launch_overhead",
                                           ],
                                           "app1.")
         self._subscribeToPlatformParamSet("operating_system")
