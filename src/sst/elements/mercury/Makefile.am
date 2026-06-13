@@ -12,7 +12,7 @@ AM_LIBTOOLFLAGS = --tag=CXX
 comp_LTLIBRARIES = libhg.la
 compdir = $(pkglibdir)
 
-ext_LTLIBRARIES = libcomputelibrary.la libostest.la libostest-nano.la
+ext_LTLIBRARIES = libcomputelibrary.la libgpulibrary.la libostest.la libostest-nano.la
 extdir = $(pkglibdir)/ext
 
 libhg_la_SOURCES = \
@@ -43,6 +43,7 @@ libhg_la_SOURCES = \
   libraries/compute/compute_scheduler.cc \
   libraries/compute/instruction_processor.cc \
   libraries/compute/memory_model.cc \
+  libraries/gpu/cuda_runtime_api.cc \
   operating_system/launch/app_launch_request.cc \
   operating_system/launch/app_launcher.cc \
   operating_system/libraries/library.cc \
@@ -94,6 +95,9 @@ endif
 
 libcomputelibrary_la_SOURCES = \
   libraries/compute/compute_library.cc
+
+libgpulibrary_la_SOURCES = \
+  libraries/gpu/gpu_library.cc
 
 libostest_la_SOURCES = \
   tests/ostest.cc
@@ -167,6 +171,9 @@ nobase_library_include_HEADERS = \
   libraries/compute/compute_scheduler_api.h \
   libraries/compute/instruction_processor.h \
   libraries/compute/memory_model.h \
+  libraries/gpu/gpu_api.h \
+  libraries/gpu/gpu_library.h \
+  libraries/gpu/hg_cuda.h \
   operating_system/launch/app_launcher.h \
   operating_system/launch/app_launcher_fwd.h \
   operating_system/launch/app_launch_request.h \
@@ -224,6 +231,7 @@ endif
 
 libhg_la_LDFLAGS = -module -avoid-version -shared
 libcomputelibrary_la_LDFLAGS = -module -avoid-version -shared
+libgpulibrary_la_LDFLAGS = -module -avoid-version -shared
 libostest_la_LDFLAGS = -module -avoid-version -shared
 libostest_nano_la_LDFLAGS = -module -avoid-version -shared
 
