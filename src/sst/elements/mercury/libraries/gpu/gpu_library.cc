@@ -14,10 +14,15 @@
 // distribution.
 
 #include <sst/core/params.h>
+#include <sst/core/unitAlgebra.h>
 #include <mercury/common/errors.h>
+#include <mercury/common/timestamp.h>
+#include <mercury/components/operating_system_api.h>
 #include <mercury/libraries/gpu/gpu_library.h>
 #include <mercury/libraries/gpu/hg_cuda.h>
 #include <mercury/operating_system/process/app.h>
+
+#include <iostream>
 
 static_assert(SST_HG_CUDA_ABI_VERSION == 1,
               "GpuLibrary built against an unexpected sst_hg_cuda ABI version");
@@ -33,17 +38,40 @@ namespace Hg {
 
 GpuLibrary::GpuLibrary(SST::Params& params, App* parent)
     : Library(params, parent),
+      total_gpu_time_(0.0),
       cookie_next_(kCookieBase),
       cookie_end_(kCookieBase),
       next_handle_(1),
       launch_count_(0),
       memcpy_count_(0)
 {
+  // Fixed-cost stub timing (CUDA-IMPL-PLAN.md P2 Track 3); values carry units,
+  // e.g. gpu_kernel_time = "10us". getValue().toDouble() yields seconds.
+  kernel_time_ =
+      params.find<SST::UnitAlgebra>("gpu_kernel_time", "10us").getValue().toDouble();
+  memcpy_time_ =
+      params.find<SST::UnitAlgebra>("gpu_memcpy_time", "5us").getValue().toDouble();
+  launch_overhead_ =
+      params.find<SST::UnitAlgebra>("gpu_kernel_launch_overhead", "1us").getValue().toDouble();
 }
 
 GpuLibrary::~GpuLibrary()
 {
-  // Timing summary is emitted here in a later commit.
+  // Library::finish() is never invoked by the OS, but app teardown deletes
+  // every library (app.cc), so the per-rank summary is emitted here. The test
+  // greps this line for a nonzero total_gpu_time.
+  parent()->coutStream()
+      << "[gpu] rank summary: launches=" << launch_count_
+      << " memcpys=" << memcpy_count_
+      << " total_gpu_time=" << total_gpu_time_ << " s" << std::endl;
+}
+
+void
+GpuLibrary::chargeTime(double seconds)
+{
+  if (seconds <= 0.0) return;
+  total_gpu_time_ += seconds;
+  parent()->os()->blockTimeout(TimeDelta(seconds));
 }
 
 void*
@@ -73,7 +101,7 @@ GpuLibrary::memcpy(void* /*dst*/, const void* /*src*/, uint64_t /*bytes*/,
                    int /*kind*/, void* /*stream*/)
 {
   ++memcpy_count_;
-  // Fixed-cost timing is charged in a later commit.
+  chargeTime(memcpy_time_);
 }
 
 void
@@ -85,7 +113,7 @@ GpuLibrary::launch(const char* /*kernelName*/,
                    uint64_t /*bytesRead*/, uint64_t /*bytesWritten*/)
 {
   ++launch_count_;
-  // Fixed-cost timing is charged in a later commit.
+  chargeTime(launch_overhead_ + kernel_time_);
 }
 
 void*
