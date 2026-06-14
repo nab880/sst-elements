@@ -113,8 +113,10 @@ class HgOS(TemplateBase):
                                            "use_put_window",
                                            "compute_library_access_width",
                                            "compute_library_loop_overhead",
-                                           "gpu_kernel_time",
-                                           "gpu_memcpy_time",
+                                           "gpu_peak_flops",
+                                           "gpu_mem_bandwidth",
+                                           "pcie_latency",
+                                           "pcie_bandwidth",
                                            "gpu_kernel_launch_overhead",
                                           ],
                                           "app1.")

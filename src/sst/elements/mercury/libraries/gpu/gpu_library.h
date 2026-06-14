@@ -23,14 +23,14 @@ namespace SST {
 namespace Hg {
 
 /**
- * Fixed-cost stub implementation of the sst_hg_cuda ABI (Phase 2 Track 3).
- * Kernels never execute: a launch charges a fixed modeled time, a memcpy
- * charges a fixed time, syncs are no-ops, allocations hand out device-pointer
- * cookies from a reserved range, and streams/events are trivial id tables.
- * One instance per rank (per App). The real calibration/roofline timing model
- * is Phase 3; automatic per-thread costs are Phase 4. Loaded on demand when an
- * app declares "gpulibrary:GpuLibrary" in its libraries list, exactly like
- * ComputeLibrary.
+ * Roofline implementation of the sst_hg_cuda ABI (Phase 3 Track A). Kernels
+ * never execute: a launch is charged a modeled time derived from the grid/block
+ * dimensions and the per-thread costs (roofline -- compute vs. memory bound), a
+ * memcpy is charged a PCIe (H2D/D2H) or HBM (D2D) transfer time. Allocations
+ * hand out device-pointer cookies; streams/events are id tables. One instance
+ * per rank (per App). Calibration-table override is Track B; independent
+ * per-stream timelines (overlap) are Track A2. Loaded on demand when an app
+ * declares "gpulibrary:GpuLibrary" in its libraries list, like ComputeLibrary.
  */
 class GpuLibrary : public GpuComputeAPI, public Library
 {
@@ -41,7 +41,7 @@ class GpuLibrary : public GpuComputeAPI, public Library
     "gpulibrary",
     "GpuLibrary",
     SST_ELI_ELEMENT_VERSION(1,0,0),
-    "models GPU kernel and memcpy time as a fixed-cost stub")
+    "models GPU kernel and transfer time with a roofline model")
 
   GpuLibrary(SST::Params& params, App* parent);
 
@@ -73,11 +73,23 @@ class GpuLibrary : public GpuComputeAPI, public Library
   // Block the active thread for `seconds` and accumulate the rank total.
   void chargeTime(double seconds);
 
-  // Fixed per-call modeled costs (seconds), read from params. The stub charges
-  // these regardless of grid/block/per-thread costs; the real calibration and
-  // roofline model (which uses those) is Phase 3/4.
-  double kernel_time_;
-  double memcpy_time_;
+  // Roofline kernel time (seconds): launch_overhead + max(compute, memory)
+  // where compute = totalFlops/peak_flops and memory = totalBytes/mem_bandwidth,
+  // scaled by the total thread count. The intops term is folded into flops for
+  // now (the rewriter reports both; a separate int-rate is a later refinement).
+  double kernelTime(uint64_t totalThreads, uint64_t flopsPerThread,
+                    uint64_t intopsPerThread, uint64_t bytesReadPerThread,
+                    uint64_t bytesWrittenPerThread) const;
+
+  // Transfer time (seconds): D2D uses HBM bandwidth; H2D/D2H/Default/H2H use
+  // the PCIe latency + bandwidth model.
+  double transferTime(uint64_t bytes, int kind) const;
+
+  // Roofline params (SI base units: flop/s, byte/s, seconds), read from params.
+  double peak_flops_;
+  double mem_bandwidth_;
+  double pcie_latency_;
+  double pcie_bandwidth_;
   double launch_overhead_;
 
   // Cumulative modeled GPU time charged on this rank (seconds).
@@ -89,7 +101,7 @@ class GpuLibrary : public GpuComputeAPI, public Library
   uint64_t cookie_end_;
 
   // Trivial id space shared by streams and events (handles are never
-  // dereferenced by the stub; they only need to be distinct and non-null).
+  // dereferenced by the model; they only need to be distinct and non-null).
   uint64_t next_handle_;
 
   // Accounting (reported in the destructor; see the .cc).

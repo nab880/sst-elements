@@ -22,6 +22,7 @@
 #include <mercury/libraries/gpu/hg_cuda.h>
 #include <mercury/operating_system/process/app.h>
 
+#include <algorithm>
 #include <iostream>
 
 static_assert(SST_HG_CUDA_ABI_VERSION == 1,
@@ -31,6 +32,10 @@ namespace {
 // Reserved cookie range base (CUDA_PLAN.md D6). 256-byte aligned, bump
 // allocated, never reused.
 const uint64_t kCookieBase = 0x4000000000000000ull;
+
+// cudaMemcpyKind (driver_types.h): only DeviceToDevice stays on the GPU; the
+// rest cross PCIe.
+const int kCudaMemcpyDeviceToDevice = 3;
 } // namespace
 
 namespace SST {
@@ -45,12 +50,16 @@ GpuLibrary::GpuLibrary(SST::Params& params, App* parent)
       launch_count_(0),
       memcpy_count_(0)
 {
-  // Fixed-cost stub timing (CUDA-IMPL-PLAN.md P2 Track 3); values carry units,
-  // e.g. gpu_kernel_time = "10us". getValue().toDouble() yields seconds.
-  kernel_time_ =
-      params.find<SST::UnitAlgebra>("gpu_kernel_time", "10us").getValue().toDouble();
-  memcpy_time_ =
-      params.find<SST::UnitAlgebra>("gpu_memcpy_time", "5us").getValue().toDouble();
+  // Roofline params (CUDA_PLAN.md §4). Bandwidths/latencies carry units
+  // (e.g. "900GB/s", "1us"); peak_flops is a bare flop/s rate (no SI unit for
+  // "flop"), default 10 TFLOP/s.
+  peak_flops_ = params.find<double>("gpu_peak_flops", 1.0e13);
+  mem_bandwidth_ =
+      params.find<SST::UnitAlgebra>("gpu_mem_bandwidth", "900GB/s").getValue().toDouble();
+  pcie_latency_ =
+      params.find<SST::UnitAlgebra>("pcie_latency", "1us").getValue().toDouble();
+  pcie_bandwidth_ =
+      params.find<SST::UnitAlgebra>("pcie_bandwidth", "16GB/s").getValue().toDouble();
   launch_overhead_ =
       params.find<SST::UnitAlgebra>("gpu_kernel_launch_overhead", "1us").getValue().toDouble();
 }
@@ -64,6 +73,30 @@ GpuLibrary::~GpuLibrary()
       << "[gpu] rank summary: launches=" << launch_count_
       << " memcpys=" << memcpy_count_
       << " total_gpu_time=" << total_gpu_time_ << " s" << std::endl;
+}
+
+double
+GpuLibrary::kernelTime(uint64_t totalThreads, uint64_t flopsPerThread,
+                       uint64_t intopsPerThread, uint64_t bytesReadPerThread,
+                       uint64_t bytesWrittenPerThread) const
+{
+  double threads = static_cast<double>(totalThreads);
+  double flopsTotal =
+      static_cast<double>(flopsPerThread + intopsPerThread) * threads;
+  double bytesTotal =
+      static_cast<double>(bytesReadPerThread + bytesWrittenPerThread) * threads;
+  double computeT = peak_flops_ > 0.0 ? flopsTotal / peak_flops_ : 0.0;
+  double memT = mem_bandwidth_ > 0.0 ? bytesTotal / mem_bandwidth_ : 0.0;
+  return launch_overhead_ + std::max(computeT, memT);
+}
+
+double
+GpuLibrary::transferTime(uint64_t bytes, int kind) const
+{
+  double bw = (kind == kCudaMemcpyDeviceToDevice) ? mem_bandwidth_ : pcie_bandwidth_;
+  double lat = (kind == kCudaMemcpyDeviceToDevice) ? 0.0 : pcie_latency_;
+  double bwTime = bw > 0.0 ? static_cast<double>(bytes) / bw : 0.0;
+  return lat + bwTime;
 }
 
 void
@@ -97,23 +130,25 @@ GpuLibrary::isDevicePtr(const void* p)
 }
 
 void
-GpuLibrary::memcpy(void* /*dst*/, const void* /*src*/, uint64_t /*bytes*/,
-                   int /*kind*/, void* /*stream*/)
+GpuLibrary::memcpy(void* /*dst*/, const void* /*src*/, uint64_t bytes,
+                   int kind, void* /*stream*/)
 {
   ++memcpy_count_;
-  chargeTime(memcpy_time_);
+  chargeTime(transferTime(bytes, kind));
 }
 
 void
 GpuLibrary::launch(const char* /*kernelName*/,
-                   uint32_t /*gx*/, uint32_t /*gy*/, uint32_t /*gz*/,
-                   uint32_t /*bx*/, uint32_t /*by*/, uint32_t /*bz*/,
+                   uint32_t gx, uint32_t gy, uint32_t gz,
+                   uint32_t bx, uint32_t by, uint32_t bz,
                    uint64_t /*shmemBytes*/, void* /*stream*/,
-                   uint64_t /*flops*/, uint64_t /*intops*/,
-                   uint64_t /*bytesRead*/, uint64_t /*bytesWritten*/)
+                   uint64_t flops, uint64_t intops,
+                   uint64_t bytesRead, uint64_t bytesWritten)
 {
   ++launch_count_;
-  chargeTime(launch_overhead_ + kernel_time_);
+  uint64_t totalThreads = static_cast<uint64_t>(gx) * gy * gz
+                        * static_cast<uint64_t>(bx) * by * bz;
+  chargeTime(kernelTime(totalThreads, flops, intops, bytesRead, bytesWritten));
 }
 
 void*
