@@ -16,8 +16,10 @@
 #pragma once
 
 #include <mercury/operating_system/libraries/library.h>
+#include <mercury/common/timestamp.h>
 #include <mercury/libraries/gpu/gpu_api.h>
 #include <cstdint>
+#include <map>
 
 namespace SST {
 namespace Hg {
@@ -26,11 +28,13 @@ namespace Hg {
  * Roofline implementation of the sst_hg_cuda ABI (Phase 3 Track A). Kernels
  * never execute: a launch is charged a modeled time derived from the grid/block
  * dimensions and the per-thread costs (roofline -- compute vs. memory bound), a
- * memcpy is charged a PCIe (H2D/D2H) or HBM (D2D) transfer time. Allocations
- * hand out device-pointer cookies; streams/events are id tables. One instance
- * per rank (per App). Calibration-table override is Track B; independent
- * per-stream timelines (overlap) are Track A2. Loaded on demand when an app
- * declares "gpulibrary:GpuLibrary" in its libraries list, like ComputeLibrary.
+ * memcpy is charged a PCIe (H2D/D2H) or HBM (D2D) transfer time. Each stream is
+ * an independent "busy-until" timeline: async ops advance the stream cursor
+ * without blocking the host thread (so kernels/copies overlap host compute and
+ * MPI), and only sync ops block the host until a cursor. The default stream
+ * (handle 0) is a legacy barrier. One instance per rank (per App).
+ * Calibration-table override is Track B. Loaded on demand when an app declares
+ * "gpulibrary:GpuLibrary" in its libraries list, like ComputeLibrary.
  */
 class GpuLibrary : public GpuComputeAPI, public Library
 {
@@ -70,8 +74,17 @@ class GpuLibrary : public GpuComputeAPI, public Library
   void setDevice(int dev) override;
 
  private:
-  // Block the active thread for `seconds` and accumulate the rank total.
-  void chargeTime(double seconds);
+  // Enqueue `seconds` of work on `stream` (0 = default). A non-default stream
+  // advances its cursor relative to now() without blocking the host thread (so
+  // it overlaps); the default stream is a legacy barrier that waits for all
+  // streams, charges on the host, then resets every cursor to now().
+  void enqueue(void* stream, double seconds);
+  // Block the host thread until simulated time reaches `t` (no-op if past).
+  void blockUntil(Timestamp t);
+  // The latest cursor over the default and all explicit streams.
+  Timestamp maxCursor() const;
+  // The busy-until cursor for a stream handle (default stream for 0).
+  Timestamp& cursorFor(void* stream);
 
   // Roofline kernel time (seconds): launch_overhead + max(compute, memory)
   // where compute = totalFlops/peak_flops and memory = totalBytes/mem_bandwidth,
@@ -92,8 +105,15 @@ class GpuLibrary : public GpuComputeAPI, public Library
   double pcie_bandwidth_;
   double launch_overhead_;
 
-  // Cumulative modeled GPU time charged on this rank (seconds).
+  // Cumulative modeled GPU work on this rank (seconds; sums across streams, so
+  // with overlap it exceeds wall time -- it is a busy-time total, not latency).
   double total_gpu_time_;
+
+  // Per-stream "busy-until" timelines (the §9 design): the default stream and a
+  // cursor per explicit handle; events capture a stream cursor at record time.
+  Timestamp default_until_;
+  std::map<void*, Timestamp> streams_;
+  std::map<void*, Timestamp> events_;
 
   // Per-rank device-pointer cookie bump-allocator (CUDA_PLAN.md D6): high
   // canonical-invalid-ish base so an accidental host dereference faults loudly.
