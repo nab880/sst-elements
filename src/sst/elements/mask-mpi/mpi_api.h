@@ -827,6 +827,14 @@ class MpiApi : public SST::Iris::sumi::SimTransport
   int iprobe_delay_us_;
   int test_delay_us_;
 
+  // GPU staging (CUDA_PLAN.md §4.3): when gpu_direct_ is false, sending from or
+  // receiving into a device pointer pays a PCIe host-staging cost; when true it
+  // does not. Detected via the read-only sst_hg_cuda_is_device_ptr ABI verb.
+  void stageDeviceBuffer(const void* buf, int count, MPI_Datatype datatype);
+  bool gpu_direct_;
+  double pcie_latency_;
+  double pcie_bandwidth_;
+
   enum {
     is_fresh, is_initialized, is_finalizing, is_finalized
   } status_;

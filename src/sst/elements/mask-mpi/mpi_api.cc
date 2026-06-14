@@ -65,6 +65,7 @@ Questions? Contact sst-macro-help@sandia.gov
 #include <mercury/operating_system/process/thread.h>
 #include <mercury/operating_system/process/app.h>
 #include <mercury/components/operating_system.h>
+#include <mercury/libraries/gpu/hg_cuda.h> // sst_hg_cuda_is_device_ptr (libhg)
 //#include <sstmac/software/process/ftq_scope.h>
 //#include <mercury/operating_system/launch/job_launcher.h>
 
@@ -147,6 +148,14 @@ MpiApi::MpiApi(SST::Params& params, SST::Hg::App* app) :
   double test_delay_s = params.find<SST::UnitAlgebra>("test_delay", "1us").getValue().toDouble();
   test_delay_us_ = test_delay_s * 1e6;
 
+  // GPU-aware MPI knob (CUDA_PLAN.md §4.3). pcie_* default to the GpuLibrary's
+  // defaults so a platform that sets them once is consistent across both.
+  gpu_direct_ = params.find<bool>("gpu_direct", false);
+  pcie_latency_ =
+    params.find<SST::UnitAlgebra>("pcie_latency", "1us").getValue().toDouble();
+  pcie_bandwidth_ =
+    params.find<SST::UnitAlgebra>("pcie_bandwidth", "16GB/s").getValue().toDouble();
+
 #ifdef SST_HG_OTF2_ENABLED
 #if !SST_HG_INTEGRATED_SST_CORE
   auto subname = sprockit::sprintf("App%d-Rank%d", app->sid().app_, app->sid().task_);
@@ -156,6 +165,22 @@ MpiApi::MpiApi(SST::Params& params, SST::Hg::App* app) :
   OTF2Writer_ = dynamic_cast<OTF2Writer*>(stat);
 #endif
 #endif
+}
+
+void
+MpiApi::stageDeviceBuffer(const void* buf, int count, MPI_Datatype datatype)
+{
+  // When GPUDirect is on, an MPI buffer that lives in device memory goes
+  // straight to the NIC; when off, it must be staged through host memory, a
+  // PCIe cost on the host critical path (D2H before a send, H2D after a recv).
+  if (gpu_direct_ || buf == nullptr) return;
+  if (!sst_hg_cuda_is_device_ptr(buf)) return;
+  uint64_t bytes = static_cast<uint64_t>(count)
+                 * static_cast<uint64_t>(typeSize(datatype));
+  double secs = pcie_latency_
+              + (pcie_bandwidth_ > 0.0 ? static_cast<double>(bytes) / pcie_bandwidth_
+                                       : 0.0);
+  if (secs > 0.0) activeThread()->os()->blockTimeout(SST::Hg::TimeDelta(secs));
 }
 
 uint64_t
