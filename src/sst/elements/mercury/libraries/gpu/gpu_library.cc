@@ -21,8 +21,11 @@
 #include <mercury/libraries/gpu/gpu_library.h>
 #include <mercury/libraries/gpu/hg_cuda.h>
 #include <mercury/operating_system/process/app.h>
+#include <external/json.hpp>
 
 #include <algorithm>
+#include <cmath>
+#include <fstream>
 #include <iostream>
 
 static_assert(SST_HG_CUDA_ABI_VERSION == 1,
@@ -43,6 +46,7 @@ namespace Hg {
 
 GpuLibrary::GpuLibrary(SST::Params& params, App* parent)
     : Library(params, parent),
+      table_loaded_(false),
       total_gpu_time_(0.0),
       cookie_next_(kCookieBase),
       cookie_end_(kCookieBase),
@@ -62,6 +66,10 @@ GpuLibrary::GpuLibrary(SST::Params& params, App* parent)
       params.find<SST::UnitAlgebra>("pcie_bandwidth", "16GB/s").getValue().toDouble();
   launch_overhead_ =
       params.find<SST::UnitAlgebra>("gpu_kernel_launch_overhead", "1us").getValue().toDouble();
+
+  // Optional measured calibration table; absent -> pure roofline.
+  std::string calFile = params.find<std::string>("gpu_kernel_times", "");
+  if (!calFile.empty()) loadCalibration(calFile);
 }
 
 GpuLibrary::~GpuLibrary()
@@ -88,6 +96,83 @@ GpuLibrary::kernelTime(uint64_t totalThreads, uint64_t flopsPerThread,
   double computeT = peak_flops_ > 0.0 ? flopsTotal / peak_flops_ : 0.0;
   double memT = mem_bandwidth_ > 0.0 ? bytesTotal / mem_bandwidth_ : 0.0;
   return launch_overhead_ + std::max(computeT, memT);
+}
+
+void
+GpuLibrary::loadCalibration(const std::string& path)
+{
+  std::ifstream f(path);
+  if (!f.good()) {
+    sst_hg_abort_printf("gpu: cannot open gpu_kernel_times file '%s'", path.c_str());
+  }
+  nlohmann::json j;
+  try {
+    f >> j;
+  } catch (const std::exception& e) {
+    sst_hg_abort_printf("gpu: failed to parse gpu_kernel_times '%s': %s",
+                        path.c_str(), e.what());
+  }
+  int version = j.value("version", 0);
+  if (version != 1) {
+    sst_hg_abort_printf("gpu: gpu_kernel_times '%s' has unsupported version %d "
+                        "(expected 1)", path.c_str(), version);
+  }
+  auto kernelsIt = j.find("kernels");
+  if (kernelsIt != j.end()) {
+    for (auto& kv : kernelsIt->items()) {
+      std::vector<std::pair<double, double>> pts;
+      for (auto& s : kv.value()) {
+        double threads = s.at("threads").get<double>();
+        double seconds = s.at("seconds").get<double>();
+        if (threads <= 0.0 || seconds <= 0.0) {
+          sst_hg_abort_printf("gpu: gpu_kernel_times '%s' kernel '%s' has a "
+                              "non-positive threads/seconds sample",
+                              path.c_str(), kv.key().c_str());
+        }
+        pts.emplace_back(threads, seconds);
+      }
+      if (!pts.empty()) {
+        std::sort(pts.begin(), pts.end());
+        table_[kv.key()] = std::move(pts);
+      }
+    }
+  }
+  table_loaded_ = true;
+}
+
+double
+GpuLibrary::kernelTimeFromTable(const std::string& name, uint64_t totalThreads,
+                                bool& found) const
+{
+  found = false;
+  auto it = table_.find(name);
+  if (it == table_.end()) return 0.0;
+  const auto& pts = it->second; // non-empty, sorted by thread count, all > 0
+  found = true;
+
+  double x = static_cast<double>(totalThreads);
+  if (x <= pts.front().first) return pts.front().second;  // clamp below
+  if (x >= pts.back().first) return pts.back().second;    // clamp above
+  for (size_t i = 1; i < pts.size(); ++i) {
+    if (x <= pts[i].first) {
+      double x0 = pts[i - 1].first, y0 = pts[i - 1].second;
+      double x1 = pts[i].first,     y1 = pts[i].second;
+      // Log-log interpolation: linear in (log threads, log seconds).
+      double frac = (std::log(x) - std::log(x0)) / (std::log(x1) - std::log(x0));
+      return std::exp(std::log(y0) + frac * (std::log(y1) - std::log(y0)));
+    }
+  }
+  return pts.back().second; // unreachable (loop covers the open interval)
+}
+
+void
+GpuLibrary::warnTableMiss(const std::string& name)
+{
+  if (warned_.insert(name).second) {
+    parent()->cerrStream()
+        << "[gpu] warning: kernel '" << name << "' is not in the "
+        << "gpu_kernel_times table; using the roofline model" << std::endl;
+  }
 }
 
 double
@@ -177,7 +262,7 @@ GpuLibrary::memcpy(void* /*dst*/, const void* /*src*/, uint64_t bytes,
 }
 
 void
-GpuLibrary::launch(const char* /*kernelName*/,
+GpuLibrary::launch(const char* kernelName,
                    uint32_t gx, uint32_t gy, uint32_t gz,
                    uint32_t bx, uint32_t by, uint32_t bz,
                    uint64_t /*shmemBytes*/, void* stream,
@@ -187,7 +272,16 @@ GpuLibrary::launch(const char* /*kernelName*/,
   ++launch_count_;
   uint64_t totalThreads = static_cast<uint64_t>(gx) * gy * gz
                         * static_cast<uint64_t>(bx) * by * bz;
-  enqueue(stream, kernelTime(totalThreads, flops, intops, bytesRead, bytesWritten));
+
+  // Calibration table first (the accurate, measured path); roofline otherwise.
+  std::string name = kernelName ? kernelName : "";
+  bool fromTable = false;
+  double t = kernelTimeFromTable(name, totalThreads, fromTable);
+  if (!fromTable) {
+    if (table_loaded_) warnTableMiss(name);
+    t = kernelTime(totalThreads, flops, intops, bytesRead, bytesWritten);
+  }
+  enqueue(stream, t);
 }
 
 void*
