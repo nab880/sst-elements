@@ -118,6 +118,7 @@ class HgOS(TemplateBase):
                                            "pcie_latency",
                                            "pcie_bandwidth",
                                            "gpu_kernel_launch_overhead",
+                                           "gpu_kernel_times",
                                           ],
                                           "app1.")
         self._subscribeToPlatformParamSet("operating_system")

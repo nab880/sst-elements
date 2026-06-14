@@ -20,6 +20,10 @@
 #include <mercury/libraries/gpu/gpu_api.h>
 #include <cstdint>
 #include <map>
+#include <set>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace SST {
 namespace Hg {
@@ -32,8 +36,9 @@ namespace Hg {
  * an independent "busy-until" timeline: async ops advance the stream cursor
  * without blocking the host thread (so kernels/copies overlap host compute and
  * MPI), and only sync ops block the host until a cursor. The default stream
- * (handle 0) is a legacy barrier. One instance per rank (per App).
- * Calibration-table override is Track B. Loaded on demand when an app declares
+ * (handle 0) is a legacy barrier. A measured calibration table (the
+ * gpu_kernel_times JSON) overrides the roofline per kernel when present. One
+ * instance per rank (per App). Loaded on demand when an app declares
  * "gpulibrary:GpuLibrary" in its libraries list, like ComputeLibrary.
  */
 class GpuLibrary : public GpuComputeAPI, public Library
@@ -94,6 +99,15 @@ class GpuLibrary : public GpuComputeAPI, public Library
                     uint64_t intopsPerThread, uint64_t bytesReadPerThread,
                     uint64_t bytesWrittenPerThread) const;
 
+  // Calibration (CUDA_PLAN.md §4.1). Load the gpu_kernel_times JSON; look a
+  // kernel up by mangled name and total thread count (log-log interpolation
+  // over the samples, clamped at the ends). `found` is false when the kernel
+  // is absent, so the caller falls back to the roofline.
+  void loadCalibration(const std::string& path);
+  double kernelTimeFromTable(const std::string& name, uint64_t totalThreads,
+                             bool& found) const;
+  void warnTableMiss(const std::string& name);
+
   // Transfer time (seconds): D2D uses HBM bandwidth; H2D/D2H/Default/H2H use
   // the PCIe latency + bandwidth model.
   double transferTime(uint64_t bytes, int kind) const;
@@ -104,6 +118,12 @@ class GpuLibrary : public GpuComputeAPI, public Library
   double pcie_latency_;
   double pcie_bandwidth_;
   double launch_overhead_;
+
+  // Calibration table: mangled kernel name -> samples sorted by thread count.
+  // Empty (and table_loaded_ false) unless gpu_kernel_times names a file.
+  std::map<std::string, std::vector<std::pair<double, double>>> table_;
+  bool table_loaded_;
+  std::set<std::string> warned_; // kernels already warned as table-missing
 
   // Cumulative modeled GPU work on this rank (seconds; sums across streams, so
   // with overlap it exceeds wall time -- it is a busy-time total, not latency).
