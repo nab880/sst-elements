@@ -99,12 +99,51 @@ GpuLibrary::transferTime(uint64_t bytes, int kind) const
   return lat + bwTime;
 }
 
-void
-GpuLibrary::chargeTime(double seconds)
+Timestamp&
+GpuLibrary::cursorFor(void* stream)
 {
-  if (seconds <= 0.0) return;
+  if (stream == nullptr) return default_until_;
+  return streams_[stream]; // idle (epoch 0) if unseen; max(now(),.) handles it
+}
+
+Timestamp
+GpuLibrary::maxCursor() const
+{
+  Timestamp m = default_until_;
+  for (const auto& kv : streams_) {
+    if (kv.second > m) m = kv.second;
+  }
+  return m;
+}
+
+void
+GpuLibrary::blockUntil(Timestamp t)
+{
+  Timestamp n = now();
+  if (t > n) parent()->os()->blockTimeout(t - n);
+}
+
+void
+GpuLibrary::enqueue(void* stream, double seconds)
+{
+  if (seconds < 0.0) seconds = 0.0;
   total_gpu_time_ += seconds;
-  parent()->os()->blockTimeout(TimeDelta(seconds));
+  if (stream == nullptr) {
+    // Default stream (legacy): a full barrier. Wait for all outstanding GPU
+    // work, charge the cost synchronously on the host, then every cursor is
+    // idle at the new now().
+    blockUntil(maxCursor());
+    if (seconds > 0.0) parent()->os()->blockTimeout(TimeDelta(seconds));
+    Timestamp n = now();
+    default_until_ = n;
+    for (auto& kv : streams_) kv.second = n;
+  } else {
+    // Async: advance just this stream's cursor relative to now(); the host
+    // thread is NOT blocked, so this work overlaps whatever the host does next.
+    Timestamp& cur = cursorFor(stream);
+    Timestamp start = now() > cur ? now() : cur;
+    cur = start + TimeDelta(seconds);
+  }
 }
 
 void*
@@ -131,24 +170,24 @@ GpuLibrary::isDevicePtr(const void* p)
 
 void
 GpuLibrary::memcpy(void* /*dst*/, const void* /*src*/, uint64_t bytes,
-                   int kind, void* /*stream*/)
+                   int kind, void* stream)
 {
   ++memcpy_count_;
-  chargeTime(transferTime(bytes, kind));
+  enqueue(stream, transferTime(bytes, kind));
 }
 
 void
 GpuLibrary::launch(const char* /*kernelName*/,
                    uint32_t gx, uint32_t gy, uint32_t gz,
                    uint32_t bx, uint32_t by, uint32_t bz,
-                   uint64_t /*shmemBytes*/, void* /*stream*/,
+                   uint64_t /*shmemBytes*/, void* stream,
                    uint64_t flops, uint64_t intops,
                    uint64_t bytesRead, uint64_t bytesWritten)
 {
   ++launch_count_;
   uint64_t totalThreads = static_cast<uint64_t>(gx) * gy * gz
                         * static_cast<uint64_t>(bx) * by * bz;
-  chargeTime(kernelTime(totalThreads, flops, intops, bytesRead, bytesWritten));
+  enqueue(stream, kernelTime(totalThreads, flops, intops, bytesRead, bytesWritten));
 }
 
 void*
@@ -158,13 +197,15 @@ GpuLibrary::streamCreate()
 }
 
 void
-GpuLibrary::streamDestroy(void* /*s*/)
+GpuLibrary::streamDestroy(void* s)
 {
+  streams_.erase(s);
 }
 
 void
-GpuLibrary::streamSync(void* /*s*/)
+GpuLibrary::streamSync(void* s)
 {
+  blockUntil(cursorFor(s));
 }
 
 void*
@@ -174,24 +215,38 @@ GpuLibrary::eventCreate()
 }
 
 void
-GpuLibrary::eventRecord(void* /*evt*/, void* /*stream*/)
+GpuLibrary::eventRecord(void* evt, void* stream)
 {
+  // The event fires when the stream reaches its current tail (or now() if the
+  // stream is already idle). Default stream: when all outstanding work drains.
+  Timestamp tail = (stream == nullptr) ? maxCursor() : cursorFor(stream);
+  Timestamp n = now();
+  events_[evt] = (tail > n) ? tail : n;
 }
 
 void
-GpuLibrary::eventSync(void* /*evt*/)
+GpuLibrary::eventSync(void* evt)
 {
+  auto it = events_.find(evt);
+  if (it != events_.end()) blockUntil(it->second);
 }
 
 float
-GpuLibrary::eventElapsedMs(void* /*start*/, void* /*stop*/)
+GpuLibrary::eventElapsedMs(void* start, void* stop)
 {
+  auto a = events_.find(start);
+  auto b = events_.find(stop);
+  if (a == events_.end() || b == events_.end()) return 0.0f;
+  if (b->second > a->second) {
+    return static_cast<float>((b->second - a->second).msec());
+  }
   return 0.0f;
 }
 
 void
 GpuLibrary::deviceSync()
 {
+  blockUntil(maxCursor());
 }
 
 int
