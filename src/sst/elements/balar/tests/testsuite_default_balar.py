@@ -88,6 +88,22 @@ class testcase_balar_simple(BalarTestCase):
             testtimeout=60 * 20, min_flush_count=64, min_cuda_calls_completed=5,
             min_d2h_bytes=4096, min_d2h_ratio=1.0)
 
+    # GPU-driven FFT (staged radix-2, N=256 impulse). The impulse FFT is exactly
+    # 1+0j in every bin, so min_d2h_ratio=1.0 is a bit-exact correctness gate that
+    # also catches any dropped stage launch. Run via fft_reference.py --emit.
+    @BalarTestCase.balar_basic_unittest
+    def test_balar_contract_fft(self):
+        self.balar_contract_testcpu_template(
+            "fft", "testBalar-fft.py", "fft_impulse_256.trace",
+            testtimeout=60 * 20, min_d2h_ratio=1.0, cuda_binary="fft")
+
+    @BalarTestCase.balar_basic_unittest
+    def test_quetz_balar_fft(self):
+        self.quetz_contract_testcpu_template(
+            "quetz_fft", "testQuetz-balar-fft.py", "fft_impulse_256.trace",
+            testtimeout=60 * 20, min_flush_count=16, min_cuda_calls_completed=19,
+            min_d2h_bytes=2048, min_d2h_ratio=1.0, cuda_binary="fft")
+
     @unittest.skipIf(
         os.getenv("LLVM_INSTALL_PATH") is None or os.getenv("RISCV_TOOLCHAIN_INSTALL_PATH") is None,
         "Vanadis clang vecadd requires LLVM_INSTALL_PATH and RISCV_TOOLCHAIN_INSTALL_PATH")

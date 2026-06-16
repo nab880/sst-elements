@@ -18,7 +18,8 @@ MMIO_DST = [MEMORY_GROUP]
 MEMORY_SRC = [CORE_GROUP, MMIO_GROUP]
 
 
-def build_testcpu_router(balar_builder, cfg_file, balar_verbosity=0, dma_verbosity=0):
+def build_testcpu_router(balar_builder, cfg_file, balar_verbosity=0, dma_verbosity=0,
+                         enable_memcpy_dump=False):
     """Return (cpu, balar_mmio_addr) for merlin router + BalarTestCPU."""
     balar_mmio_iface, balar_mmio_addr, dma_mem_if, dma_mmio_if = balar_builder.buildTestCPU(
         cfg_file, balar_verbosity, dma_verbosity
@@ -52,7 +53,7 @@ def build_testcpu_router(balar_builder, cfg_file, balar_verbosity=0, dma_verbosi
         "verbose": balar_verbosity,
         "scratch_mem_addr": 0,
         "gpu_addr": balar_mmio_addr,
-        "enable_memcpy_dump": False,
+        "enable_memcpy_dump": enable_memcpy_dump,
     })
     iface = cpu.setSubComponent("memory", "memHierarchy.standardInterface")
     iface.addParams(DEBUG_PARAMS)
@@ -102,7 +103,8 @@ def build_testcpu_router(balar_builder, cfg_file, balar_verbosity=0, dma_verbosi
     return cpu, balar_mmio_addr
 
 
-def build_quetz_topology(balar_builder, cfg_file, mode="trace", balar_verbosity=0, dma_verbosity=0):
+def build_quetz_topology(balar_builder, cfg_file, mode="trace", balar_verbosity=0, dma_verbosity=0,
+                         enable_memcpy_dump=False):
     """
     Quetz pattern: QuetzTestCPU cache_link -> L1 -> coherent memory fabric,
     and mmio_link -> routed MMIO fabric for balarMMIO doorbells.
@@ -154,7 +156,7 @@ def build_quetz_topology(balar_builder, cfg_file, mode="trace", balar_verbosity=
         "mmio_addr": balar_mmio_addr,
         "cache_line_size": 64,
         "mode": mode,
-        "enable_memcpy_dump": False,
+        "enable_memcpy_dump": enable_memcpy_dump,
     })
     cache_if = cpu.setSubComponent("cache_link", "memHierarchy.standardInterface")
     cache_if.addParams(DEBUG_PARAMS)
