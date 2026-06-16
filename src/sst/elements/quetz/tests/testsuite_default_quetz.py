@@ -922,7 +922,9 @@ class testcase_quetz_sysmode(SSTTestCase):
             "guest STATUS spin must see real payloads before each doorbell")
 
     # -------------------------------------------------------------------------
-    def _quetz_balar_sysmode_template(self, testname, timeout_sec):
+    def _quetz_balar_sysmode_template(self, testname, timeout_sec,
+                                      exe_rel="sysmode/firmware/riscv_virt_balar_kernel",
+                                      cuda_binary="vectorAdd"):
         if not os.environ.get("GPGPUSIM_ROOT"):
             self.skipTest("GPGPUSIM_ROOT not set; skipping sysmode_balar test")
 
@@ -932,7 +934,6 @@ class testcase_quetz_sysmode(SSTTestCase):
         sst_libexec = sstsimulator_conf_get_value("SSTCore", "libexecdir", str, "")
 
         qemu_target = "qemu-system-riscv64"
-        exe_rel = "sysmode/firmware/riscv_virt_balar_kernel"
         import shutil
         qemu_bin = os.path.join(sst_bindir, qemu_target)
         if not os.path.exists(qemu_bin):
@@ -943,7 +944,7 @@ class testcase_quetz_sysmode(SSTTestCase):
         exe_abs = os.path.normpath(os.path.join(test_path, exe_rel))
         balar_tests = os.path.normpath(os.path.join(test_path, "../../balar/tests"))
         cfg_file = os.path.join(balar_tests, "gpu-v100-mem.cfg")
-        cuda_exe = os.path.join(balar_tests, "balar_trace", "vectorAdd")
+        cuda_exe = os.path.join(balar_tests, "balar_trace", cuda_binary)
         # GPGPU-Sim reads a file literally named "gpgpusim.config" from the
         # process CWD at init; the balar testsuite symlinks it into its run dir.
         # We run with set_cwd=outdir, so it must be present there too.
@@ -959,8 +960,8 @@ class testcase_quetz_sysmode(SSTTestCase):
         if not os.path.exists(gpgpusim_cfg):
             self.skipTest("gpgpusim.config not found at {}".format(gpgpusim_cfg))
         if not os.path.exists(cuda_exe):
-            self.skipTest("Balar vectorAdd binary not found at {}; "
-                          "build balar/tests/balar_trace".format(cuda_exe))
+            self.skipTest("Balar {} binary not found at {}; "
+                          "build balar/tests/balar_trace".format(cuda_binary, cuda_exe))
 
         outdir = os.path.join(self.get_test_output_run_dir(),
                               "quetz_sysmode_tests", testname)
@@ -1057,6 +1058,42 @@ class testcase_quetz_sysmode(SSTTestCase):
         self.assertGreaterEqual(raw.count("Handling CUDA API Call"), 18,
             "expected the full firmware CUDA packet stream to reach Balar")
         self.assertGreaterEqual(flushes, 18,
+            "expected at least one doorbell flush per CUDA API packet")
+
+    # -------------------------------------------------------------------------
+    def test_quetz_balar_fft(self):
+        """GPU-driven staged radix-2 FFT (impulse, N=256) through Quetz->Balar.
+
+        The impulse FFT is bit-exact (every bin = 1+0j), so the firmware's
+        on-guest word check must be perfect (correct == total). The 1+log2(N)
+        kernel launches make this a much heavier host<->GPU command stream than
+        vectorAdd, which is the point for the architectural demo.
+        """
+        raw, _stats, flushes = self._quetz_balar_sysmode_template(
+            "quetz_balar_fft", 60 * 40,
+            exe_rel="sysmode/firmware/riscv_virt_balar_fft",
+            cuda_binary="fft")
+        self.assertIn("FFT Kernel_done", raw,
+            "GPGPU-Sim/FFT completion marker not observed")
+        self.assertIn("correct_words=", raw,
+            "firmware did not print the FFT word-correctness count")
+
+        marker = "correct_words="
+        start = raw.rfind(marker)
+        ratio_text = raw[start + len(marker):].splitlines()[0]
+        correct_s, total_s = ratio_text.split("/", 1)
+        correct = float(correct_s)
+        total = float(total_s)
+        self.assertEqual(total, 512,
+            "N=256 complex output should be 512 words (re,im)")
+        self.assertEqual(correct, total,
+            "impulse FFT must be bit-exact: every output word 1.0f/0.0f")
+        # bit-reversal + log2(256) stages = 9 launches; each launch is a
+        # config + set_args + launch + sync packet group, so the command stream
+        # is well above vectorAdd's.
+        self.assertGreaterEqual(raw.count("Handling CUDA API Call"), 40,
+            "expected the full staged-FFT CUDA packet stream to reach Balar")
+        self.assertGreaterEqual(flushes, 40,
             "expected at least one doorbell flush per CUDA API packet")
 
     # -------------------------------------------------------------------------
