@@ -46,6 +46,15 @@ echo "=== RISC-V virt Balar kernel ==="
 $RV64_CC $RV64_FLAGS riscv_virt_balar_kernel.c -o riscv_virt_balar_kernel
 echo "  -> riscv_virt_balar_kernel"
 
+echo "=== RISC-V virt Balar FFT ==="
+# Regenerate the precomputed twiddle header if the generator is available.
+FFT_REF="../../../../balar/tests/balar_trace/fft_reference.py"
+if [ -f "$FFT_REF" ]; then
+  python3 "$FFT_REF" -n 256 --header fft_firmware_data_256.h >/dev/null
+fi
+$RV64_CC $RV64_FLAGS riscv_virt_balar_fft.c -o riscv_virt_balar_fft
+echo "  -> riscv_virt_balar_fft"
+
 echo "=== ARM Cortex-M7 hello ==="
 $ARM_CC $ARM_CFLAGS -T link_arm_m7.ld -Wl,--build-id=none \
   arm_m7_startup.S arm_m7_hello.c -o arm_m7_hello
@@ -63,4 +72,5 @@ echo ""
 echo "All firmware binaries built successfully."
 ls -lh riscv_virt_hello riscv_virt_uart_echo riscv_virt_mmio_poke \
         riscv_virt_gpu_trace riscv_virt_gpu_kernel riscv_virt_balar_kernel \
+        riscv_virt_balar_fft \
         arm_m7_hello x86_hello mips_malta_hello.bin 2>/dev/null
