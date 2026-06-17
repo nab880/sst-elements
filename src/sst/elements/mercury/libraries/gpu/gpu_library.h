@@ -93,11 +93,13 @@ class GpuLibrary : public GpuComputeAPI, public Library
 
   // Roofline kernel time (seconds): launch_overhead + max(compute, memory) over
   // the total thread count (blocks * threadsPerBlock), then scaled by the wave-
-  // quantization penalty (WS1-1b). The intops term is folded into flops for now
-  // (the rewriter reports both; a separate int-rate is a later refinement).
-  double kernelTime(uint64_t blocks, uint64_t threadsPerBlock,
-                    uint64_t flopsPerThread, uint64_t intopsPerThread,
-                    uint64_t bytesReadPerThread,
+  // quantization penalty (WS1-1b). computePeak is the op-class peak the caller
+  // selected (CUDA-core or tensor-core, WS1-1a). The intops term is folded into
+  // flops for now (the rewriter reports both; a separate int-rate is a later
+  // refinement).
+  double kernelTime(double computePeak, uint64_t blocks,
+                    uint64_t threadsPerBlock, uint64_t flopsPerThread,
+                    uint64_t intopsPerThread, uint64_t bytesReadPerThread,
                     uint64_t bytesWrittenPerThread) const;
 
   // Resident thread blocks per SM for occupancy: the thread budget
@@ -119,6 +121,8 @@ class GpuLibrary : public GpuComputeAPI, public Library
 
   // Roofline params (SI base units: flop/s, byte/s, seconds), read from params.
   double peak_flops_;
+  double tensor_peak_flops_;            // op-class peak for tensor-core kernels
+  std::set<std::string> tensor_kernels_; // mangled names charged at tensor peak
   double mem_bandwidth_;
   double pcie_latency_;
   double pcie_bandwidth_;
