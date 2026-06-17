@@ -1349,3 +1349,108 @@ class testcase_quetz_sysmode(SSTTestCase):
         self.assertIn("doorbells=1", line)
         self.assertIn("polls=8", line)
         self.assertIn("deadbeef", line.lower())
+
+    # -------------------------------------------------------------------------
+    def test_quetz_coldfire_monitor(self):
+        """ColdFire (m68k) dBUG-style monitor + GPU offload through Quetz→balar.
+
+        A 32-bit big-endian NXP MCF5208 boots, prints a banner over UART TX,
+        reads commands over UART RX, and dispatches a vectorAdd to
+        balar/GPGPU-Sim. Checks the full UART transcript and that the GPU
+        result is bit-exact (256/256).
+
+        Requires qemu-system-m68k (QEMU built with m68k-softmmu) and the
+        coldfire_monitor firmware (M68K_CC=m68k-linux-gnu-gcc ./build.sh).
+        """
+        if not os.environ.get("GPGPUSIM_ROOT"):
+            self.skipTest("GPGPUSIM_ROOT not set; skipping coldfire_monitor test")
+
+        test_path = self.get_testsuite_dir()
+        sst_prefix  = sstsimulator_conf_get_value("SSTCore", "prefix",     str, "")
+        sst_bindir  = sstsimulator_conf_get_value("SSTCore", "bindir",     str, "")
+        sst_libexec = sstsimulator_conf_get_value("SSTCore", "libexecdir", str, "")
+
+        qemu_target = "qemu-system-m68k"
+        import shutil
+        qemu_bin = os.path.join(sst_bindir, qemu_target)
+        if not os.path.exists(qemu_bin):
+            found = shutil.which(qemu_target)
+            if found:
+                qemu_bin = found
+
+        exe_abs = os.path.normpath(os.path.join(
+            test_path, "sysmode/firmware/coldfire_monitor"))
+        balar_tests = os.path.normpath(os.path.join(test_path, "../../balar/tests"))
+        cfg_file = os.path.join(balar_tests, "gpu-v100-mem.cfg")
+        cuda_exe = os.path.join(balar_tests, "balar_trace", "vectorAdd")
+        gpgpusim_cfg = os.path.join(balar_tests, "gpgpusim.config")
+
+        if not os.path.exists(qemu_bin):
+            self.skipTest(
+                "{} not found; rebuild QEMU with m68k-softmmu".format(qemu_target))
+        if not os.path.exists(exe_abs):
+            self.skipTest(
+                "coldfire_monitor not found at {}; "
+                "run M68K_CC=m68k-linux-gnu-gcc ./build.sh".format(exe_abs))
+        if not os.path.exists(cfg_file):
+            self.skipTest("Balar config not found at {}".format(cfg_file))
+        if not os.path.exists(gpgpusim_cfg):
+            self.skipTest("gpgpusim.config not found at {}".format(gpgpusim_cfg))
+        if not os.path.exists(cuda_exe):
+            self.skipTest(
+                "vectorAdd not found at {}; build balar/tests/balar_trace".format(
+                    cuda_exe))
+
+        outdir = os.path.join(self.get_test_output_run_dir(),
+                              "quetz_sysmode_tests", "coldfire_monitor")
+        os.makedirs(outdir, exist_ok=True)
+        import shutil as _shutil
+        _shutil.copy(gpgpusim_cfg, os.path.join(outdir, "gpgpusim.config"))
+
+        stdin_path = os.path.join(outdir, "coldfire_cmds.txt")
+        with open(stdin_path, "w") as f:
+            f.write("help\ngpu\nquit\n")
+
+        make_sysmode_env(sst_prefix, sst_libexec, qemu_bin, exe_abs,
+                         "-machine mcf5208evb -display none -serial stdio -m 128M",
+                         "-kernel", 0x40000000, 0x47FFFFFF, [],
+                         stdin_file=stdin_path)
+        os.environ["QUETZ_MMIO_START"] = "0x70000000"
+        os.environ["QUETZ_MMIO_END"]   = "0x700005FF"
+        os.environ["BALAR_CONFIG"] = cfg_file
+        os.environ["BALAR_CUDA_EXE_PATH"] = cuda_exe
+        os.environ["BALAR_VERBOSE"] = "1"
+        os.environ["BALAR_DMA_VERBOSE"] = "0"
+        os.environ.pop("QUETZ_PLATFORM", None)
+        enable_mmio_payload_delivery()
+
+        sdlfile     = os.path.join(test_path, "sysmode", "basic_quetz_balar_coldfire.py")
+        sst_outfile = os.path.join(outdir, "coldfire_monitor.out")
+        sst_errfile = os.path.join(outdir, "coldfire_monitor.err")
+        mpifiles    = os.path.join(outdir, "coldfire_monitor.testfile")
+
+        self.run_sst(sdlfile, sst_outfile, sst_errfile,
+                     mpi_out_files=mpifiles, set_cwd=outdir, timeout_sec=60 * 40)
+
+        raw = ""
+        if os.path.exists(sst_outfile):
+            with open(sst_outfile, "r") as f:
+                raw += f.read()
+        if os.path.exists(sst_errfile):
+            with open(sst_errfile, "r") as f:
+                raw += "\n" + f.read()
+        self.assertNotIn("FATAL", raw)
+
+        self.assertIn("ColdFire dBUG-style monitor", raw,
+            "ColdFire UART banner not captured; firmware may not have booted")
+        self.assertIn("dbug>", raw,
+            "ColdFire monitor prompt not captured; UART RX injection may have failed")
+        self.assertIn("gpu vectorAdd correct=256/256", raw,
+            "ColdFire GPU command did not report bit-exact vectorAdd result")
+        self.assertIn("TESTFINISH[0]", raw,
+            "TestFinisherRegionHandler sentinel not triggered; sim may have hung")
+
+        stats = parse_stats(sst_outfile)
+        flushes = stats.get("cpu.mmio_doorbell_flushes.0", 0)
+        self.assertGreaterEqual(flushes, 1,
+            "balar doorbell path issued no FlushAddr requests from ColdFire host")
