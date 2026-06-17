@@ -71,7 +71,11 @@ struct Action
 
   std::string toString() const;
 
-  static const uint32_t max_round = 500;
+  // Round multiplier in the message-id encoding. Must exceed the largest round
+  // any collective uses; the ring all-reduce needs 2*(nproc-1) rounds (WS2-2a),
+  // so this is sized for nproc well past 1024 (recursive-doubling needs only
+  // 2*log2(nproc)). The id space stays within uint32 for nproc <= a few thousand.
+  static const uint32_t max_round = 4096;
 
   static uint32_t messageId(type_t ty, int r, int p){
     //factor of two is for send or receive

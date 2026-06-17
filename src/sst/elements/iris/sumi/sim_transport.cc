@@ -18,6 +18,7 @@
 #include <sst/core/factory.h>
 #include <iris/sumi/transport.h>
 #include <iris/sumi/allreduce.h>
+#include <iris/sumi/ring_allreduce.h>
 #include <iris/sumi/reduce_scatter.h>
 #include <iris/sumi/reduce.h>
 #include <iris/sumi/allgather.h>
@@ -46,6 +47,8 @@
 #include <mercury/operating_system/launch/app_launcher.h>
 
 #include <cstring>
+#include <cstdlib>
+#include <string>
 
 using SST::Hg::TimeDelta;
 
@@ -585,7 +588,18 @@ CollectiveEngine::allreduce(void* dst, void *src, int nelems, int type_size, int
     coll = new DoNothingCollective(this, tag, cq_id, comm);
     intra_bcast->setSubsequent(coll);
   } else {
-    coll = new WilkeHalvingAllreduce(this, dst, src, nelems, type_size, tag, fxn, cq_id, comm);
+    // Algorithm selectable for the collective-algorithm study (WS2-2a): ring is
+    // bandwidth-optimal/neighbour-local, recursive-doubling is latency-optimal.
+    // Read once; default keeps the historical recursive-doubling.
+    static const bool use_ring = [](){
+      const char* a = getenv("SUMI_ALLREDUCE_ALG");
+      return a && (std::string(a) == "ring");
+    }();
+    if (use_ring){
+      coll = new RingAllreduce(this, dst, src, nelems, type_size, tag, fxn, cq_id, comm);
+    } else {
+      coll = new WilkeHalvingAllreduce(this, dst, src, nelems, type_size, tag, fxn, cq_id, comm);
+    }
   }
 
   return startCollective(coll);

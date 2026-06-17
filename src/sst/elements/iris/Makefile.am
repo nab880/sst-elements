@@ -21,6 +21,7 @@ libsumi_la_SOURCES = \
   sumi/allgather.cc \
   sumi/allgatherv.cc  \
   sumi/allreduce.cc \
+  sumi/ring_allreduce.cc \
   sumi/alltoall.cc \
   sumi/alltoallv.cc \
   sumi/bcast.cc \
@@ -49,6 +50,7 @@ nobase_library_include_HEADERS = \
   sumi/allgather.h \
   sumi/allgatherv.h \
   sumi/allreduce.h \
+  sumi/ring_allreduce.h \
   sumi/alltoall.h \
   sumi/alltoallv.h \
   sumi/bcast.h \
