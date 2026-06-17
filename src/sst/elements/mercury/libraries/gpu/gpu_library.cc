@@ -94,6 +94,11 @@ GpuLibrary::GpuLibrary(SST::Params& params, App* parent)
   max_threads_per_sm_ = params.find<uint64_t>("gpu_max_threads_per_sm", 2048);
   max_blocks_per_sm_ = params.find<uint64_t>("gpu_max_blocks_per_sm", 32);
 
+  // Capacity model: 0 = disabled (footprint reported but never enforced).
+  gpu_mem_capacity_ =
+      params.find<SST::UnitAlgebra>("gpu_mem_capacity", "0B").getValue().toDouble();
+  mem_fatal_ = params.find<bool>("gpu_mem_fatal", false);
+
   // Optional measured calibration table; absent -> pure roofline.
   std::string calFile = params.find<std::string>("gpu_kernel_times", "");
   if (!calFile.empty()) loadCalibration(calFile);
@@ -104,10 +109,21 @@ GpuLibrary::~GpuLibrary()
   // Library::finish() is never invoked by the OS, but app teardown deletes
   // every library (app.cc), so the per-rank summary is emitted here. The test
   // greps this line for a nonzero total_gpu_time.
+  uint64_t footprint = cookie_end_ - kCookieBase;   // high-water; free() is a no-op
   parent()->coutStream()
       << "[gpu] rank summary: launches=" << launch_count_
       << " memcpys=" << memcpy_count_
-      << " total_gpu_time=" << total_gpu_time_ << " s" << std::endl;
+      << " total_gpu_time=" << total_gpu_time_ << " s"
+      << " mem_footprint=" << footprint << std::endl;
+  if (gpu_mem_capacity_ > 0.0 && footprint > gpu_mem_capacity_) {
+    parent()->coutStream()
+        << "[gpu] OOM: rank footprint " << footprint
+        << " > capacity " << static_cast<uint64_t>(gpu_mem_capacity_) << std::endl;
+    if (mem_fatal_)
+      sst_hg_abort_printf("gpu: rank footprint %llu exceeds gpu_mem_capacity %llu",
+                          (unsigned long long)footprint,
+                          (unsigned long long)gpu_mem_capacity_);
+  }
 }
 
 uint64_t
