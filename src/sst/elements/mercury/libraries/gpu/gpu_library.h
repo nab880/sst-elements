@@ -133,6 +133,10 @@ class GpuLibrary : public GpuComputeAPI, public Library
   uint64_t max_threads_per_sm_;
   uint64_t max_blocks_per_sm_;
 
+  // Capacity model. gpu_mem_capacity_ == 0 disables enforcement (report only).
+  double gpu_mem_capacity_;
+  bool mem_fatal_;
+
   // Calibration table: mangled kernel name -> samples sorted by thread count.
   // Empty (and table_loaded_ false) unless gpu_kernel_times names a file.
   std::map<std::string, std::vector<std::pair<double, double>>> table_;
