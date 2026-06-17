@@ -27,6 +27,7 @@ FFT_BIN="${TESTS_DIR}/balar_trace/fft"
 [ -x "${FFT_BIN}" ] || make -C balar_trace fft
 
 RUNS=()
+ACC=()
 for N in ${NS}; do
     python3 balar_trace/fft_reference.py -n "${N}" --emit --outdir traces >/dev/null
     out="/tmp/fft_sweep_${N}.out"
@@ -38,8 +39,22 @@ for N in ${NS}; do
     ratio="$(grep correct_memD2H_ratio "${stats}" 2>/dev/null | grep -oE 'Min.f64 = [0-9.]+' | head -1)"
     echo "  exit=$?  ${ratio:-<no stats>}"
     RUNS+=(--run "N${N}:${stats}:${out}")
+
+    # Numerical accuracy: tone vs independent DFT (impulse is bit-exact but
+    # twiddle-blind). Dump the GPU output and tolerance-compare on the host.
+    rm -f cudamemcpyD2H-sim-*.data
+    FFT_DUMP=1 timeout 900 sst testQuetz-balar-fft.py \
+        --model-options="-c gpu-v100-mem.cfg -s /tmp/fft_tone_${N}.stats -x ${FFT_BIN} -t traces/fft_tone_${N}.trace -v 0" \
+        > /tmp/fft_tone_${N}.out 2>&1
+    dump="$(ls cudamemcpyD2H-sim-*-size-$((N * 8)).data 2>/dev/null | head -1)"
+    acc="$(python3 balar_trace/fft_reference.py -n "${N}" --compare "${dump}" --kind tone 2>/dev/null | grep -oE 'rel-L2=[0-9.e+-]+' | head -1)"
+    rm -f cudamemcpyD2H-*.data
+    ACC+=("  N=${N}: ${acc:-<no dump>}")
 done
 
 echo ""
 echo "######## FFT N-scaling sweep (staged radix-2, QuetzTestCPU dual-link) ########"
 python3 fft_stats_report.py "${RUNS[@]}"
+echo ""
+echo "######## Numerical accuracy vs N (tone, GPU float32 vs independent DFT) ########"
+printf '%s\n' "${ACC[@]}"
