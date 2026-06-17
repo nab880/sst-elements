@@ -1,6 +1,7 @@
 
 
 #include "coldfire_uart.h"
+#include "coldfire_balar.h"
 
 
 static uint32_t g_data[8] = {
@@ -84,7 +85,20 @@ static int read_line(char *buf, int cap)
 static void cmd_help(void)
 {
     uart_puts("commands: help | peek <a> | poke <a> <v> | "
-              "dump <a> [n] | run | quit\n");
+              "dump <a> [n] | run | gpu | quit\n");
+}
+
+
+static void cmd_gpu(void)
+{
+    uint32_t correct;
+    uart_puts("dispatching vectorAdd to balar GPU...\n");
+    correct = cb_vadd();
+    uart_puts("gpu vectorAdd correct=");
+    uart_put_u32_dec(correct);
+    uart_putc('/');
+    uart_put_u32_dec(CB_VEC_N);
+    uart_putc('\n');
 }
 
 static void cmd_peek(char **p)
@@ -164,6 +178,7 @@ void kernel_main(void)
         else if (str_eq(cmd, "poke")) cmd_poke(&p);
         else if (str_eq(cmd, "dump")) cmd_dump(&p);
         else if (str_eq(cmd, "run"))  cmd_run();
+        else if (str_eq(cmd, "gpu"))  cmd_gpu();
         else if (str_eq(cmd, "quit")) {
             uart_puts("bye\n");
             break;
