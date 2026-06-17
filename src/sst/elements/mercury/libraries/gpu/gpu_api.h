@@ -21,12 +21,7 @@ namespace SST {
 namespace Hg {
 
 /**
- * Abstract interface implemented by the GPU library (GpuLibrary) and called
- * by the extern "C" sst_hg_cuda_* bridge (cuda_runtime_api.cc). The bridge
- * lives in libhg and reaches the concrete library only through this base --
- * exactly the ComputeAPI / ComputeLibrary split (compute_api.h) -- so libhg
- * never links the loadable module. One method per sst_hg_cuda ABI verb
- * (hg_cuda.h); all calls run on the active Mercury OS thread.
+ * Abstract GPU interface for the sst_hg_cuda_* bridge in libhg (ComputeAPI split).
  */
 class GpuComputeAPI
 {

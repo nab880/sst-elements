@@ -126,12 +126,7 @@ NIC::incomingPacket(int vn){
     auto bytes = req->size_in_bits/8;
     auto* payload = req->takePayload();
 
-    // Reassembly is keyed per (source, flowId) -- see recvCqFlowKey(). flowId is
-    // only unique per sender, so at high fan-in two senders' messages to the same
-    // NIC can share a flowId and their packets co-mingle in the completion queue
-    // (bytes_arrived overshoots the message length -> "couldn't get a flow").
-    // Folding the source in keeps each in-flight message's slot private. (req->src
-    // is set on every packet; it must fit the 16-bit source field of the key.)
+    // Key reassembly by (source, flowId): flowId is only unique per sender.
     if (req->src < 0 || uint64_t(req->src) > kFlowKeyMaxSrc) {
       sst_hg_abort_printf("NIC reassembly key: source %lld out of range "
                           "(max %llu); widen the flow key for this scale\n",

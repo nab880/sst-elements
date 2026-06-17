@@ -29,17 +29,8 @@ namespace SST {
 namespace Hg {
 
 /**
- * Roofline implementation of the sst_hg_cuda ABI (Phase 3 Track A). Kernels
- * never execute: a launch is charged a modeled time derived from the grid/block
- * dimensions and the per-thread costs (roofline -- compute vs. memory bound), a
- * memcpy is charged a PCIe (H2D/D2H) or HBM (D2D) transfer time. Each stream is
- * an independent "busy-until" timeline: async ops advance the stream cursor
- * without blocking the host thread (so kernels/copies overlap host compute and
- * MPI), and only sync ops block the host until a cursor. The default stream
- * (handle 0) is a legacy barrier. A measured calibration table (the
- * gpu_kernel_times JSON) overrides the roofline per kernel when present. One
- * instance per rank (per App). Loaded on demand when an app declares
- * "gpulibrary:GpuLibrary" in its libraries list, like ComputeLibrary.
+ * Roofline sst_hg_cuda model: kernels and memcpys charge modeled time; streams
+ * are independent busy-until timelines (default stream is a legacy barrier).
  */
 class GpuLibrary : public GpuComputeAPI, public Library
 {
@@ -79,10 +70,7 @@ class GpuLibrary : public GpuComputeAPI, public Library
   void setDevice(int dev) override;
 
  private:
-  // Enqueue `seconds` of work on `stream` (0 = default). A non-default stream
-  // advances its cursor relative to now() without blocking the host thread (so
-  // it overlaps); the default stream is a legacy barrier that waits for all
-  // streams, charges on the host, then resets every cursor to now().
+  // Default stream barriers all work on the host; other streams advance without blocking.
   void enqueue(void* stream, double seconds);
   // Block the host thread until simulated time reaches `t` (no-op if past).
   void blockUntil(Timestamp t);
@@ -91,32 +79,22 @@ class GpuLibrary : public GpuComputeAPI, public Library
   // The busy-until cursor for a stream handle (default stream for 0).
   Timestamp& cursorFor(void* stream);
 
-  // Roofline kernel time (seconds): launch_overhead + max(compute, memory) over
-  // the total thread count (blocks * threadsPerBlock), then scaled by the wave-
-  // quantization penalty (WS1-1b). computePeak is the op-class peak the caller
-  // selected (CUDA-core or tensor-core, WS1-1a). The intops term is folded into
-  // flops for now (the rewriter reports both; a separate int-rate is a later
-  // refinement).
+  // Roofline kernel time plus wave-quantization penalty (WS1-1b).
   double kernelTime(double computePeak, uint64_t blocks,
                     uint64_t threadsPerBlock, uint64_t flopsPerThread,
                     uint64_t intopsPerThread, uint64_t bytesReadPerThread,
                     uint64_t bytesWrittenPerThread) const;
 
-  // Resident thread blocks per SM for occupancy: the thread budget
-  // (max_threads_per_sm / threadsPerBlock) capped by the hard block limit, >= 1.
+  // Occupancy cap: thread budget per SM, capped by max_blocks_per_sm.
   uint64_t blocksPerSm(uint64_t threadsPerBlock) const;
 
-  // Calibration (CUDA_PLAN.md §4.1). Load the gpu_kernel_times JSON; look a
-  // kernel up by mangled name and total thread count (log-log interpolation
-  // over the samples, clamped at the ends). `found` is false when the kernel
-  // is absent, so the caller falls back to the roofline.
+  // Optional gpu_kernel_times JSON; log-log interpolation, roofline fallback.
   void loadCalibration(const std::string& path);
   double kernelTimeFromTable(const std::string& name, uint64_t totalThreads,
                              bool& found) const;
   void warnTableMiss(const std::string& name);
 
-  // Transfer time (seconds): D2D uses HBM bandwidth; H2D/D2H/Default/H2H use
-  // the PCIe latency + bandwidth model.
+  // Transfer time: D2D uses HBM bandwidth; other kinds use PCIe latency + bandwidth.
   double transferTime(uint64_t bytes, int kind) const;
 
   // Roofline params (SI base units: flop/s, byte/s, seconds), read from params.
@@ -143,23 +121,19 @@ class GpuLibrary : public GpuComputeAPI, public Library
   bool table_loaded_;
   std::set<std::string> warned_; // kernels already warned as table-missing
 
-  // Cumulative modeled GPU work on this rank (seconds; sums across streams, so
-  // with overlap it exceeds wall time -- it is a busy-time total, not latency).
+  // Cumulative modeled GPU busy time (sums across streams, not wall time).
   double total_gpu_time_;
 
-  // Per-stream "busy-until" timelines (the §9 design): the default stream and a
-  // cursor per explicit handle; events capture a stream cursor at record time.
+  // Per-stream busy-until cursors; events capture a stream tail at record time.
   Timestamp default_until_;
   std::map<void*, Timestamp> streams_;
   std::map<void*, Timestamp> events_;
 
-  // Per-rank device-pointer cookie bump-allocator (CUDA_PLAN.md D6): high
-  // canonical-invalid-ish base so an accidental host dereference faults loudly.
+  // Device-pointer cookie bump-allocator in a reserved high address range.
   uint64_t cookie_next_;
   uint64_t cookie_end_;
 
-  // Trivial id space shared by streams and events (handles are never
-  // dereferenced by the model; they only need to be distinct and non-null).
+  // Shared handle id space for streams and events (distinct, never dereferenced).
   uint64_t next_handle_;
 
   // Accounting (reported in the destructor; see the .cc).

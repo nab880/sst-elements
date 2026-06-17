@@ -22,12 +22,8 @@
 
 namespace SST::Iris::sumi {
 
-// Ring all-reduce (WS2-2a): reduce-scatter + all-gather, 2(nproc-1) steps of
-// nelems/nproc each, all traffic to the nearest neighbours (rank +/- 1). This is
-// the bandwidth-optimal counterpart to the latency-optimal recursive-doubling
-// WilkeHalvingAllreduce: more steps, but every message is small and local, so
-// under a real fabric the two cross over with scale and message size. Selectable
-// at runtime so a study can compare them on the same packet-level network.
+// Ring all-reduce (WS2-2a): reduce-scatter + all-gather over rank +/- 1.
+// Bandwidth-optimal counterpart to WilkeHalvingAllreduce; select via SUMI_ALLREDUCE_ALG.
 class RingAllreduceActor :
   public DagCollectiveActor
 {

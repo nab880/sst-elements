@@ -13,12 +13,7 @@
 // information, see the LICENSE file in the top level directory of the
 // distribution.
 
-// The sst_hg_cuda_* ABI bridge. The CUDA source-to-source rewriter
-// (sst-hgcc) emits calls to these symbols; they must resolve from libhg at
-// skeleton load (CUDA_PLAN.md §5, "like MPI"), so this translation unit is
-// built into libhg -- not the loadable GpuLibrary module. Each entry point
-// forwards to the per-rank GpuLibrary via its abstract base, modeled on the
-// pthread bridge (hg_pthread.cc) and the ComputeAPI split.
+// sst_hg_cuda_* ABI bridge in libhg; forwards to per-rank GpuLibrary (like pthread/MPI).
 
 #include <mercury/libraries/gpu/hg_cuda.h>
 #include <mercury/libraries/gpu/gpu_api.h>
@@ -28,8 +23,7 @@ namespace {
 
 SST::Hg::GpuComputeAPI* gpu()
 {
-  // Aborts with "Library GpuLibrary not found" if the app did not declare
-  // "gpulibrary:GpuLibrary" in its libraries list -- same contract as MPI.
+  // Aborts if the app did not declare "gpulibrary:GpuLibrary" in its libraries list.
   return SST::Hg::Thread::current()->getLibrary<SST::Hg::GpuComputeAPI>("GpuLibrary");
 }
 

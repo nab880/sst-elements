@@ -20,15 +20,7 @@
 namespace SST {
 namespace Hg {
 
-// Reassembly key for the per-NIC completion queue (RecvCQ). flowId is only
-// unique per sender, so at high collective fan-in two senders can reuse the same
-// flowId into one NIC; keyed by flowId alone their packets co-mingle in one
-// reassembly slot and bytes_arrived overshoots the message length ("couldn't get
-// a flow"). Folding the source in keeps each in-flight message's slot private.
-//
-// Layout: source in the top 16 bits, flowId in the low 48. The source bound is
-// asserted by the caller (see kFlowKeyMaxSrc) so an over-scale run fails loudly
-// rather than silently colliding by shifting source bits out of range.
+// NIC reassembly key: source in top 16 bits, flowId in low 48 (flowId alone collides at fan-in).
 constexpr uint64_t kFlowKeyMaxSrc = 0xFFFFull;       // 16-bit source field
 constexpr uint64_t kFlowKeyIdMask = 0xFFFFFFFFFFFFull; // low 48 bits
 
