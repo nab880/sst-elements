@@ -67,6 +67,13 @@ GpuLibrary::GpuLibrary(SST::Params& params, App* parent)
   launch_overhead_ =
       params.find<SST::UnitAlgebra>("gpu_kernel_launch_overhead", "1us").getValue().toDouble();
 
+  // Wave / tile quantization (WS1-1b). sm_count_ == 0 disables it, so the model
+  // is the smooth roofline unless a device SM count is given. The occupancy cap
+  // bounds resident blocks per SM by both the thread budget and a hard block cap.
+  sm_count_ = params.find<uint64_t>("gpu_sm_count", 0);
+  max_threads_per_sm_ = params.find<uint64_t>("gpu_max_threads_per_sm", 2048);
+  max_blocks_per_sm_ = params.find<uint64_t>("gpu_max_blocks_per_sm", 32);
+
   // Optional measured calibration table; absent -> pure roofline.
   std::string calFile = params.find<std::string>("gpu_kernel_times", "");
   if (!calFile.empty()) loadCalibration(calFile);
@@ -83,19 +90,46 @@ GpuLibrary::~GpuLibrary()
       << " total_gpu_time=" << total_gpu_time_ << " s" << std::endl;
 }
 
+uint64_t
+GpuLibrary::blocksPerSm(uint64_t threadsPerBlock) const
+{
+  if (threadsPerBlock == 0) return 1;
+  uint64_t byThreads = max_threads_per_sm_ / threadsPerBlock; // occupancy cap
+  uint64_t bps = std::min<uint64_t>(byThreads, max_blocks_per_sm_);
+  return bps < 1 ? 1 : bps;
+}
+
 double
-GpuLibrary::kernelTime(uint64_t totalThreads, uint64_t flopsPerThread,
-                       uint64_t intopsPerThread, uint64_t bytesReadPerThread,
+GpuLibrary::kernelTime(uint64_t blocks, uint64_t threadsPerBlock,
+                       uint64_t flopsPerThread, uint64_t intopsPerThread,
+                       uint64_t bytesReadPerThread,
                        uint64_t bytesWrittenPerThread) const
 {
-  double threads = static_cast<double>(totalThreads);
+  double threads =
+      static_cast<double>(blocks) * static_cast<double>(threadsPerBlock);
   double flopsTotal =
       static_cast<double>(flopsPerThread + intopsPerThread) * threads;
   double bytesTotal =
       static_cast<double>(bytesReadPerThread + bytesWrittenPerThread) * threads;
   double computeT = peak_flops_ > 0.0 ? flopsTotal / peak_flops_ : 0.0;
   double memT = mem_bandwidth_ > 0.0 ? bytesTotal / mem_bandwidth_ : 0.0;
-  return launch_overhead_ + std::max(computeT, memT);
+  double smooth = std::max(computeT, memT);
+
+  // Wave / tile quantization (WS1-1b): thread blocks run in waves across the
+  // SMs -- concurrent = sm_count * blocks_per_sm run at once -- so the wall time
+  // is ceil(blocks/concurrent) waves even when the last wave is partial. The
+  // penalty is the actual wave count over the ideal fractional waves: >= 1, and
+  // == 1 exactly when the blocks tile the machine evenly. A kernel too small to
+  // fill the GPU (blocks < concurrent) is penalized for underutilization -- the
+  // staircase a smooth roofline cannot show. sm_count_ == 0 leaves penalty == 1.
+  double penalty = 1.0;
+  if (sm_count_ > 0 && blocks > 0 && threadsPerBlock > 0) {
+    double concurrent = static_cast<double>(sm_count_)
+                      * static_cast<double>(blocksPerSm(threadsPerBlock));
+    double idealWaves = static_cast<double>(blocks) / concurrent;
+    if (idealWaves > 0.0) penalty = std::ceil(idealWaves) / idealWaves;
+  }
+  return launch_overhead_ + smooth * penalty;
 }
 
 void
@@ -270,8 +304,9 @@ GpuLibrary::launch(const char* kernelName,
                    uint64_t bytesRead, uint64_t bytesWritten)
 {
   ++launch_count_;
-  uint64_t totalThreads = static_cast<uint64_t>(gx) * gy * gz
-                        * static_cast<uint64_t>(bx) * by * bz;
+  uint64_t blocks = static_cast<uint64_t>(gx) * gy * gz;
+  uint64_t threadsPerBlock = static_cast<uint64_t>(bx) * by * bz;
+  uint64_t totalThreads = blocks * threadsPerBlock;
 
   // Calibration table first (the accurate, measured path); roofline otherwise.
   std::string name = kernelName ? kernelName : "";
@@ -279,7 +314,7 @@ GpuLibrary::launch(const char* kernelName,
   double t = kernelTimeFromTable(name, totalThreads, fromTable);
   if (!fromTable) {
     if (table_loaded_) warnTableMiss(name);
-    t = kernelTime(totalThreads, flops, intops, bytesRead, bytesWritten);
+    t = kernelTime(blocks, threadsPerBlock, flops, intops, bytesRead, bytesWritten);
   }
   enqueue(stream, t);
 }

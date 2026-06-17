@@ -91,13 +91,18 @@ class GpuLibrary : public GpuComputeAPI, public Library
   // The busy-until cursor for a stream handle (default stream for 0).
   Timestamp& cursorFor(void* stream);
 
-  // Roofline kernel time (seconds): launch_overhead + max(compute, memory)
-  // where compute = totalFlops/peak_flops and memory = totalBytes/mem_bandwidth,
-  // scaled by the total thread count. The intops term is folded into flops for
-  // now (the rewriter reports both; a separate int-rate is a later refinement).
-  double kernelTime(uint64_t totalThreads, uint64_t flopsPerThread,
-                    uint64_t intopsPerThread, uint64_t bytesReadPerThread,
+  // Roofline kernel time (seconds): launch_overhead + max(compute, memory) over
+  // the total thread count (blocks * threadsPerBlock), then scaled by the wave-
+  // quantization penalty (WS1-1b). The intops term is folded into flops for now
+  // (the rewriter reports both; a separate int-rate is a later refinement).
+  double kernelTime(uint64_t blocks, uint64_t threadsPerBlock,
+                    uint64_t flopsPerThread, uint64_t intopsPerThread,
+                    uint64_t bytesReadPerThread,
                     uint64_t bytesWrittenPerThread) const;
+
+  // Resident thread blocks per SM for occupancy: the thread budget
+  // (max_threads_per_sm / threadsPerBlock) capped by the hard block limit, >= 1.
+  uint64_t blocksPerSm(uint64_t threadsPerBlock) const;
 
   // Calibration (CUDA_PLAN.md §4.1). Load the gpu_kernel_times JSON; look a
   // kernel up by mangled name and total thread count (log-log interpolation
@@ -118,6 +123,11 @@ class GpuLibrary : public GpuComputeAPI, public Library
   double pcie_latency_;
   double pcie_bandwidth_;
   double launch_overhead_;
+
+  // Wave-quantization params (WS1-1b). sm_count_ == 0 disables the penalty.
+  uint64_t sm_count_;
+  uint64_t max_threads_per_sm_;
+  uint64_t max_blocks_per_sm_;
 
   // Calibration table: mangled kernel name -> samples sorted by thread count.
   // Empty (and table_loaded_ false) unless gpu_kernel_times names a file.

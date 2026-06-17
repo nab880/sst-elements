@@ -120,6 +120,9 @@ class HgOS(TemplateBase):
                                            "gpu_kernel_launch_overhead",
                                            "gpu_kernel_times",
                                            "gpu_direct",
+                                           "gpu_sm_count",
+                                           "gpu_max_threads_per_sm",
+                                           "gpu_max_blocks_per_sm",
                                           ],
                                           "app1.")
         self._subscribeToPlatformParamSet("operating_system")
