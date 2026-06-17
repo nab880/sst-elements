@@ -65,6 +65,10 @@ echo "=== ColdFire mcf5208evb hello (m68k) ==="
 $M68K_CC $M68K_FLAGS coldfire_startup.S coldfire_hello.c -o coldfire_hello
 echo "  -> coldfire_hello"
 
+echo "=== ColdFire mcf5208evb serial monitor (m68k) ==="
+$M68K_CC $M68K_FLAGS coldfire_startup.S coldfire_monitor.c -o coldfire_monitor
+echo "  -> coldfire_monitor"
+
 echo "=== ARM Cortex-M7 hello ==="
 $ARM_CC $ARM_CFLAGS -T link_arm_m7.ld -Wl,--build-id=none \
   arm_m7_startup.S arm_m7_hello.c -o arm_m7_hello
