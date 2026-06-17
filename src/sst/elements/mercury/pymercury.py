@@ -123,6 +123,8 @@ class HgOS(TemplateBase):
                                            "gpu_sm_count",
                                            "gpu_max_threads_per_sm",
                                            "gpu_max_blocks_per_sm",
+                                           "gpu_tensor_peak_flops",
+                                           "gpu_tensor_kernels",
                                           ],
                                           "app1.")
         self._subscribeToPlatformParamSet("operating_system")

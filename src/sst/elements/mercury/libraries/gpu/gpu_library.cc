@@ -24,6 +24,7 @@
 #include <external/json.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <fstream>
 #include <iostream>
@@ -58,6 +59,25 @@ GpuLibrary::GpuLibrary(SST::Params& params, App* parent)
   // (e.g. "900GB/s", "1us"); peak_flops is a bare flop/s rate (no SI unit for
   // "flop"), default 10 TFLOP/s.
   peak_flops_ = params.find<double>("gpu_peak_flops", 1.0e13);
+  // Tensor-core peak for the dual roofline (WS1-1a). Defaults to the CUDA-core
+  // peak so an unset value leaves behaviour unchanged. Kernels named in
+  // gpu_tensor_kernels (comma-separated mangled names, parallel to the
+  // calibration table) are charged against this peak instead of peak_flops_.
+  tensor_peak_flops_ = params.find<double>("gpu_tensor_peak_flops", peak_flops_);
+  {
+    std::string names = params.find<std::string>("gpu_tensor_kernels", "");
+    size_t i = 0;
+    while (i < names.size()) {
+      size_t j = names.find(',', i);
+      if (j == std::string::npos) j = names.size();
+      // trim surrounding spaces
+      size_t a = i, b = j;
+      while (a < b && std::isspace((unsigned char)names[a])) ++a;
+      while (b > a && std::isspace((unsigned char)names[b - 1])) --b;
+      if (b > a) tensor_kernels_.insert(names.substr(a, b - a));
+      i = j + 1;
+    }
+  }
   mem_bandwidth_ =
       params.find<SST::UnitAlgebra>("gpu_mem_bandwidth", "900GB/s").getValue().toDouble();
   pcie_latency_ =
@@ -100,9 +120,9 @@ GpuLibrary::blocksPerSm(uint64_t threadsPerBlock) const
 }
 
 double
-GpuLibrary::kernelTime(uint64_t blocks, uint64_t threadsPerBlock,
-                       uint64_t flopsPerThread, uint64_t intopsPerThread,
-                       uint64_t bytesReadPerThread,
+GpuLibrary::kernelTime(double computePeak, uint64_t blocks,
+                       uint64_t threadsPerBlock, uint64_t flopsPerThread,
+                       uint64_t intopsPerThread, uint64_t bytesReadPerThread,
                        uint64_t bytesWrittenPerThread) const
 {
   double threads =
@@ -111,7 +131,7 @@ GpuLibrary::kernelTime(uint64_t blocks, uint64_t threadsPerBlock,
       static_cast<double>(flopsPerThread + intopsPerThread) * threads;
   double bytesTotal =
       static_cast<double>(bytesReadPerThread + bytesWrittenPerThread) * threads;
-  double computeT = peak_flops_ > 0.0 ? flopsTotal / peak_flops_ : 0.0;
+  double computeT = computePeak > 0.0 ? flopsTotal / computePeak : 0.0;
   double memT = mem_bandwidth_ > 0.0 ? bytesTotal / mem_bandwidth_ : 0.0;
   double smooth = std::max(computeT, memT);
 
@@ -314,7 +334,12 @@ GpuLibrary::launch(const char* kernelName,
   double t = kernelTimeFromTable(name, totalThreads, fromTable);
   if (!fromTable) {
     if (table_loaded_) warnTableMiss(name);
-    t = kernelTime(blocks, threadsPerBlock, flops, intops, bytesRead, bytesWritten);
+    // Dual roofline (WS1-1a): tensor-core kernels are charged against the
+    // tensor peak, everything else against the CUDA-core peak.
+    double computePeak =
+        tensor_kernels_.count(name) ? tensor_peak_flops_ : peak_flops_;
+    t = kernelTime(computePeak, blocks, threadsPerBlock, flops, intops,
+                   bytesRead, bytesWritten);
   }
   enqueue(stream, t);
 }
