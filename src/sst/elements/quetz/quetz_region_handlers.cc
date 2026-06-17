@@ -172,3 +172,46 @@ MmioForwardRegionHandler::onWrite(const QuetzCommand& , QuetzCoreStats& )
 {
     return Action::FORWARD_MMIO;
 }
+
+TestFinisherRegionHandler::TestFinisherRegionHandler(ComponentId_t id, Params& params)
+    : BoundedRegionHandler(id, params),
+      pass_value_(params.find<uint32_t>("pass_value", 0x5555u)),
+      wrote_(false),
+      last_value_(0)
+{}
+
+MemRegionHandler::Action
+TestFinisherRegionHandler::onRead(const QuetzCommand& , QuetzCoreStats& stats)
+{
+    // Reads to the finisher are harmless; never end the sim on a read.
+    stats.filtered_reads->addData(1);
+    return Action::CONSUME;
+}
+
+MemRegionHandler::Action
+TestFinisherRegionHandler::onWrite(const QuetzCommand& cmd, QuetzCoreStats& stats)
+{
+    // Record the low 32 bits (assembled little-endian) for the finish() log;
+    // the value is cosmetic — the write itself ends the simulation.
+    uint32_t val = 0;
+    uint32_t n = cmd.size < 4 ? cmd.size : 4;
+    for (uint32_t i = 0; i < n; ++i)
+        val |= static_cast<uint32_t>(cmd.data[i]) << (8 * i);
+    last_value_ = val;
+    wrote_      = true;
+    stats.filtered_writes->addData(1);
+    return Action::END_SIM;
+}
+
+void TestFinisherRegionHandler::finish(SST::Output* out, uint32_t core_id)
+{
+    if (!wrote_)
+        return;
+    // Accept either byte order for the PASS check (the guest may be big-endian,
+    // e.g. ColdFire), since last_value_ was assembled little-endian.
+    uint32_t swapped = __builtin_bswap32(last_value_);
+    bool pass = (last_value_ == pass_value_) || (swapped == pass_value_);
+    out->output("TESTFINISH[%" PRIu32 "]: guest signalled completion, "
+                "value=0x%" PRIx32 " (%s)\n",
+                core_id, last_value_, pass ? "PASS" : "FAIL");
+}

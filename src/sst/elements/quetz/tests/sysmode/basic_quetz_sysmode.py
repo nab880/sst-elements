@@ -31,11 +31,12 @@ def _parse_addr(s):
     return int(s, 16) if s.startswith("0x") or s.startswith("0X") else int(s)
 
 _LEGACY_TYPE = {
-    "filtered":  "quetz.FilteredRegionHandler",
-    "uart":      "quetz.UartRegionHandler",
-    "memory":    "quetz.ForwardRegionHandler",
-    "mmio":      "quetz.MmioForwardRegionHandler",
-    "gpu_trace": "quetz.GpuTraceRegionHandler",
+    "filtered":   "quetz.FilteredRegionHandler",
+    "uart":       "quetz.UartRegionHandler",
+    "memory":     "quetz.ForwardRegionHandler",
+    "mmio":       "quetz.MmioForwardRegionHandler",
+    "gpu_trace":  "quetz.GpuTraceRegionHandler",
+    "testfinish": "quetz.TestFinisherRegionHandler",
 }
 
 sst_home   = _sst_home()
@@ -104,6 +105,7 @@ for n in range(rh_count):
         "DOORBELL_OFFSET": "doorbell_offset",
         "STATUS_OFFSET":   "status_offset",
         "MAX_PAYLOAD_LOG": "max_payload_log",
+        "PASS_VALUE":      "pass_value",
     }
     for env_key, param_name in _rh_extra_params.items():
         val = os.environ.get(pfx + env_key, "")

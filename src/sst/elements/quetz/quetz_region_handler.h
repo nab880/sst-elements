@@ -33,6 +33,7 @@ public:
         FORWARD,       // pass through cache_link_N (cache-line split)
         FORWARD_MMIO,  // pass through mmio_link_N (no cache-line split)
         CONSUME,       // handled locally; do not issue StandardMem
+        END_SIM,       // handled locally; halt the core and end the simulation
     };
 
     MemRegionHandler(ComponentId_t id, Params& params)
