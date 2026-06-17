@@ -148,8 +148,7 @@ MpiApi::MpiApi(SST::Params& params, SST::Hg::App* app) :
   double test_delay_s = params.find<SST::UnitAlgebra>("test_delay", "1us").getValue().toDouble();
   test_delay_us_ = test_delay_s * 1e6;
 
-  // GPU-aware MPI knob (CUDA_PLAN.md §4.3). pcie_* default to the GpuLibrary's
-  // defaults so a platform that sets them once is consistent across both.
+  // GPU-aware MPI: pcie_* defaults match GpuLibrary for platform consistency.
   gpu_direct_ = params.find<bool>("gpu_direct", false);
   pcie_latency_ =
     params.find<SST::UnitAlgebra>("pcie_latency", "1us").getValue().toDouble();
@@ -170,9 +169,7 @@ MpiApi::MpiApi(SST::Params& params, SST::Hg::App* app) :
 void
 MpiApi::stageDeviceBuffer(const void* buf, int count, MPI_Datatype datatype)
 {
-  // When GPUDirect is on, an MPI buffer that lives in device memory goes
-  // straight to the NIC; when off, it must be staged through host memory, a
-  // PCIe cost on the host critical path (D2H before a send, H2D after a recv).
+  // Without gpu_direct_, device buffers are staged via host memory (PCIe on send/recv path).
   if (gpu_direct_ || buf == nullptr) return;
   if (!sst_hg_cuda_is_device_ptr(buf)) return;
   uint64_t bytes = static_cast<uint64_t>(count)

@@ -59,8 +59,7 @@ RingAllreduceActor::initDag()
     return;
   }
 
-  // One contiguous chunk per rank; the remainder is spread over the first
-  // `rem` chunks so the sizes sum to nelems_ exactly.
+  // One chunk per rank; spread remainder over the first rem chunks.
   std::vector<int> off(N), cnt(N);
   int base = nelems_ / N, rem = nelems_ % N, o = 0;
   for (int c = 0; c < N; ++c){
@@ -84,8 +83,7 @@ RingAllreduceActor::initDag()
     prev_recv = recv_ac;
   };
 
-  // Reduce-scatter: N-1 rounds. At round r send chunk (me-r) to the right and
-  // receive chunk (me-r-1) from the left, reducing it into the result buffer.
+  // Reduce-scatter: N-1 rounds; send chunk (me-r) right, recv (me-r-1) left.
   for (int r = 0; r < N - 1; ++r){
     int send_chunk = ((me - r) % N + N) % N;
     int recv_chunk = ((me - r - 1) % N + N) % N;
@@ -98,8 +96,7 @@ RingAllreduceActor::initDag()
     chain(send_ac, recv_ac);
   }
 
-  // All-gather: N-1 rounds (rounds N-1 .. 2N-3). At round r send the chunk just
-  // completed (me-r+1) to the right and copy chunk (me-r) in from the left.
+  // All-gather: N-1 rounds; send chunk (me-r+1) right, copy chunk (me-r) left.
   for (int r = 0; r < N - 1; ++r){
     int my_round   = (N - 1) + r;
     int send_chunk = ((me - r + 1) % N + N) % N;

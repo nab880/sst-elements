@@ -588,9 +588,7 @@ CollectiveEngine::allreduce(void* dst, void *src, int nelems, int type_size, int
     coll = new DoNothingCollective(this, tag, cq_id, comm);
     intra_bcast->setSubsequent(coll);
   } else {
-    // Algorithm selectable for the collective-algorithm study (WS2-2a): ring is
-    // bandwidth-optimal/neighbour-local, recursive-doubling is latency-optimal.
-    // Read once; default keeps the historical recursive-doubling.
+    // SUMI_ALLREDUCE_ALG=ring selects ring; default is recursive-doubling.
     static const bool use_ring = [](){
       const char* a = getenv("SUMI_ALLREDUCE_ALG");
       return a && (std::string(a) == "ring");

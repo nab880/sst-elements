@@ -13,14 +13,8 @@
 // information, see the LICENSE file in the top level directory of the
 // distribution.
 
-// Regression for the NIC reassembly-key fix (components/nic.cc): flowId is only
-// unique per sender, so two senders reusing one flowId into the same NIC must not
-// co-mingle in the completion queue. recvCqFlowKey() folds the source in to keep
-// each in-flight message's reassembly slot private.
-//
-// Dependency-free (just <mercury/hardware/common/flow_key.h>), so it builds and
-// runs without the full SST stack:
-//   c++ -std=c++17 -I src/sst/elements flow_key_test.cc -o flow_key_test && ./flow_key_test
+// Regression for recvCqFlowKey(): (src, flowId) keys prevent CQ co-mingling at fan-in.
+// Build: c++ -std=c++17 -I src/sst/elements flow_key_test.cc -o flow_key_test && ./flow_key_test
 
 #include <mercury/hardware/common/flow_key.h>
 
@@ -34,15 +28,12 @@ using SST::Hg::kFlowKeyMaxSrc;
 
 namespace {
 
-// A minimal stand-in for RecvCQ's byte accounting: accumulate per key and report
-// completion when the arrived bytes reach the message total.
+// Minimal RecvCQ stand-in: accumulate bytes per key until the message total is reached.
 struct MiniCQ {
   struct Slot { uint64_t arrived = 0; uint64_t total = 0; };
   std::map<uint64_t, Slot> slots;
 
-  // Returns true exactly when this packet completes its message. Aborts (via the
-  // overshoot assert) if accounting ever exceeds the total -- the real NIC turns
-  // that into the "couldn't get a flow" fatal.
+  // True when this packet completes the message; overshoot means co-mingled keys.
   bool recv(uint64_t key, uint64_t bytes, uint64_t total) {
     auto& s = slots[key];
     s.total = total;
@@ -52,9 +43,7 @@ struct MiniCQ {
   }
 };
 
-// Replays the failing scenario: two senders (src 0 and src 1) each send a
-// 3-packet, 300-byte message that happens to share flowId 57, packets
-// interleaved as they would arrive at one NIC under heavy fan-in.
+// Two senders share flowId 57; interleaved packets must not co-mingle in one slot.
 void test_collision_resolved_by_source() {
   MiniCQ cq;
   const uint64_t flowId = 57;
@@ -86,13 +75,11 @@ void test_key_layout() {
   assert((recvCqFlowKey(kFlowKeyMaxSrc, 0) >> 48) == kFlowKeyMaxSrc);
 }
 
-// Sanity that the old, broken keying (flowId alone) would have co-mingled --
-// documents what the fix prevents. Here a shared slot overshoots its total.
+// flowId-only keying co-mingles senders and overshoots the message total.
 void test_old_keying_would_overshoot() {
   MiniCQ cq;
   const uint64_t total = 300, pkt = 100;
-  // Both senders key by flowId alone -> same slot. After 4 of the 6 packets the
-  // shared slot has 400 > 300: the overshoot the real NIC aborted on.
+  // Shared slot hits 400 > 300 after four interleaved packets.
   bool overshoot = false;
   auto& s = cq.slots[57];
   for (int i = 0; i < 4; ++i) { s.total = total; s.arrived += pkt; }

@@ -55,14 +55,9 @@ GpuLibrary::GpuLibrary(SST::Params& params, App* parent)
       launch_count_(0),
       memcpy_count_(0)
 {
-  // Roofline params (CUDA_PLAN.md §4). Bandwidths/latencies carry units
-  // (e.g. "900GB/s", "1us"); peak_flops is a bare flop/s rate (no SI unit for
-  // "flop"), default 10 TFLOP/s.
+  // Roofline params from SST params (peak_flops has no SI unit).
   peak_flops_ = params.find<double>("gpu_peak_flops", 1.0e13);
-  // Tensor-core peak for the dual roofline (WS1-1a). Defaults to the CUDA-core
-  // peak so an unset value leaves behaviour unchanged. Kernels named in
-  // gpu_tensor_kernels (comma-separated mangled names, parallel to the
-  // calibration table) are charged against this peak instead of peak_flops_.
+  // Tensor-core peak (WS1-1a); gpu_tensor_kernels names use tensor_peak_flops_.
   tensor_peak_flops_ = params.find<double>("gpu_tensor_peak_flops", peak_flops_);
   {
     std::string names = params.find<std::string>("gpu_tensor_kernels", "");
@@ -87,9 +82,7 @@ GpuLibrary::GpuLibrary(SST::Params& params, App* parent)
   launch_overhead_ =
       params.find<SST::UnitAlgebra>("gpu_kernel_launch_overhead", "1us").getValue().toDouble();
 
-  // Wave / tile quantization (WS1-1b). sm_count_ == 0 disables it, so the model
-  // is the smooth roofline unless a device SM count is given. The occupancy cap
-  // bounds resident blocks per SM by both the thread budget and a hard block cap.
+  // Wave quantization (WS1-1b); sm_count_ == 0 disables the penalty.
   sm_count_ = params.find<uint64_t>("gpu_sm_count", 0);
   max_threads_per_sm_ = params.find<uint64_t>("gpu_max_threads_per_sm", 2048);
   max_blocks_per_sm_ = params.find<uint64_t>("gpu_max_blocks_per_sm", 32);
@@ -106,9 +99,7 @@ GpuLibrary::GpuLibrary(SST::Params& params, App* parent)
 
 GpuLibrary::~GpuLibrary()
 {
-  // Library::finish() is never invoked by the OS, but app teardown deletes
-  // every library (app.cc), so the per-rank summary is emitted here. The test
-  // greps this line for a nonzero total_gpu_time.
+  // Per-rank summary on teardown (Library::finish() is not called by the OS).
   uint64_t footprint = cookie_end_ - kCookieBase;   // high-water; free() is a no-op
   parent()->coutStream()
       << "[gpu] rank summary: launches=" << launch_count_
@@ -151,13 +142,7 @@ GpuLibrary::kernelTime(double computePeak, uint64_t blocks,
   double memT = mem_bandwidth_ > 0.0 ? bytesTotal / mem_bandwidth_ : 0.0;
   double smooth = std::max(computeT, memT);
 
-  // Wave / tile quantization (WS1-1b): thread blocks run in waves across the
-  // SMs -- concurrent = sm_count * blocks_per_sm run at once -- so the wall time
-  // is ceil(blocks/concurrent) waves even when the last wave is partial. The
-  // penalty is the actual wave count over the ideal fractional waves: >= 1, and
-  // == 1 exactly when the blocks tile the machine evenly. A kernel too small to
-  // fill the GPU (blocks < concurrent) is penalized for underutilization -- the
-  // staircase a smooth roofline cannot show. sm_count_ == 0 leaves penalty == 1.
+  // Wave penalty: ceil(blocks/concurrent) / ideal fractional waves (WS1-1b).
   double penalty = 1.0;
   if (sm_count_ > 0 && blocks > 0 && threadsPerBlock > 0) {
     double concurrent = static_cast<double>(sm_count_)
@@ -284,17 +269,14 @@ GpuLibrary::enqueue(void* stream, double seconds)
   if (seconds < 0.0) seconds = 0.0;
   total_gpu_time_ += seconds;
   if (stream == nullptr) {
-    // Default stream (legacy): a full barrier. Wait for all outstanding GPU
-    // work, charge the cost synchronously on the host, then every cursor is
-    // idle at the new now().
+    // Default stream: barrier all GPU work, charge on host, reset cursors.
     blockUntil(maxCursor());
     if (seconds > 0.0) parent()->os()->blockTimeout(TimeDelta(seconds));
     Timestamp n = now();
     default_until_ = n;
     for (auto& kv : streams_) kv.second = n;
   } else {
-    // Async: advance just this stream's cursor relative to now(); the host
-    // thread is NOT blocked, so this work overlaps whatever the host does next.
+    // Async stream: advance cursor without blocking the host thread.
     Timestamp& cur = cursorFor(stream);
     Timestamp start = now() > cur ? now() : cur;
     cur = start + TimeDelta(seconds);
@@ -350,8 +332,7 @@ GpuLibrary::launch(const char* kernelName,
   double t = kernelTimeFromTable(name, totalThreads, fromTable);
   if (!fromTable) {
     if (table_loaded_) warnTableMiss(name);
-    // Dual roofline (WS1-1a): tensor-core kernels are charged against the
-    // tensor peak, everything else against the CUDA-core peak.
+    // Dual roofline (WS1-1a): tensor kernels use tensor_peak_flops_.
     double computePeak =
         tensor_kernels_.count(name) ? tensor_peak_flops_ : peak_flops_;
     t = kernelTime(computePeak, blocks, threadsPerBlock, flops, intops,
@@ -387,8 +368,7 @@ GpuLibrary::eventCreate()
 void
 GpuLibrary::eventRecord(void* evt, void* stream)
 {
-  // The event fires when the stream reaches its current tail (or now() if the
-  // stream is already idle). Default stream: when all outstanding work drains.
+  // Event timestamp is the stream tail (or now() if idle).
   Timestamp tail = (stream == nullptr) ? maxCursor() : cursorFor(stream);
   Timestamp n = now();
   events_[evt] = (tail > n) ? tail : n;
