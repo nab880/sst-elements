@@ -19,9 +19,16 @@ fft.o: fft.cu
 fft.objdump: fft
 	objdump -Mno-aliases -Mnumeric --disassemble-all --disassemble-zeroes $< > $@
 
+# Double-precision build of the same kernels (built on demand, not in `all`).
+fft_double: fft_double.o
+	$(CXX) -O3 --cudart shared -o fft_double fft_double.o
+
+fft_double.o: fft.cu
+	$(CXX) $(CXXFLAGS) -DFFT_DOUBLE -O3 -o fft_double.o -c fft.cu
+
 all: vectorAdd fft
 
 clean:
-	rm -f vectorAdd vectorAdd.o fft fft.o
+	rm -f vectorAdd vectorAdd.o fft fft.o fft_double fft_double.o
 
 

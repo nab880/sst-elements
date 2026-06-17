@@ -20,8 +20,8 @@ doubles as a correctness assertion and a dropped-launch detector.
 ## Files
 | File | Role |
 |---|---|
-| `balar_trace/fft.cu` | staged kernels (`fft_bitrev`, `fft_stage`) + a single-block `fft_shared`, and a `main()` that drives the staged path |
-| `balar_trace/fft_reference.py` | host twin: validates impulse/DC bit-exactness, emits `.data` + `.trace`, and the firmware twiddle header |
+| `balar_trace/fft.cu` | `fft_bitrev` + `fft_stage` + `fft_scale` kernels and a single-block `fft_shared`; `main()` modes `staged`/`shared`/`roundtrip`; precision-generic (`-DFFT_DOUBLE`) |
+| `balar_trace/fft_reference.py` | host twin: bit-exact impulse/DC + tone/round-trip validation; emits `.data`/`.trace`/firmware header; `--compare` (tolerance, `--roundtrip`), `--double` |
 | `traces/fft_{impulse,dc}_256.trace`, `traces/fft_*_256.data`, `traces/fft_tw_128.data` | replay artifacts (committed for N=256) |
 | `testBalar-fft.py`, `testQuetz-balar-fft.py` | trace-replay SDLs |
 | `fft_stats_report.py` | tabulates SST stats for staged-vs-shared / N-sweep / trace-vs-sysmode |
@@ -61,6 +61,27 @@ FFT_DUMP=1 sst testQuetz-balar-fft.py --model-options=\
 python3 balar_trace/fft_reference.py -n 256 --compare cudamemcpyD2H-sim-*-size-2048.data --kind tone
 # -> rel-L2 ~1e-7, peak bin = k0 (TONE_BIN)  => PASS
 ```
+
+## Inverse FFT round-trip (self-consistent accuracy check)
+`IFFT(FFT(x)) ≈ x` exercises every twiddle and needs no external reference — the
+gold is the input itself. The inverse reuses the same kernels with conjugated
+twiddles (`fft_twc`) plus an `fft_scale` by 1/N.
+```sh
+FFT_DUMP=1 sst testQuetz-balar-fft.py --model-options=\
+"-c gpu-v100-mem.cfg -s rt.stats -x ./balar_trace/fft -t traces/fft_roundtrip_256.trace -v 0"
+python3 balar_trace/fft_reference.py -n 256 --compare cudamemcpyD2H-sim-*-size-2048.data --kind tone --roundtrip
+# -> recovery rel-L2 ~1e-7 (float)  => PASS
+```
+
+## Precision and accuracy-vs-N
+- **Double precision:** `make -C balar_trace fft_double` builds the same kernels
+  with `double2`; generate matching artifacts with `fft_reference.py --double`
+  and point the SDL `-x` at `fft_double`. Recovery/forward error drops from
+  ~1e-7 to ~1e-15 (precision/throughput tradeoff — double is much slower on
+  GPGPU-Sim).
+- **Accuracy vs N:** `run_fft_sweep.sh` reports the tone rel-L2 at each N
+  alongside the perf stats (float32 error grows slowly, ~1.0e-7→1.5e-7 over
+  N=256→16384, near the float32 floor).
 
 ## Phase B — Quetz QEMU sysmode guest
 ```sh
