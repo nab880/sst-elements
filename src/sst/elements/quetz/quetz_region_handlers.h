@@ -157,6 +157,35 @@ public:
     Action onWrite(const QuetzCommand& cmd, QuetzCoreStats& stats) override;
 };
 
+class TestFinisherRegionHandler : public BoundedRegionHandler {
+public:
+    SST_ELI_REGISTER_SUBCOMPONENT(
+        TestFinisherRegionHandler,
+        "quetz",
+        "TestFinisherRegionHandler",
+        SST_ELI_ELEMENT_VERSION(1, 0, 0),
+        "Arch-agnostic test finisher: a guest store to this range halts the "
+        "core and ends the simulation (Action::END_SIM). For machines with no "
+        "QEMU exit device (e.g. ColdFire mcf5208evb has no SiFive finisher).",
+        SST::Quetz::MemRegionHandler)
+
+    SST_ELI_DOCUMENT_PARAMS(
+        { "start",      "Inclusive region start address.", "0" },
+        { "end",        "Inclusive region end address.",   "0" },
+        { "pass_value", "Value (low 32 bits) the guest writes to signal PASS.", "0x5555" })
+
+    TestFinisherRegionHandler(ComponentId_t id, Params& params);
+
+    Action onRead(const QuetzCommand& cmd, QuetzCoreStats& stats) override;
+    Action onWrite(const QuetzCommand& cmd, QuetzCoreStats& stats) override;
+    void   finish(SST::Output* out, uint32_t core_id) override;
+
+private:
+    uint32_t pass_value_;
+    bool     wrote_;
+    uint32_t last_value_;
+};
+
 } // namespace Quetz
 } // namespace SST
 

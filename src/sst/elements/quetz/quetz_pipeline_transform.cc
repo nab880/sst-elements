@@ -44,6 +44,11 @@ public:
         if (cmd.cmd == QUETZ_CMD_EXIT)
             return Result::HALT_EXIT;
 
+        // Arch-agnostic test finisher: a guest store to an END_SIM region halts
+        // the core (the filter leaves it unconsumed so it reaches us here).
+        if (region_action == MemRegionHandler::Action::END_SIM)
+            return Result::HALT_EXIT;
+
         if (ev.remaining_stall > 0) {
             ev.remaining_stall--;
             if (cmd.cmd == QUETZ_CMD_NOP)
