@@ -60,8 +60,12 @@ exe = os.environ.get("QUETZ_EXE", "")
 qemu_bin = os.environ.get("QUETZ_QEMU", "")
 plugin = os.environ.get(
     "QUETZ_PLUGIN", os.path.join(sst_home, "libexec", "libqemu_sst_plugin.so"))
+# Use `-serial stdio` (not `-nographic`): -nographic muxes the QEMU monitor onto
+# the serial (mon:stdio), which starves UART RX delivery so the interactive
+# monitor never receives typed commands. `-display none -serial stdio` wires
+# UART0 straight to stdio and RX works reliably.
 qemu_args = os.environ.get(
-    "QUETZ_QEMU_ARGS", "-machine mcf5208evb -nographic -m 128M")
+    "QUETZ_QEMU_ARGS", "-machine mcf5208evb -display none -serial stdio -m 128M")
 loader = os.environ.get("QUETZ_LOADER", "-kernel")
 stdin_file = os.environ.get("QUETZ_STDIN_FILE", "")
 stdout_file = os.environ.get("QUETZ_STDOUT_FILE", "")
