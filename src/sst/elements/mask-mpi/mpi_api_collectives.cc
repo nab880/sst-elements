@@ -840,14 +840,10 @@ MpiApi::ireduce(int count, MPI_Datatype type, MPI_Op op, int root, MPI_Comm comm
 Iris::sumi::CollectiveDoneMessage*
 MpiApi::startReduceScatter(CollectiveOp* op)
 {
-  SST::Hg::abort("sumi::reduce_scatter");
-
   Iris::sumi::reduce_fxn fxn = getCollectiveFunction(op);
-  return nullptr;
-  //transport::allreduce(op->tmp_recvbuf, op->tmp_sendbuf, op->sendcnt,
-  //                     op->sendtype->packed_size(), op->tag,
-  //                     fxn, false, options::initial_context, op->comm);
-
+  return engine_->reduceScatter(op->tmp_recvbuf, op->tmp_sendbuf, op->sendcnt,
+                                op->sendtype->packed_size(), op->tag, fxn,
+                                queue_->collCqId(), op->comm);
 }
 
 CollectiveOpBase::ptr
@@ -912,15 +908,16 @@ MpiApi::ireduceScatter(int *recvcnts, MPI_Datatype type,
 }
 
 CollectiveOpBase::ptr
-MpiApi::startReduceScatterBlock(const char*  /*name*/, MPI_Comm  /*comm*/, int  /*count*/, MPI_Datatype type,
+MpiApi::startReduceScatterBlock(const char*  /*name*/, MPI_Comm comm, int count, MPI_Datatype type,
                                     MPI_Op mop, const void* src, void* dst)
 {
-  SST::Hg::abort("sumi::reduce_scatter: not implemented");
-
-  CollectiveOp::ptr op;
+  // Block variant: every rank contributes the full array (count per rank x nproc)
+  // and keeps its reduced chunk. The collective operates on the full array.
+  int total = count * getComm(comm)->size();
+  auto op = CollectiveOp::create(total, total, getComm(comm));
+  op->op = mop;
   startMpiCollective(Collective::reduce_scatter, src, dst, type, type, op.get());
   auto* msg = startReduceScatter(op.get());
-  op->op = mop;
   if (msg){
     op->complete = true;
     delete msg;

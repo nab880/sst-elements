@@ -48,10 +48,7 @@ Questions? Contact sst-macro-help@sandia.gov
 //#include <sprockit/output.h>
 #include <mercury/common/stl_string.h>
 #include <cstring>
-
-#define divide_by_2_round_up(x) ((x/2) + (x%2))
-
-#define divide_by_2_round_down(x) (x/2)
+#include <vector>
 
 //using namespace sprockit::dbg;
 
@@ -60,17 +57,59 @@ namespace SST::Iris::sumi {
 void
 HalvingReduceScatterActor::finalizeBuffers()
 {
+  long buffer_size = nelems_ * type_size_;
+  my_api_->freeWorkspace(recv_buffer_, buffer_size);
 }
 
 void
 HalvingReduceScatterActor::initBuffers()
 {
+  void* dst = result_buffer_;
+  void* src = send_buffer_;
+  int size = nelems_ * type_size_;
+  result_buffer_ = dst;
+  if (src != dst)
+    my_api_->memcopy(dst, src, size);
+  recv_buffer_ = my_api_->allocateWorkspace(size, src);
+  send_buffer_ = result_buffer_;
 }
 
 void
 HalvingReduceScatterActor::initDag()
 {
-  SST::Hg::abort("halving_reduce_scatter: not implemented");
+  slicer_->fxn = fxn_;
+
+  const int N = dom_nproc_;
+  const int me = dom_me_;
+  if (N <= 1){ num_rounds_ = 0; return; }
+
+  // Ring reduce-scatter: the reduce phase of a ring all-reduce. N-1 rounds; each
+  // rank sends chunk (me-r) right and reduces chunk (me-r-1) from the left, so
+  // every rank ends owning the fully-reduced chunk me. Same bytes/steps as the
+  // all-gather dual (the bandwidth-optimal reduce-scatter).
+  std::vector<int> off(N), cnt(N);
+  int base = nelems_ / N, rem = nelems_ % N, o = 0;
+  for (int c = 0; c < N; ++c){ cnt[c] = base + (c < rem ? 1 : 0); off[c] = o; o += cnt[c]; }
+
+  const int right = (me + 1) % N;
+  const int left  = (me - 1 + N) % N;
+  Action* prev_send = nullptr;
+  Action* prev_recv = nullptr;
+  for (int r = 0; r < N - 1; ++r){
+    int send_chunk = ((me - r) % N + N) % N;
+    int recv_chunk = ((me - r - 1) % N + N) % N;
+    Action* send_ac = new SendAction(r, right, SendAction::in_place);
+    send_ac->offset = off[send_chunk]; send_ac->nelems = cnt[send_chunk];
+    Action* recv_ac = new RecvAction(r, left, RecvAction::reduce);
+    recv_ac->offset = off[recv_chunk]; recv_ac->nelems = cnt[recv_chunk];
+    addDependency(prev_send, send_ac);
+    addDependency(prev_send, recv_ac);
+    addDependency(prev_recv, send_ac);
+    addDependency(prev_recv, recv_ac);
+    prev_send = send_ac;
+    prev_recv = recv_ac;
+  }
+  num_rounds_ = N - 1;
 }
 
 bool
@@ -80,8 +119,9 @@ HalvingReduceScatterActor::isLowerPartner(int  /*virtual_me*/, int  /*partner_ga
 }
 
 void
-HalvingReduceScatterActor::bufferAction(void * /*dst_buffer*/, void * /*msg_buffer*/, Action* /*ac*/)
+HalvingReduceScatterActor::bufferAction(void *dst_buffer, void *msg_buffer, Action* ac)
 {
+  (fxn_)(dst_buffer, msg_buffer, ac->nelems);
 }
 
 }
