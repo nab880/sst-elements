@@ -45,7 +45,7 @@ echo "  -> $BINDIR/gpu_trace_user"
 # overlay-built qemu-<arch> with -sst-mmio-range). RV64 round-trips are built
 # both non-compressed (rv64g, exercises the base decoder) and compressed
 # (rv64gc, exercises the RVC decoder). The balar programs reuse the sysmode
-# marshalling headers.
+# marshalling headers. m68k has no glibc-dev in the image, so build freestanding.
 FW="$SRCDIR/../../sysmode/firmware"
 BALAR_INC="$SRCDIR/../../../../balar"
 
@@ -60,6 +60,22 @@ echo "=== rv64_mmio_roundtrip_rvc (rv64gc, compressed) ==="
 echo "=== rv64_balar_user ==="
 "$CC" -static -O2 -march=rv64gc -mabi=lp64d -Wall -I"$FW" -I"$BALAR_INC" \
     "$SRCDIR/rv64_balar_user.c" -o "$BINDIR/rv64_balar_user"
+
+M68K_CC="${M68K_CC:-m68k-linux-gnu-gcc}"
+if command -v "$M68K_CC" >/dev/null 2>&1; then
+    M68K_FLAGS="-static -nostdlib -ffreestanding -O2 -Wall"
+    echo "=== m68k_mmio_roundtrip ==="
+    "$M68K_CC" $M68K_FLAGS "$SRCDIR/m68k_mmio_roundtrip.c" \
+        -o "$BINDIR/m68k_mmio_roundtrip"
+    echo "=== m68k_balar_user ==="
+    "$M68K_CC" $M68K_FLAGS -I"$FW" "$SRCDIR/m68k_balar_user.c" \
+        -o "$BINDIR/m68k_balar_user"
+    echo "=== m68k_balar_async_user ==="
+    "$M68K_CC" $M68K_FLAGS -I"$FW" "$SRCDIR/m68k_balar_async_user.c" \
+        -o "$BINDIR/m68k_balar_async_user"
+else
+    echo "warning: $M68K_CC not found; skipping m68k P6 binaries" >&2
+fi
 
 echo ""
 echo "User-mode GPU test binaries built successfully."
