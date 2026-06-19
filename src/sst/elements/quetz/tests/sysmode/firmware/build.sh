@@ -11,10 +11,16 @@ ARM_CC="${ARM_CC:-arm-none-eabi-gcc}"
 ARM_AS="${ARM_AS:-arm-none-eabi-as}"
 ARM_LD="${ARM_LD:-arm-none-eabi-gcc}"
 X86_CC="${X86_CC:-x86_64-linux-gnu-gcc}"
+M68K_CC="${M68K_CC:-m68k-linux-gnu-gcc}"
 
 RV64_FLAGS="-march=rv64gc -mabi=lp64d -O2 -mcmodel=medany \
   -nostdlib -nostartfiles -ffreestanding -mno-relax \
   -T link_rv64.ld -Wl,--build-id=none"
+
+# NXP ColdFire MCF5208 (big-endian m68k), QEMU mcf5208evb.
+M68K_FLAGS="-mcpu=5208 -O2 \
+  -nostdlib -nostartfiles -ffreestanding \
+  -T link_m68k.ld -Wl,--build-id=none"
 
 ARM_CFLAGS="-mcpu=cortex-m7 -mthumb -O2 \
   -nostdlib -nostartfiles -ffreestanding"
@@ -70,6 +76,22 @@ if [ -f "$FFT_REF" ]; then
 fi
 $RV64_CC $RV64_FLAGS riscv_virt_balar_fft.c -o riscv_virt_balar_fft
 echo "  -> riscv_virt_balar_fft"
+
+echo "=== ColdFire mcf5208evb hello (m68k) ==="
+$M68K_CC $M68K_FLAGS coldfire_startup.S coldfire_hello.c -o coldfire_hello
+echo "  -> coldfire_hello"
+
+echo "=== ColdFire mcf5208evb serial monitor (m68k) ==="
+$M68K_CC $M68K_FLAGS coldfire_startup.S coldfire_monitor.c -o coldfire_monitor
+echo "  -> coldfire_monitor"
+
+echo "=== ColdFire mcf5208evb balar vectorAdd (m68k) ==="
+$M68K_CC $M68K_FLAGS coldfire_startup.S coldfire_gpu.c -o coldfire_gpu
+echo "  -> coldfire_gpu"
+
+echo "=== ColdFire mcf5208evb balar vectorAdd ASYNC (m68k, P4) ==="
+$M68K_CC $M68K_FLAGS coldfire_startup.S coldfire_gpu_async.c -o coldfire_gpu_async
+echo "  -> coldfire_gpu_async"
 
 echo "=== ARM Cortex-M7 hello ==="
 $ARM_CC $ARM_CFLAGS -T link_arm_m7.ld -Wl,--build-id=none \
