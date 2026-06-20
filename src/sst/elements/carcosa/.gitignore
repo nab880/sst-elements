@@ -1,0 +1,8 @@
+tests/pingpong
+
+tests/*.log
+tests/stdout-*
+tests/stderr-*
+tests/tmp/
+
+*.bak

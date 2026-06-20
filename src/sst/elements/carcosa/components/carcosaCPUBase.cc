@@ -1,8 +1,8 @@
-// Copyright 2009-2026 NTESS. Under the terms
+// Copyright 2009-2024 NTESS. Under the terms
 // of Contract DE-NA0003525 with NTESS, the U.S.
 // Government retains certain rights in this software.
 //
-// Copyright (c) 2009-2026, NTESS
+// Copyright (c) 2009-2024, NTESS
 // All rights reserved.
 //
 // Portions are copyright of other developers:
@@ -177,7 +177,7 @@ bool CarcosaCPUBase::clockTic(Cycle_t)
 {
     if (clock_ticks % 1000 == 0) {
 #ifdef __SST_DEBUG_OUTPUT__
-        out.output("test1 open from carcosa\n");
+        out.output("test1 open from Carcosa\n");
 #endif
         Carcosa::CpuEvent *ev = new Carcosa::CpuEvent("test1.txt", 0, 200);
         HaliLink->send(ev);
@@ -188,7 +188,7 @@ bool CarcosaCPUBase::clockTic(Cycle_t)
         memory->send(req);
     } else if (clock_ticks % 500 == 0) {
 #ifdef __SST_DEBUG_OUTPUT__
-        out.output("test2 open from carcosa\n");
+        out.output("test2 open from Carcosa\n");
 #endif
         Carcosa::CpuEvent *ev = new Carcosa::CpuEvent("test2.txt", 0, 200);
         HaliLink->send(ev);

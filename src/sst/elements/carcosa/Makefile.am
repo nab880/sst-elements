@@ -11,6 +11,14 @@ comp_LTLIBRARIES = libcarcosa.la
 libcarcosa_la_SOURCES =                     \
     components/hali.cc                      \
     components/hali.h                       \
+    components/eccGuard.cc                  \
+    components/eccGuard.h                   \
+    components/criticalActionWatcher.cc     \
+    components/criticalActionWatcher.h      \
+    components/eccScheme.h                  \
+    components/eccPolicy.h                  \
+    components/actionScorer.cc              \
+    components/actionScorer.h               \
     components/faultInjManager.cc           \
     components/faultInjManager.h            \
     injectors/faultInjectorBase.cc          \
@@ -25,6 +33,8 @@ libcarcosa_la_SOURCES =                     \
     injectors/randomFlipFaultInjector.h     \
     injectors/dropFlipFaultInjector.cc      \
     injectors/dropFlipFaultInjector.h       \
+    injectors/portModuleStateGate.cc        \
+    injectors/portModuleStateGate.h         \
     injectors/faultInjectorMemH.cc          \
     injectors/faultInjectorMemH.h           \
     faultlogic/faultBase.cc                 \
@@ -50,19 +60,34 @@ libcarcosa_la_SOURCES =                     \
     components/faultInjEvent.h              \
     components/faultInjManagerAPI.h         \
     components/interceptionAgentAPI.h       \
+    components/hyadesProtocol.h             \
+    components/pipelineStateRegistry.h      \
     components/pingPongAgent.cc             \
     components/pingPongAgent.h              \
+    components/fourStateAgent.cc            \
+    components/fourStateAgent.h             \
+    components/vlaRegions.h                 \
     components/carcosaMemCtrl.cc            \
     components/carcosaMemCtrl.h             \
     components/sensorComponent.cc           \
-    components/sensorComponent.h           \
+    components/sensorComponent.h            \
     components/sensorEvent.h                \
-    components/haliEvent.h
+    components/haliEvent.h                  \
+    examples/SimplePipeline/simplePipelineExample.cc \
+    examples/SimplePipeline/simplePipelineExample.h \
+    examples/MmioControl/mmioControlExample.cc \
+    examples/MmioControl/mmioControlExample.h
 
 EXTRA_DIST = \
     hyades.h                                      \
     tests/pingpong.c                              \
-    tests/testcarcosaPingPong.py                  \
+    tests/fourstate.c                             \
+    tests/testCarcosaPingPong.py                  \
+    tests/testFourStateRegistry.py                \
+    tests/testFourStateRegistryGated.py           \
+    examples/SimplePipeline/tests/testSimplePipeline.py \
+    examples/SimplePipeline/tests/testPortModuleStateGate.py \
+    examples/MmioControl/tests/testMmioControl.py \
     tests/testCorruptMemBasic.py                  \
     tests/testCorruptMemDouble.py                 \
     tests/testCorruptMemDoubleOverlap.py          \
@@ -73,11 +98,11 @@ EXTRA_DIST = \
     tests/testStuckAtOverlap.py                   \
     tests/testStuckAtSameByte.py                  \
     tests/mhlib.py                                \
-    tests/testdynamicPM.py                        \
-    tests/testhaliBacking.py                      \
-    tests/testhaliMemH.py                         \
-    tests/testhaliPM.py                           \
-    tests/testmanagerLogic.py
+    tests/testDynamicPM.py                        \
+    tests/testHaliBacking.py                      \
+    tests/testHaliMemH.py                         \
+    tests/testHaliPM.py                           \
+    tests/testManagerLogic.py
 
 sstdir = $(includedir)/sst/elements/carcosa
 nobase_sst_HEADERS =                        \
@@ -87,6 +112,7 @@ nobase_sst_HEADERS =                        \
     injectors/randomDropFaultInjector.h     \
     injectors/randomFlipFaultInjector.h     \
     injectors/dropFlipFaultInjector.h       \
+    injectors/portModuleStateGate.h         \
     injectors/faultInjectorMemH.h           \
     faultlogic/faultBase.h                  \
     faultlogic/stuckAtFault.h               \
@@ -95,12 +121,23 @@ nobase_sst_HEADERS =                        \
     faultlogic/randomFlipFault.h            \
     faultlogic/randomFlipMemHFault.h        \
     components/pmDataRegistry.h             \
-    components/faultInjManagerAPI.h        \
-    components/interceptionAgentAPI.h      \
-    components/pingPongAgent.h
+    components/eccScheme.h                  \
+    components/eccPolicy.h                  \
+    components/eccGuard.h                   \
+    components/criticalActionWatcher.h      \
+    components/actionScorer.h               \
+    components/faultInjManagerAPI.h         \
+    components/interceptionAgentAPI.h       \
+    components/hyadesProtocol.h             \
+    components/pipelineStateRegistry.h      \
+    components/pingPongAgent.h              \
+    components/fourStateAgent.h             \
+    components/haliEvent.h                  \
+    examples/SimplePipeline/simplePipelineExample.h \
+    examples/MmioControl/mmioControlExample.h \
+    components/vlaRegions.h
 
 libcarcosa_la_LDFLAGS = -module -avoid-version
-libcarcosa_la_LIBADD =
 
 AM_CPPFLAGS += $(HMC_FLAG)
 install-exec-hook:
