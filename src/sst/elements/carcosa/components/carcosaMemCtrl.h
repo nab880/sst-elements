@@ -1,8 +1,8 @@
-// Copyright 2009-2026 NTESS. Under the terms
+// Copyright 2009-2025 NTESS. Under the terms
 // of Contract DE-NA0003525 with NTESS, the U.S.
 // Government retains certain rights in this software.
 //
-// Copyright (c) 2009-2026, NTESS
+// Copyright (c) 2009-2025, NTESS
 // All rights reserved.
 //
 // Portions are copyright of other developers:
@@ -91,9 +91,9 @@ public:
     typedef uint64_t ReqId;
 
     CarcosaMemCtrl(ComponentId_t id, Params &params);
-    void init(unsigned int phase) override;
-    void setup() override;
-    void complete(unsigned int phase) override;
+    virtual void init(unsigned int phase) override;
+    virtual void setup() override;
+    virtual void complete(unsigned int phase) override;
     void finish() override;
 
     virtual void handleMemResponse( SST::Event::id_type id, uint32_t flags );
