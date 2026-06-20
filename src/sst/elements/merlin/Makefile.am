@@ -63,10 +63,6 @@ libmerlin_la_SOURCES = \
 	hr_router/xbar_arb_rr.h \
 	trafficgen/trafficgen.h \
 	trafficgen/trafficgen.cc \
-	inspectors/circuitCounter.h \
-	inspectors/circuitCounter.cc \
-	inspectors/testInspector.cc \
-	inspectors/testInspector.h \
 	interfaces/linkControl.h \
 	interfaces/linkControl.cc \
 	interfaces/portControl.h \
