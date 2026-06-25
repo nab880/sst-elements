@@ -101,6 +101,20 @@ class FabricMessage : public SST::Iris::sumi::Message {
     context_ = ctx;
   }
 
+  // Clone the *derived* FabricMessage (not the base Message) for the injection
+  // ack. The base SST::Iris::sumi::Message::cloneInjectionAck() does
+  // `new Message(*this)`, which slices off the FabricMessage fields
+  // (context_/tag_/flags_/imm_data_). The send-completion ack would then carry a
+  // garbage op_context, so MVAPICH2's OFI netmod (which matches the send request
+  // by the context it passed to fi_tsend) never completes the send for any
+  // needs-ack message (>inject_size), deadlocking. Preserving the derived fields
+  // here lets fi_cq_read report the correct op_context on the send CQ.
+  SST::Hg::NetworkMessage* cloneInjectionAck() const override {
+    auto* cln = new FabricMessage(*this);
+    cln->convertToAck();
+    return cln;
+  }
+
  private:
   uint64_t flags_;
   uint64_t imm_data_;
