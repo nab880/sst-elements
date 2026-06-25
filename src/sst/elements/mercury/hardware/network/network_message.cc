@@ -163,6 +163,9 @@ NetworkMessage::matchRecv(void *recv_buffer)
       if (isNonNullBuffer(smsg_buffer_) && isNonNullBuffer(recv_buffer)){
         ::memcpy(recv_buffer, smsg_buffer_, payload_bytes_);
         delete[] (char*) smsg_buffer_;
+        // null it so the destructor (and any later matchRecv) does not
+        // double-free the now-consumed eager payload buffer.
+        smsg_buffer_ = nullptr;
       }
       break;
     default:

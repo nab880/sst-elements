@@ -284,13 +284,20 @@ extern "C" DIRECT_FN  int sumi_cq_open(struct fid_domain *domain, struct fi_cq_a
   return FI_SUCCESS;
 }
 
-void RecvQueue::finishMatch(void* buf, uint32_t size, FabricMessage *msg)
+void RecvQueue::finishMatch(void* buf, uint32_t size, FabricMessage *msg, void* recv_context)
 {
   //found a match
   if (size >= msg->payloadBytes()){
-    if (buf && msg->localBuffer()){
+    // posted_send (MVAPICH2 fi_tsend/fi_tinject) carries its eager payload in
+    // smsg_buffer_, with local_buffer_ == nullptr; smsg_send (sumi-native)
+    // carries it in local_buffer_. matchRecv copies from whichever applies, so
+    // gate on either being present rather than local_buffer_ alone.
+    if (buf && (msg->localBuffer() || msg->smsgBuffer())){
       msg->matchRecv(buf);
     }
+    // libfabric semantics: the receive completion must report the op_context
+    // supplied to fi_recv/fi_trecv, not the incoming (sender's) context.
+    msg->setContext(recv_context);
     progress.incoming(msg);
   } else {
     delete msg;
@@ -303,7 +310,7 @@ void RecvQueue::matchTaggedRecv(FabricMessage* msg){
     auto tmp = it++;
     TaggedRecv& r = *tmp;
     if (srcMatches(r.src_rank, msg) && matches(msg, r.tag, r.tag_ignore)){
-      finishMatch(r.buf, r.size, msg);
+      finishMatch(r.buf, r.size, msg, r.context);
       tagged_recvs.erase(tmp);
       return;
     }
@@ -312,32 +319,33 @@ void RecvQueue::matchTaggedRecv(FabricMessage* msg){
 }
 
 void RecvQueue::postRecv(uint32_t size, void* buf, uint64_t tag,
-                         uint64_t tag_ignore, bool tagged, uint32_t src_rank){
+                         uint64_t tag_ignore, bool tagged, uint32_t src_rank,
+                         void* context){
   if (tagged){
     // it++ in body so we can erase tmp
     for (auto it = unexp_tagged_recvs.begin(); it != unexp_tagged_recvs.end(); ){
       auto tmp = it++;
       FabricMessage* msg = *tmp;
       if (srcMatches(src_rank, msg) && matches(msg, tag, tag_ignore)){
-        finishMatch(buf, size, msg);
+        finishMatch(buf, size, msg, context);
         unexp_tagged_recvs.erase(tmp);
         return;
       }
     }
     //nothing matched
-    tagged_recvs.emplace_back(size, buf, tag, tag_ignore, src_rank);
+    tagged_recvs.emplace_back(size, buf, tag, tag_ignore, src_rank, context);
   } else {
     // it++ in body so we can erase tmp
     for (auto it = unexp_recvs.begin(); it != unexp_recvs.end(); ){
       auto tmp = it++;
       FabricMessage* msg = *tmp;
       if (srcMatches(src_rank, msg)){
-        finishMatch(buf, size, msg);
+        finishMatch(buf, size, msg, context);
         unexp_recvs.erase(tmp);
         return;
       }
     }
-    recvs.emplace_back(size, buf, src_rank);
+    recvs.emplace_back(size, buf, src_rank, context);
   }
 }
 
@@ -352,7 +360,7 @@ void RecvQueue::incoming(SST::Iris::sumi::Message* msg){
         auto tmp = it++;
         Recv& r = *tmp;
         if (srcMatches(r.src_rank, fmsg)){
-          finishMatch(r.buf, r.size, fmsg);
+          finishMatch(r.buf, r.size, fmsg, r.context);
           recvs.erase(tmp);
           return;
         }

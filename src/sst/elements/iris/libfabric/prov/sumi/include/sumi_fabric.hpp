@@ -94,6 +94,13 @@ class FabricMessage : public SST::Iris::sumi::Message {
     return context_;
   }
 
+  // On a receive match, the completion must report the op_context supplied to
+  // fi_recv/fi_trecv (the receiver's context), not the incoming message's
+  // (sender's) context. RecvQueue::finishMatch sets it before delivery.
+  void setContext(void* ctx) {
+    context_ = ctx;
+  }
+
  private:
   uint64_t flags_;
   uint64_t imm_data_;
