@@ -99,6 +99,14 @@ class FabricMessage : public SST::Iris::sumi::Message {
     context_ = ctx;
   }
 
+  // Clone the derived FabricMessage; the base cloneInjectionAck() does
+  // `new Message(*this)`, slicing off context_/tag_/flags_/imm_data_.
+  SST::Hg::NetworkMessage* cloneInjectionAck() const override {
+    auto* cln = new FabricMessage(*this);
+    cln->convertToAck();
+    return cln;
+  }
+
  private:
   uint64_t flags_;
   uint64_t imm_data_;
