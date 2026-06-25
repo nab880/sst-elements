@@ -127,6 +127,7 @@ App::App(SST::Params& params, SoftwareId sid, OperatingSystemAPI* os) :
 //  compute_lib_(nullptr),
   next_tls_key_(0),
   min_op_cutoff_(0),
+  env_inherit_host_(false),
   globals_storage_(nullptr),
   notify_(true),
   rc_(0),
@@ -147,6 +148,8 @@ App::App(SST::Params& params, SoftwareId sid, OperatingSystemAPI* os) :
   for (auto& key : keys){
     env_[key] = env_params.find<std::string>(key);
   }
+
+  env_inherit_host_ = params.find<bool>("env_inherit_host", false);
 
   std::string stdout_str = params.find<std::string>("stdout", "stdout");
   std::string stderr_str = params.find<std::string>("stderr", "stderr");
@@ -284,7 +287,9 @@ App::getenv(const std::string &name) const
   char* my_buf = const_cast<char*>(env_string_);
   auto iter = env_.find(name);
   if (iter == env_.end()){
-    return nullptr;
+    // Not set via env.* params: only fall back to the host environment when
+    // explicitly opted in (env_inherit_host); otherwise the var is unset.
+    return env_inherit_host_ ? ::getenv(name.c_str()) : nullptr;
   } else {
     auto& val = iter->second;
     if (val.size() >= sizeof(env_string_)){

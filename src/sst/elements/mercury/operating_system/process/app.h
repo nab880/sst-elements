@@ -229,6 +229,10 @@ class App : public Thread
   std::map<std::string, Library*> libraries_;
   std::map<std::string,std::string> env_;
 
+  // When true, getenv() falls back to the host process environment for names
+  // not set via the app's env.* params. Off by default (hermetic simulation).
+  bool env_inherit_host_;
+
   char env_string_[64];
 
   char* globals_storage_;
