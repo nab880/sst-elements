@@ -284,7 +284,13 @@ App::getenv(const std::string &name) const
   char* my_buf = const_cast<char*>(env_string_);
   auto iter = env_.find(name);
   if (iter == env_.end()){
-    return nullptr;
+    // Not set per-app (via app1.env.* SST params); fall back to the host
+    // process environment so ordinary shell env vars reach the simulated app.
+    // This is what real MPI ranks see, and it lets runtime knobs like
+    // MV2_USE_SHMEM_COLL=0 (needed because MVAPICH2's shared-memory collective
+    // path has no real shared memory under Mercury) take effect without a
+    // bespoke param-plumbing path.
+    return ::getenv(name.c_str());
   } else {
     auto& val = iter->second;
     if (val.size() >= sizeof(env_string_)){
