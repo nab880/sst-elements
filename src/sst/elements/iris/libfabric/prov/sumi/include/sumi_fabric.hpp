@@ -94,6 +94,11 @@ class FabricMessage : public SST::Iris::sumi::Message {
     return context_;
   }
 
+  // Override the op_context to the receiver's (set by finishMatch on a match).
+  void setContext(void* ctx) {
+    context_ = ctx;
+  }
+
  private:
   uint64_t flags_;
   uint64_t imm_data_;

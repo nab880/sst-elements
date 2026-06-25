@@ -526,8 +526,9 @@ struct RecvQueue {
     uint32_t size;
     void* buf;
     uint32_t src_rank;
-    Recv(uint32_t s, void* b, uint32_t src) :
-      size(s), buf(b), src_rank(src)
+    void* context;
+    Recv(uint32_t s, void* b, uint32_t src, void* ctx) :
+      size(s), buf(b), src_rank(src), context(ctx)
     {
     }
   };
@@ -538,8 +539,9 @@ struct RecvQueue {
     uint64_t tag;
     uint64_t tag_ignore;
     uint32_t src_rank;
-    TaggedRecv(uint32_t s, void* b, uint64_t t, uint64_t ti, uint32_t src) :
-      size(s), buf(b), tag(t), tag_ignore(ti), src_rank(src)
+    void* context;
+    TaggedRecv(uint32_t s, void* b, uint64_t t, uint64_t ti, uint32_t src, void* ctx) :
+      size(s), buf(b), tag(t), tag_ignore(ti), src_rank(src), context(ctx)
     {
     }
   };
@@ -564,12 +566,12 @@ struct RecvQueue {
 
   SST::Hg::SingleProgressQueue<SST::Iris::sumi::Message> progress;
 
-  void finishMatch(void* buf, uint32_t size, FabricMessage* fmsg);
+  void finishMatch(void* buf, uint32_t size, FabricMessage* fmsg, void* recv_context);
 
   void matchTaggedRecv(FabricMessage* msg);
 
   void postRecv(uint32_t size, void* buf, uint64_t tag, uint64_t tag_ignore,
-                bool tagged, uint32_t src_rank);
+                bool tagged, uint32_t src_rank, void* context);
 
   void incoming(SST::Iris::sumi::Message* msg);
 

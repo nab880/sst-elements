@@ -310,7 +310,7 @@ static ssize_t sstmaci_ep_recv(struct fid_ep* ep, void* buf, size_t len, fi_addr
   uint32_t src_rank = (src_addr == FI_ADDR_UNSPEC)
       ? RecvQueue::ANY_SRC
       : ADDR_RANK(src_addr);
-  rq->postRecv(len, buf, tag, tag_ignore, bool(flags & FI_TAGGED), src_rank);
+  rq->postRecv(len, buf, tag, tag_ignore, bool(flags & FI_TAGGED), src_rank, context);
 
   return 0;
 }
