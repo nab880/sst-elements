@@ -905,12 +905,14 @@ extern "C" DIRECT_FN  int sumi_ep_open(struct fid_domain *domain, struct fi_info
 
 DIRECT_FN STATIC ssize_t sumi_ep_cancel(fid_t fid, void *context)
 {
-  return -FI_ENOSYS;
+  /* No async cancellation is modeled, so there is nothing to abort; report
+   * success rather than -FI_ENOSYS (which MVAPICH2 treats as fatal at finalize). */
+  return FI_SUCCESS;
 }
 
 ssize_t sumi_cancel(fid_t fid, void *context)
 {
-  return -FI_ENOSYS;
+  return FI_SUCCESS;
 }
 
 static int
