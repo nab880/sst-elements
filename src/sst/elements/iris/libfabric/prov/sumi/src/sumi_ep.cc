@@ -905,12 +905,18 @@ extern "C" DIRECT_FN  int sumi_ep_open(struct fid_domain *domain, struct fi_info
 
 DIRECT_FN STATIC ssize_t sumi_ep_cancel(fid_t fid, void *context)
 {
-  return -FI_ENOSYS;
+  /* No asynchronous cancellation is modeled: the simulator has no real
+   * in-flight DMA to abort. Report success (cancel accepted, nothing to do)
+   * rather than -FI_ENOSYS. MVAPICH2's MPID_nem_ofi_cm_finalize() wraps this
+   * fi_cancel in FI_RC and would otherwise treat ENOSYS as a fatal error,
+   * aborting MPI_Finalize; it completes the cancelled request by hand
+   * immediately after, so it does not depend on a CQ cancellation event. */
+  return FI_SUCCESS;
 }
 
 ssize_t sumi_cancel(fid_t fid, void *context)
 {
-  return -FI_ENOSYS;
+  return FI_SUCCESS;
 }
 
 static int
