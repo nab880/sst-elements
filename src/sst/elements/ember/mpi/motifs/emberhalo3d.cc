@@ -146,6 +146,22 @@ bool EmberHalo3DGenerator::generate( std::queue<EmberEvent*>& evQ )
 {
     verbose(CALL_INFO, 1, 0, "loop=%d\n", m_loopIndex );
 
+    // Emit per-iteration halo-exchange latency (rank 0), timed via enQ_getTime
+    // so start/stop are at simulated time; bytes is the per-face message size.
+    if ( m_loopIndex == iterations ) {
+        if ( 0 == rank() ) {
+            double per_iter_us =
+                ((double)(m_stopTime - m_startTime) / (double)iterations) / 1000.0;
+            output("%s: ranks %d, loop %" PRIu32 ", bytes %" PRIu32 ", latency %.3f us\n",
+                   getMotifName().c_str(), size(), iterations,
+                   (uint32_t)(items_per_cell * sizeof_cell * ny * nz), per_iter_us);
+        }
+        return true;
+    }
+    if ( 0 == m_loopIndex ) {
+        enQ_getTime( evQ, &m_startTime );
+    }
+
     	//NetworkSim: record motif start time
     	/*
         if ( 0 == m_loopIndex ) {
@@ -280,12 +296,8 @@ bool EmberHalo3DGenerator::generate( std::queue<EmberEvent*>& evQ )
 
 
     if ( ++m_loopIndex == iterations ) {
-        return true;
-    } else {
-        return false;
+        enQ_getTime( evQ, &m_stopTime );
     }
-
-    //m_loopIndex++;
-    //return false;
+    return false;
 
 }
