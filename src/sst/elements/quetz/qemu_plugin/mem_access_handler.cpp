@@ -68,9 +68,12 @@ void QemuMemAccessHandler::handle(unsigned int vcpu_index,
         }
         store_data = store_buf;
 #else
-        if (!g_system_mode)
-            store_data = reinterpret_cast<const uint8_t*>(
-                static_cast<uintptr_t>(vaddr));
+        // Pre-v4 QEMU has no qemu_plugin_mem_get_value(). The guest virtual
+        // address is NOT a valid host pointer in linux-user mode (guest memory
+        // lives at guest_base + vaddr, and the launcher uses a non-zero
+        // reservation), so dereferencing vaddr would read the wrong host memory
+        // or fault. Leave store data unset rather than fabricating it.
+#warning "QEMU plugin API < 4: store-data capture is unavailable; build against a QEMU with plugin API v4+ for balar packet / store payloads."
 #endif
     }
 

@@ -248,6 +248,11 @@ public:
         { "mmio_truncated_writes",
           "MMIO writes truncated to the QuetzCommand data cap.",
           "requests", 1 },
+        { "cached_truncated_writes",
+          "Cached writes truncated to the QuetzCommand data cap (store payload "
+          "wider than the plugin can carry; trailing bytes are not written "
+          "rather than zero-filled).",
+          "requests", 1 },
         { "mmio_doorbell_flushes",
           "FlushAddr(inv) requests issued before configured balar doorbells.",
           "requests", 1 },
