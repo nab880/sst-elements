@@ -146,6 +146,26 @@ bool EmberHalo3DGenerator::generate( std::queue<EmberEvent*>& evQ )
 {
     verbose(CALL_INFO, 1, 0, "loop=%d\n", m_loopIndex );
 
+    // nsx: report per-iteration halo-exchange latency (rank 0), timed with
+    // enQ_getTime so start/stop are captured at the right *simulated* time
+    // (getCurrentSimTimeMicro() during generate() would measure enqueue time).
+    // The "loop N, bytes B, latency X us" form is what the harness already
+    // parses for the collective motifs, so ember halo3d becomes 3-way too. bytes
+    // is the per-face message size (matches the nsx halo3d / harness size axis).
+    if ( m_loopIndex == iterations ) {
+        if ( 0 == rank() ) {
+            double per_iter_us =
+                ((double)(m_stopTime - m_startTime) / (double)iterations) / 1000.0;
+            output("%s: ranks %d, loop %" PRIu32 ", bytes %" PRIu32 ", latency %.3f us\n",
+                   getMotifName().c_str(), size(), iterations,
+                   (uint32_t)(items_per_cell * sizeof_cell * ny * nz), per_iter_us);
+        }
+        return true;
+    }
+    if ( 0 == m_loopIndex ) {
+        enQ_getTime( evQ, &m_startTime );
+    }
+
     	//NetworkSim: record motif start time
     	/*
         if ( 0 == m_loopIndex ) {
@@ -280,12 +300,8 @@ bool EmberHalo3DGenerator::generate( std::queue<EmberEvent*>& evQ )
 
 
     if ( ++m_loopIndex == iterations ) {
-        return true;
-    } else {
-        return false;
+        enQ_getTime( evQ, &m_stopTime );
     }
-
-    //m_loopIndex++;
-    //return false;
+    return false;
 
 }
