@@ -174,7 +174,8 @@ class BalarTestCase(SSTTestCase):
             self.assertFalse(line_count_diff > 15, "Line count between Stats file {0} does not match Reference File {1}; They contain {2} different lines".format(statsfile, reffile, line_count_diff))
 
     def balar_contract_testcpu_template(
-            self, testcase, sdl_name, trace_name, testtimeout=600, min_d2h_ratio=0.0):
+            self, testcase, sdl_name, trace_name, testtimeout=600, min_d2h_ratio=0.0,
+            cuda_binary="vectorAdd"):
         """Contract test: trace-driven testcpu with completion + optional gold line count."""
         missing_nvcc_path = os.getenv("NVCC_PATH") == None
         self.assertFalse(missing_nvcc_path, "balar contract test: Requires NVCC_PATH.")
@@ -187,7 +188,7 @@ class BalarTestCase(SSTTestCase):
         errfile = "{0}/{1}.err".format(outdir, testDataFileName)
         statsfile = "{0}/{1}.stats_out".format(outdir, testDataFileName)
         sdlfile = "{0}/{1}".format(test_path, sdl_name)
-        vecAddBinary = "{0}/balar_trace/vectorAdd".format(self.testbalarDir)
+        vecAddBinary = "{0}/balar_trace/{1}".format(self.testbalarDir, cuda_binary)
         trace_path = "{0}/traces/{1}".format(self.testbalarDir, trace_name)
         gpuMemCfgfile = "{0}/gpu-v100-mem.cfg".format(self.testbalarDir)
         otherargs = '--model-options=\"-c {0} -s {1} -x {2} -t {3} -v 1"'.format(
@@ -277,7 +278,8 @@ class BalarTestCase(SSTTestCase):
 
     def doorbell_contract_testcpu_template(
             self, testcase, sdl_name, trace_name, testtimeout=600, min_flush_count=0,
-            min_cuda_calls_completed=0, min_d2h_bytes=0, min_d2h_ratio=0.0):
+            min_cuda_calls_completed=0, min_d2h_bytes=0, min_d2h_ratio=0.0,
+            cuda_binary="vectorAdd"):
         """Doorbell-pattern contract test: DoorbellTestCPU with cache_link flush before mmio doorbell."""
         missing_nvcc_path = os.getenv("NVCC_PATH") == None
         self.assertFalse(missing_nvcc_path, "doorbell contract test: Requires NVCC_PATH.")
@@ -289,7 +291,7 @@ class BalarTestCase(SSTTestCase):
         errfile = "{0}/{1}.err".format(outdir, testDataFileName)
         statsfile = "{0}/{1}.stats_out".format(outdir, testDataFileName)
         sdlfile = "{0}/{1}".format(test_path, sdl_name)
-        vecAddBinary = "{0}/balar_trace/vectorAdd".format(self.testbalarDir)
+        vecAddBinary = "{0}/balar_trace/{1}".format(self.testbalarDir, cuda_binary)
         gpuMemCfgfile = "{0}/gpu-v100-mem.cfg".format(self.testbalarDir)
         if trace_name:
             trace_path = "{0}/traces/{1}".format(self.testbalarDir, trace_name)
@@ -585,6 +587,8 @@ class BalarTestCase(SSTTestCase):
             "testDoorbellCPU-doorbell.py",
             "testDoorbellCPU-malloc-free.py",
             "testDoorbellCPU-wide-packet.py",
+            "testBalar-fft.py",
+            "testDoorbellCPU-fft.py",
         ):
             os_symlink_file(test_path, self.testbalarDir, sdl)
         # Copy the shared packet definition files from balar src
@@ -612,6 +616,19 @@ class BalarTestCase(SSTTestCase):
         with open(wide_d2h, "wb") as wf:
             wf.write(wide_data)
 
+        # FFT contract test data: input vectors, twiddles, expected output. The
+        # .trace files are committed; the binary .data is .gitignored and is
+        # generated here (matching the wide-packet pattern above).
+        fft_ref = os.path.join(self.balarElementVectorAddTestDir, "fft_reference.py")
+        fft_cmd = "python3 {0} -n 256 --emit --data-only --outdir {1}".format(
+            fft_ref, self.testbalarTracesDir)
+        rtn = os_command(fft_cmd).run()
+        # Non-fatal: a generator problem should fail only the FFT tests (which
+        # need the .data), not every balar test that shares this setUp.
+        log_debug("FFT .data gen result = {0}; output =\n{1}".format(rtn.result(), rtn.output()))
+        if rtn.result() != 0:
+            log_debug("WARNING: fft_reference.py failed to emit .data; FFT tests will fail")
+
         # Create a simlink of each file in the balar/tests/vanadisHandshake directory
         for f in os.listdir(self.balarElementVanadisHandshakeTestDir):
             os_symlink_file(self.balarElementVanadisHandshakeTestDir, self.testbalarVanadisHandshakeDir, f)
@@ -629,11 +646,11 @@ class BalarTestCase(SSTTestCase):
             log_debug("Balar cudart Make result = {0}; output =\n{1}".format(rtn.result(), rtn.output()))
             self.assertTrue(rtn.result() == 0, "libcudart failed to compile")
 
-        # Now build the vectorAdd example
-        cmd = "make"
+        # Now build the vectorAdd + fft examples (Makefile `all` target)
+        cmd = "make all"
         rtn = os_command(cmd, set_cwd=self.testbalarVectorAddDir).run()
         log_debug("Balar vectorAdd Make result = {0}; output =\n{1}".format(rtn.result(), rtn.output()))
-        self.assertTrue(rtn.result() == 0, "vecAdd.cu failed to compile")
+        self.assertTrue(rtn.result() == 0, "vecAdd.cu/fft.cu failed to compile")
 
         # Build vanadishandshake
 #        cmd = "make"

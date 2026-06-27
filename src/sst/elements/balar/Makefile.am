@@ -64,6 +64,8 @@ EXTRA_DIST = \
 	tests/vanadis_llvm_rv64/vecadd.cu \
 	tests/balar_trace/Makefile \
 	tests/balar_trace/vecAdd.cu \
+	tests/balar_trace/fft.cu \
+	tests/balar_trace/fft_reference.py \
 	tests/balar_trace/cuda_calls.trace \
 	tests/balar_trace/cuMemcpyD2H-0-524288.data \
 	tests/balar_trace/cuMemcpyH2D-0-524288.data \
@@ -81,11 +83,18 @@ EXTRA_DIST = \
 	tests/testDoorbellCPU-doorbell.py \
 	tests/testDoorbellCPU-malloc-free.py \
 	tests/testDoorbellCPU-wide-packet.py \
+	tests/testBalar-fft.py \
+	tests/testDoorbellCPU-fft.py \
 	tests/balar_test_topology.py \
 	tests/traces/doorbell_malloc.trace \
 	tests/traces/malloc_free.trace \
 	tests/traces/wide_memcpy_d2h.trace \
+	tests/traces/fft_impulse_256.trace \
+	tests/traces/fft_dc_256.trace \
 	tests/testsuite_default_balar.py \
+	tests/fft_stats_report.py \
+	tests/run_fft_sweep.sh \
+	tests/README-fft-demo.md \
 	tests/utils.py \
 	tests/vanadisBlock.py \
 	tests/vanadisOS.py
