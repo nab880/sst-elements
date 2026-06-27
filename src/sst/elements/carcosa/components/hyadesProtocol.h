@@ -35,11 +35,11 @@ namespace HyadesAbi {
     static constexpr uint64_t kStatus         = 0x04; // W: completed index (kernel-end / FSM advance)
     static constexpr uint64_t kSeqLen         = 0x08; // R: current sequence length
     static constexpr uint64_t kRole           = 0x10; // R: core role (0 = default)
-    static constexpr uint64_t kRegionBaseLo   = 0x20; // W: staged region base, low 32 bits
-    static constexpr uint64_t kRegionBaseHi   = 0x24; // W: staged region base, high 32 bits
-    static constexpr uint64_t kRegionSize     = 0x28; // W: staged region size
-    static constexpr uint64_t kRegionCommit   = 0x2C; // W: commit staged region into slot N
-    static constexpr uint64_t kActionChecksum = 0x30; // W: per-frame action checksum
+    static constexpr uint64_t kRegionBaseLo   = 0x40;  // W: staged region base, low 32 bits
+    static constexpr uint64_t kRegionBaseHi   = 0x80;  // W: staged region base, high 32 bits
+    static constexpr uint64_t kRegionSize     = 0xC0;  // W: staged region size
+    static constexpr uint64_t kRegionCommit   = 0x100; // W: commit staged region into slot N
+    static constexpr uint64_t kActionChecksum = 0x140; // W: per-frame action checksum
 
     static constexpr int      kExitSentinel   = -1;   // command value meaning "end run"
 }

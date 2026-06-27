@@ -117,10 +117,10 @@
  * each labeled tensor / queue at startup, so EccGuard's region-aware policy
  * can route by the addresses Vanadis actually touches (matched on the
  * MemEvent's preserved virtual address). */
-#define HYADES_REGION_BASE_LO_OFFSET  0x20
-#define HYADES_REGION_BASE_HI_OFFSET  0x24
-#define HYADES_REGION_SIZE_OFFSET     0x28
-#define HYADES_REGION_COMMIT_OFFSET   0x2C
+#define HYADES_REGION_BASE_LO_OFFSET  0x40
+#define HYADES_REGION_BASE_HI_OFFSET  0x80
+#define HYADES_REGION_SIZE_OFFSET     0xC0
+#define HYADES_REGION_COMMIT_OFFSET   0x100
 /* Per-frame action checksum. The workload writes its action_queue (or any
  * other payload that a SilentEscape would corrupt) fold-hashed into 32 bits
  * here, typically at the end of the ACTUATE kernel after forcing the read
@@ -128,7 +128,7 @@
  * and stamps it onto the next PipelineStateBase::FrameRecord::actionChecksum,
  * so the ActionScorer's argmax_changed test compares against a real,
  * Escape-sensitive fingerprint instead of a synthetic counter hash. */
-#define HYADES_ACTION_CHECKSUM_OFFSET 0x30
+#define HYADES_ACTION_CHECKSUM_OFFSET 0x140
 
 #define HYADES_COMMAND  ((volatile int *)(HYADES_MMIO_BASE + HYADES_COMMAND_OFFSET))
 #define HYADES_STATUS   ((volatile int *)(HYADES_MMIO_BASE + HYADES_STATUS_OFFSET))
@@ -176,6 +176,8 @@ static inline void hyades_register_region(int slot,
     *HYADES_REGION_BASE_HI = (unsigned int)((base >> 32) & 0xFFFFFFFFul);
     *HYADES_REGION_SIZE    = (unsigned int)size;
     *HYADES_REGION_COMMIT  = slot;
+    /* Vanadis store buffer does not drain early-startup stores without a fence */
+    __asm__ volatile ("fence iorw, iorw" ::: "memory");
 }
 
 /*
