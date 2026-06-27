@@ -164,8 +164,24 @@ void MemRequestEmitter::issueWrite(uint64_t vaddr, uint32_t size, uint64_t ,
         return;
     }
 
+    // The plugin can only carry kDataCap bytes of store payload in a
+    // QuetzCommand, so bytes beyond that were never captured. Cap the cached
+    // write to the bytes we actually have rather than splitting the access and
+    // zero-filling the trailing cache lines — fabricated zeros would silently
+    // corrupt guest memory (and any balar packet staged in this range).
+    uint32_t issue_size = size;
+    if (size > kDataCap) {
+        stats_.cached_truncated_writes->addData(1);
+        issue_size = kDataCap;
+        output_->verbose(CALL_INFO, 1, 0,
+            "QuetzCore %" PRIu32 " cached WRITE vaddr=0x%016" PRIx64 " size=%"
+            PRIu32 " exceeds plugin data cap %" PRIu32 " — truncating to avoid "
+            "writing fabricated data.\n",
+            core_id_, vaddr, size, kDataCap);
+    }
+
     uint64_t addr        = vaddr;
-    uint32_t remaining   = size;
+    uint32_t remaining   = issue_size;
     uint32_t data_offset = 0;
     uint32_t parts       = 0;
 

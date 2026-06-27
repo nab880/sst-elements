@@ -29,6 +29,7 @@ struct QuetzCoreStats {
     Statistics::Statistic<uint64_t>* mmio_read_lat    = nullptr;
     Statistics::Statistic<uint64_t>* mmio_write_lat   = nullptr;
     Statistics::Statistic<uint64_t>* mmio_truncated_writes = nullptr;
+    Statistics::Statistic<uint64_t>* cached_truncated_writes = nullptr;
     Statistics::Statistic<uint64_t>* mmio_doorbell_flushes = nullptr;
     Statistics::Statistic<uint64_t>* mmio_doorbell_flush_cycles = nullptr;
     Statistics::Statistic<uint64_t>* async_submits     = nullptr;

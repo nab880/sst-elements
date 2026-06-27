@@ -47,11 +47,14 @@ public:
     bool     isHalted()     const { return halted_; }
     uint32_t pendingCount() const { return output_->pendingCount(); }
 
-    // Fully drained: no buffered events and no in-flight memory transactions.
-    // coreQ_ empty after a tick implies the tunnel is drained too — refill()
-    // runs every tick and the issue loop is rate-limited, so a non-empty tunnel
-    // or issue backlog always leaves coreQ_ non-empty.
-    bool     isDrained()    const { return coreQ_.empty() && output_->pendingCount() == 0; }
+    // Fully drained: no buffered events, no in-flight memory transactions, and
+    // the last refill did not stop because the staging queue was full (which
+    // would mean the tunnel may still hold un-issued commands). The cap flag is
+    // re-evaluated every tick, so a backlog drains over successive ticks before
+    // this reports true.
+    bool     isDrained()    const {
+        return coreQ_.empty() && output_->pendingCount() == 0 && !refill_hit_cap_;
+    }
 
 private:
     bool checkMaxInsts();
@@ -65,6 +68,7 @@ private:
 
     uint64_t                  inst_count_;
     bool                      halted_;
+    bool                      refill_hit_cap_;
     std::queue<PipelineEvent> coreQ_;
 };
 

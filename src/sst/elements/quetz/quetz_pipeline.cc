@@ -29,7 +29,8 @@ QuetzEventPipeline::QuetzEventPipeline(QuetzCoreContext& ctx,
       emitter_(ctx.comp, ctx.out, ctx.core_id, ctx.tc,
                ctx.cache_line_size, ctx.check_addresses, *ctx.stats),
       inst_count_(0),
-      halted_(false)
+      halted_(false),
+      refill_hit_cap_(false)
 {
     output_->configure(ctx_, emitter_);
     ctx.out->verbose(CALL_INFO, 1, 0,
@@ -55,6 +56,15 @@ void QuetzEventPipeline::tick() {
         return;
 
     input_->refill(coreQ_, ctx_.max_queue_len, ctx_.out);
+
+    // If refill filled the staging queue to its cap, the tunnel may still hold
+    // more commands that didn't fit. The issue loop below can drain coreQ_ to
+    // empty when max_issue_per_cycle is large, so coreQ_.empty() alone does not
+    // prove the tunnel is exhausted — record the cap-stop so isDrained() does
+    // not declare a false drain (which would let the accelerator port forward a
+    // doorbell before all pre-doorbell packet writes have been issued).
+    refill_hit_cap_ =
+        (ctx_.max_queue_len > 0 && coreQ_.size() >= ctx_.max_queue_len);
 
     uint32_t issued = 0;
     MemOp    op;
