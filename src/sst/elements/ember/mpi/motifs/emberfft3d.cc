@@ -297,6 +297,15 @@ bool EmberFFT3DGenerator::generate( std::queue<EmberEvent*>& evQ )
                 ((double) m_forwardTotal / 1000000000.0) / m_iterations );
             output("%s: rRanks=%d bwd time %f sec\n", getMotifName().c_str(), size(),
                 ((double) m_backwardTotal / 1000000000.0) / m_iterations );
+            // Emit per-iteration (fwd+bwd) latency; bytes is the per-rank FFT
+            // volume (np^3/ranks complex doubles = *16 B) as a size proxy.
+            double per_iter_us =
+                ((double)(m_forwardTotal + m_backwardTotal) / (double)m_iterations) / 1000.0;
+            uint64_t vol_bytes =
+                ((uint64_t)m_data.np0 * m_data.np1 * m_data.np2 / size()) * 16;
+            output("%s: ranks %d, loop %u, bytes %llu, latency %.3f us\n",
+                   getMotifName().c_str(), size(), m_iterations,
+                   (unsigned long long)vol_bytes, per_iter_us);
         }
         return true;
     }

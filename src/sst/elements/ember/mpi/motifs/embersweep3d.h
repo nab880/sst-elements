@@ -99,6 +99,9 @@ private:
 
 	uint32_t nsCompute;
 	uint32_t iterations;
+
+	uint64_t m_startTime;  // per-sweep latency reporting
+	uint64_t m_stopTime;
 };
 
 }

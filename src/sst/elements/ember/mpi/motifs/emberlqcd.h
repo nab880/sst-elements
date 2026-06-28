@@ -119,6 +119,8 @@ private:
 	uint32_t m_loopIndex;
 
 	uint32_t iterations;
+	uint64_t m_startTime;  // per-iteration latency reporting
+	uint64_t m_stopTime;
     // timers to understand comm, comp and overlap
     SimTime_t coll_start;
     SimTime_t coll_time;

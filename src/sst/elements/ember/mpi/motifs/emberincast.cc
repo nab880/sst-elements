@@ -41,9 +41,20 @@ EmberIncastGenerator::EmberIncastGenerator(SST::ComponentId_t id, Params& params
 
 bool EmberIncastGenerator::generate( std::queue<EmberEvent*>& evQ)
 {
+	// Terminal call: the target prints per-iteration incast latency
+	// (start/stop captured via enQ_getTime around the iterations).
 	if( m_currentItr == m_iterations ) {
+		if( rank() == m_incastTarget ) {
+			double per_iter_us =
+				((double)(m_stopTime - m_startTime) / (double)m_iterations) / 1000.0;
+			output("%s: ranks %d, loop %" PRIu32 ", bytes %" PRIu32 ", latency %.3f us\n",
+			       getMotifName().c_str(), size(), m_iterations, m_messageSize, per_iter_us);
+		}
 		return true;
 	} else {
+		if( m_currentItr == 0 && rank() == m_incastTarget ) {
+			enQ_getTime( evQ, &m_startTime );
+		}
 		if( rank() == m_incastTarget ) {
 			int next_index = 0;
 
@@ -64,7 +75,11 @@ bool EmberIncastGenerator::generate( std::queue<EmberEvent*>& evQ)
 		}
 	}
 
-	m_currentItr++;
+	// Capture stop time after the final iteration; the next (terminal)
+	// call prints and returns true.
+	if( ++m_currentItr == m_iterations && rank() == m_incastTarget ) {
+		enQ_getTime( evQ, &m_stopTime );
+	}
 
     	return false;
 }
