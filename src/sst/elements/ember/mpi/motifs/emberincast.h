@@ -77,6 +77,9 @@ private:
     	uint32_t 	  m_currentItr;
 
     	int      	  m_incastTarget;
+
+	uint64_t	  m_startTime;  // nsx: per-iteration incast latency reporting
+	uint64_t	  m_stopTime;
 };
 
 }

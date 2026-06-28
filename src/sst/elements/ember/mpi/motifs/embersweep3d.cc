@@ -95,9 +95,24 @@ void EmberSweep3DGenerator::configure()
 
 bool EmberSweep3DGenerator::generate( std::queue<EmberEvent*>& evQ) {
 
+	// nsx: terminal reporting call -- print per-directional-sweep latency (rank 0)
+	// once all sweeps have completed (start/stop captured via enQ_getTime).
+	if( m_loopIndex == (iterations * 2) ) {
+		if( 0 == rank() ) {
+			uint64_t nsweeps = (uint64_t)iterations * 2 * 4;
+			double per_sweep_us =
+				((double)(m_stopTime - m_startTime) / (double)nsweeps) / 1000.0;
+			output("%s: ranks %d, loop %" PRIu64 ", bytes %" PRIu32 ", latency %.3f us\n",
+			       getMotifName().c_str(), size(), nsweeps,
+			       (uint32_t)(nx * kba * data_width * fields_per_cell), per_sweep_us);
+		}
+		return true;
+	}
+
 	if( 0 == m_loopIndex && 0 == m_InnerLoopIndex ) {
 		configure();
 		verbose(CALL_INFO, 2, MOTIF_MASK, "rank=%d size=%d\n", rank(), size());
+		enQ_getTime( evQ, &m_startTime );
 	}
 
 	//for(uint32_t repeat = 0; repeat < 2; ++repeat) {
@@ -204,7 +219,9 @@ bool EmberSweep3DGenerator::generate( std::queue<EmberEvent*>& evQ) {
 
 	if( ++m_InnerLoopIndex == 4 ) {
     	if ( ++m_loopIndex == (iterations * 2) ) {
-        	return true;
+    		// nsx: capture stop time; the next (terminal) call prints + returns true.
+    		enQ_getTime( evQ, &m_stopTime );
+        	return false;
     	} else {
     		m_InnerLoopIndex = 0;
         	return false;

@@ -304,6 +304,23 @@ void EmberLQCDGenerator::configure()
 bool EmberLQCDGenerator::generate( std::queue<EmberEvent*>& evQ )
 {
     verbose(CALL_INFO, 1, 0, "loop=%d\n", m_loopIndex );
+
+    // nsx: terminal reporting call -- print per-CG-iteration latency (rank 0),
+    // keyed by the X-dim su3vector face size, timed via enQ_getTime.
+    if ( m_loopIndex == iterations ) {
+        if ( 0 == rank() ) {
+            double per_iter_us =
+                ((double)(m_stopTime - m_startTime) / (double)iterations) / 1000.0;
+            output("%s: ranks %d, loop %" PRIu32 ", bytes %d, latency %.3f us\n",
+                   getMotifName().c_str(), size(), iterations,
+                   (int)(sizeof_su3vector * get_transfer_size(XUP)), per_iter_us);
+        }
+        return true;
+    }
+    if ( 0 == m_loopIndex ) {
+        enQ_getTime( evQ, &m_startTime );
+    }
+
 	std::vector<MessageRequest*> pos_requests;
 	std::vector<MessageRequest*> neg_requests;
 
@@ -458,8 +475,9 @@ bool EmberLQCDGenerator::generate( std::queue<EmberEvent*>& evQ )
     //output("Rank %" PRIu32 ", Collective end: %" PRIu64 "\n", rank(), Simulation::getSimulation()->getCurrentSimCycle());
 
     if ( ++m_loopIndex == iterations ) {
-        //output("Rank %" PRIu32 ", Time spent in collectives (ns): %" PRIu64 "\n", rank(), coll_time);
-        return true;
+        // nsx: capture stop time; the next (terminal) call prints + returns true.
+        enQ_getTime( evQ, &m_stopTime );
+        return false;
     } else {
         return false;
     }
