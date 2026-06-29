@@ -137,6 +137,9 @@ private:
         uint32_t items_per_cell;
         uint32_t sizeof_cell;
 
+        uint64_t m_startTime;  // per-iteration latency reporting
+        uint64_t m_stopTime;
+
         int32_t  x_down;
         int32_t  x_up;
         int32_t  y_down;

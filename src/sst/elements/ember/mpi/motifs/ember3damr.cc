@@ -935,6 +935,10 @@ void Ember3DAMRGenerator::aggregateBlockCommunication(const std::vector<Ember3DA
 bool Ember3DAMRGenerator::generate( std::queue<EmberEvent*>& evQ)
 {
 	if(iteration < maxIterations) {
+		// Capture start time before the first iteration's communication.
+		if(iteration == 0 && nextBlockToBeProcessed == 0) {
+			enQ_getTime( evQ, &m_startTime );
+		}
 		enQ_compute( evQ, 5 );
 
 		out->verbose(CALL_INFO, 8, 0, "Executing iteration: %" PRIu32 " on rank %" PRIu32 ", local blocks count: %" PRIu32 "\n", iteration,
@@ -982,6 +986,11 @@ bool Ember3DAMRGenerator::generate( std::queue<EmberEvent*>& evQ)
 			iteration++;
 			nextBlockToBeProcessed = 0;
 			nextRequestID = 0;
+
+			// Capture stop time after the final iteration's wait-all.
+			if(iteration == maxIterations) {
+				enQ_getTime( evQ, &m_stopTime );
+			}
 		}
 /*
 		std::map<int32_t, uint32_t> messageSizeMap;
@@ -1009,6 +1018,16 @@ bool Ember3DAMRGenerator::generate( std::queue<EmberEvent*>& evQ)
 			iteration, timeUA.toString().c_str());
 
 		free(timeBuffer);
+
+		// Emit per-iteration latency (rank 0); bytes is the block face message
+		// size (items_per_cell * face cells * 8 B).
+		if( 0 == rank() ) {
+			double per_iter_us =
+				((double)(m_stopTime - m_startTime) / (double)maxIterations) / 1000.0;
+			output("%s: ranks %d, loop %" PRIu32 ", bytes %" PRIu32 ", latency %.3f us\n",
+			       getMotifName().c_str(), size(), maxIterations,
+			       (uint32_t)(items_per_cell * blockNx * blockNy * 8), per_iter_us);
+		}
 
 		return true;
 	}
