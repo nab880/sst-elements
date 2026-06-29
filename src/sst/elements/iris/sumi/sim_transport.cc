@@ -422,7 +422,13 @@ SimTransport::rdmaPutResponse(Message* m, uint64_t payload_bytes,
 uint64_t
 SimTransport::allocateFlowId()
 {
-  auto id = api_parent_app_->os()->allocateUniqueId().msg_num;
+  // Use the FULL unique id (src_node in the high 32 bits, msg_num in the low
+  // 32), not just msg_num. msg_num alone is only a per-node counter, so two
+  // senders on different nodes produce identical flow ids -- which then collide
+  // in the receiver's RecvCQ (keyed solely on flow id), mixing the byte
+  // accounting of two unrelated messages so the tail of one never completes
+  // ("couldn't get a flow"). The packed 64-bit id is globally unique.
+  uint64_t id = api_parent_app_->os()->allocateUniqueId();
   return id;
 }
 
