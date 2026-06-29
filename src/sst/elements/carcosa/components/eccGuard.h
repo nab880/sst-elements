@@ -126,6 +126,8 @@ public:
         {"campaign_force_multi_chip", "Campaign mode only: when true (or campaign_mode='multi_chip'), distribute chipkill errors across at least three x4 chips.", "false"},
         {"addr_filter_region",       "If set (e.g. 'action_queue'), only inject faults on MemEvents whose virtual address overlaps that published region. Empty disables filtering.", ""},
         {"addr_filter_len",          "When addr_filter_region is set, limit injection to the first N bytes of that region (0 = entire region).", "0"},
+        {"inject_addr_start",        "Raw injection-window base (physical/SST address). When inject_addr_len>0, inject ONLY on events overlapping [inject_addr_start, inject_addr_start+inject_addr_len). Needs no published region, unlike addr_filter_region.", "0"},
+        {"inject_addr_len",          "Length in bytes of the raw injection window (see inject_addr_start). 0 disables raw-window confinement.", "0"},
         {"fault_mode_weights",       "JEDEC mixture weights as a CSV 'cell:word:row:column:bank:device'; need not sum to 1 (normalized internally). Defaults to '0.55:0.15:0.10:0.08:0.07:0.05'.", ""},
         {"fault_event_rate",         "When fault_model='jedec_mix', per-access probability that a correlated fault event occurs (overrides BER for the mode draw). 0.0 falls back to BER * payload_bits as the event rate (Poisson approximation).", "0.0"},
         {"payload_dtype",            "Data-type-aware flip target for the silent-escape path: 'bytes' (current behavior), 'bf16', 'fp8', 'int8'. High-blast bits (sign/high exponent) are tracked separately in escape_high_blast vs escape_low_blast.", "bytes"},
@@ -271,6 +273,13 @@ private:
 
     std::string addr_filter_region_;
     uint64_t    addr_filter_len_  = 0;
+    // Raw injection-window confinement (no published region needed): when
+    // inject_addr_len_ > 0, only inject on events overlapping
+    // [inject_addr_start_, inject_addr_start_ + inject_addr_len_). Used to
+    // confine to a known buffer on transports with no region registry
+    // (the balar testcpu H2D path).
+    uint64_t    inject_addr_start_ = 0;
+    uint64_t    inject_addr_len_   = 0;
 
     std::string                state_key_;
     const PipelineStateBase*   state_ptr_ = nullptr;
