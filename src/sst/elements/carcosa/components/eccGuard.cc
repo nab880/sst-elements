@@ -260,6 +260,8 @@ EccGuard::EccGuard(ComponentId_t id, Params& params) : Component(id) {
         campaign_mode_ = parseCampaignMode(raw_cmode);
         addr_filter_region_ = params.find<std::string>("addr_filter_region", "");
         addr_filter_len_    = params.find<uint64_t>("addr_filter_len", 0);
+        inject_addr_start_  = params.find<uint64_t>("inject_addr_start", 0);
+        inject_addr_len_    = params.find<uint64_t>("inject_addr_len", 0);
         if (fault_model_ == FaultModel::Campaign && verbose_) {
             out_->output("EccGuard: campaign mode active: target=%s mode=%d budget=%" PRIu64
                           " rate=%.3e\n",
@@ -959,6 +961,23 @@ uint64_t EccGuard::applyPolicy(MemEvent* mev) {
         return 0;
     }
 
+    // Raw injection-window confinement (no published region required). Lets us
+    // confine faults to a known buffer on transports with no region registry
+    // (e.g. the balar testcpu H2D path, where corrupting the shared staging
+    // memctrl otherwise also hits CPU control memory and crashes). Prefer the
+    // preserved virtual address; fall back to the physical/SST address.
+    if (inject_addr_len_ > 0) {
+        uint64_t a = mev->getVirtualAddress();
+        if (a == 0) a = mev->getAddr();
+        uint64_t sz = mev->getPayload().empty() ? 64u : mev->getPayload().size();
+        if (a + sz <= inject_addr_start_ ||
+            a >= inject_addr_start_ + inject_addr_len_) {
+            if (stat_total_) stat_total_->addData(1);
+            if (stat_clean_) stat_clean_->addData(1);
+            return 0;
+        }
+    }
+
     int region_id = resolveRegionIdForEvent(mev);
     const std::string& region_name = regionNameForId(region_id);
 
@@ -1083,10 +1102,12 @@ uint64_t EccGuard::applyPolicy(MemEvent* mev) {
         region_bucket.latency_ps += latency_ps;
     }
     if (verbose_ && (outcome != EccOutcome::Clean || high_blast_flip)) {
-        out_->output("EccGuard '%s': kernel=%s region=%s mode=%s "
+        out_->output("EccGuard '%s': addr=0x%llx vaddr=0x%llx kernel=%s region=%s mode=%s "
                      "errors=%u (escape_bits=%u over %zu words) outcome=%s "
                      "+%" PRIu64 " ps\n",
                      getName().c_str(),
+                     (unsigned long long)mev->getAddr(),
+                     (unsigned long long)mev->getVirtualAddress(),
                      kernel_name.empty() ? "UNKNOWN" : kernel_name.c_str(),
                      region_name.empty() ? "unlabeled" : region_name.c_str(),
                      faultModeName(draw.mode),
