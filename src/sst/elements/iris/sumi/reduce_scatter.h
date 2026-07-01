@@ -42,7 +42,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 Questions? Contact sst-macro-help@sandia.gov
 */
 
-#pragma
+#pragma once
 
 #include <iris/sumi/collective.h>
 #include <iris/sumi/collective_actor.h>
@@ -51,6 +51,10 @@ Questions? Contact sst-macro-help@sandia.gov
 
 namespace SST::Iris::sumi {
 
+// Note: the "Halving" name is historical. The prior implementation was an
+// abort() stub; the body now implements a *ring* reduce-scatter (see the .cc),
+// so isLowerPartner() is dead. Kept for interface/naming continuity with the
+// other SUMI collectives rather than renamed.
 class HalvingReduceScatterActor :
   public DagCollectiveActor
 {
@@ -64,7 +68,7 @@ class HalvingReduceScatterActor :
   }
 
   std::string toString() const override {
-    return "virtual all reduce actor";
+    return "ring reduce scatter actor";
   }
 
   void bufferAction(void *dst_buffer, void *msg_buffer, Action* ac) override;
