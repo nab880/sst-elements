@@ -46,6 +46,7 @@ Questions? Contact sst-macro-help@sandia.gov
 #include <iris/sumi/transport.h>
 #include <iris/sumi/communicator.h>
 //#include <sprockit/output.h>
+#include <mercury/common/errors.h>
 #include <mercury/common/stl_string.h>
 #include <cstring>
 #include <vector>
@@ -83,9 +84,22 @@ HalvingReduceScatterActor::initDag()
   const int me = dom_me_;
   if (N <= 1){ num_rounds_ = 0; return; }
 
+  // Round index must stay below Action::max_round or messageId() decoding
+  // corrupts (see ring_allreduce.cc); this ring uses N-1 rounds.
+  if (N - 1 >= static_cast<int>(Action::max_round)){
+    sst_hg_abort_printf("ring reduce-scatter needs %d rounds but "
+                        "Action::max_round is %u; raise max_round for nproc=%d",
+                        N - 1, Action::max_round, N);
+  }
+
   // Ring reduce-scatter: the reduce phase of a ring all-reduce. N-1 rounds; each
   // rank sends chunk (me-r) right and reduces chunk (me-r-1) from the left, so
-  // every rank ends owning the fully-reduced chunk me. Same bytes/steps as the
+  // rank me ends owning the fully-reduced chunk (me+1) mod N (NOT chunk me -- the
+  // ring leaves a +1 rank rotation). Harmless here: inside ring_allreduce the
+  // all-gather phase starts from (me+1) so it cancels, and the only caller
+  // (MPI_[I]reduce_scatter_block) passes NULL buffers to model cost, so data
+  // placement is never observed. A data-carrying reduce-scatter would need the
+  // result copied out from chunk (me+1), not me. Same bytes/steps as the
   // all-gather dual (the bandwidth-optimal reduce-scatter).
   std::vector<int> off(N), cnt(N);
   int base = nelems_ / N, rem = nelems_ % N, o = 0;
