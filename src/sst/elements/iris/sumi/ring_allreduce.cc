@@ -36,7 +36,7 @@ RingAllreduceActor::initBuffers()
 {
   void* dst = result_buffer_;
   void* src = send_buffer_;
-  int size = nelems_ * type_size_;
+  long size = static_cast<long>(nelems_) * type_size_; // matches finalizeBuffers
 
   result_buffer_ = dst;
   //work in place in the result buffer; copy src in first if distinct

@@ -67,7 +67,7 @@ HalvingReduceScatterActor::initBuffers()
 {
   void* dst = result_buffer_;
   void* src = send_buffer_;
-  int size = nelems_ * type_size_;
+  long size = static_cast<long>(nelems_) * type_size_; // matches finalizeBuffers
   result_buffer_ = dst;
   if (src != dst)
     my_api_->memcopy(dst, src, size);
