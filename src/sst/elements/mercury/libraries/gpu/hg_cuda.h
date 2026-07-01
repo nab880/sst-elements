@@ -1,4 +1,6 @@
-/* Vendored copy of sst-hgcc hg_cuda.h; keep token-identical (ABI version asserted in gpu_library.cc). */
+/* Vendored copy of sst-hgcc hg_cuda.h. Keep the declarations (signatures + ABI
+ * version) identical to that copy; comments may differ. gpu_library.cc
+ * static_asserts SST_HG_CUDA_ABI_VERSION to catch drift. */
 #ifndef SST_HG_CUDA_H
 #define SST_HG_CUDA_H
 
