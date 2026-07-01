@@ -87,6 +87,12 @@ public:
 
     virtual void agentSetup() {}
 
+    // Init-phase hook. Hali forwards each init phase to the agent so an agent
+    // that owns its own memHierarchy StandardMem interface (e.g. a weight-reader
+    // GPU agent) can drive the interface's untimed init handshake. Default is a
+    // no-op, so ring-only agents (PingPong/FourState/stub) are unaffected.
+    virtual void agentInit(unsigned phase) { (void)phase; }
+
     virtual void setRingLink(SST::Link* leftLink) { (void)leftLink; }
 
     virtual void setInterceptBase(uint64_t base) { (void)base; }
