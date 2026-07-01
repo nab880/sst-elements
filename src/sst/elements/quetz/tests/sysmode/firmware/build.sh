@@ -60,6 +60,10 @@ echo "=== RISC-V virt GPU async queue (P4 N-in-flight completion queue) ==="
 $RV64_CC $RV64_FLAGS riscv_virt_gpu_async_queue.c -o riscv_virt_gpu_async_queue
 echo "  -> riscv_virt_gpu_async_queue"
 
+echo "=== RISC-V virt GPU FFT (synthetic-GPU timing, no balar) ==="
+$RV64_CC $RV64_FLAGS riscv_virt_gpu_fft.c -o riscv_virt_gpu_fft
+echo "  -> riscv_virt_gpu_fft"
+
 echo "=== RISC-V virt Balar kernel ==="
 $RV64_CC $RV64_FLAGS riscv_virt_balar_kernel.c -o riscv_virt_balar_kernel
 echo "  -> riscv_virt_balar_kernel"

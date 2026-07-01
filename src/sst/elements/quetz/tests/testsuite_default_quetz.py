@@ -904,6 +904,97 @@ class testcase_quetz_sysmode(SSTTestCase):
             "guest STATUS spin must see real payloads before each doorbell")
 
     # -------------------------------------------------------------------------
+    def test_quetz_sysmode_gpu_fft(self):
+        """256-pt FFT computed on the guest CPU, TIMED by the synthetic GPU.
+
+        No balar / no GPGPU-Sim: the QuetzGpuDevice is a pure latency model, so
+        the FFT math runs on the rv64gc core and each of the 11 "kernels" (1 H2D +
+        1 bitrev + 8 stages + 1 D2H, mirroring the balar FFT call structure) is
+        timed by a doorbell. Impulse input -> X[k]=1+0j for all k, verified
+        bit-exactly (correct_words=512/512). Runs anywhere qemu-system-riscv64
+        exists (no GPGPUSIM_ROOT / .cfg / cuda guards)."""
+        test_path = self.get_testsuite_dir()
+        sst_prefix, sst_bindir, sst_libexec = sst_paths()
+
+        qemu_target = "qemu-system-riscv64"
+        exe_rel     = "sysmode/firmware/riscv_virt_gpu_fft"
+        import shutil
+        qemu_bin = os.path.join(sst_bindir, qemu_target)
+        if not os.path.exists(qemu_bin):
+            found = shutil.which(qemu_target)
+            if found:
+                qemu_bin = found
+        exe_abs = os.path.normpath(os.path.join(test_path, exe_rel))
+
+        if not os.path.exists(qemu_bin):
+            self.skipTest("{} not found; skipping".format(qemu_target))
+        if not os.path.exists(exe_abs):
+            self.skipTest("gpu fft firmware not found at {}; "
+                          "run sysmode/firmware/build.sh".format(exe_abs))
+
+        outdir = os.path.join(self.get_test_output_run_dir(),
+                              "quetz_sysmode_tests", "gpu_fft")
+        os.makedirs(outdir, exist_ok=True)
+
+        sdlfile     = os.path.join(test_path, "sysmode", "basic_quetz_gpu.py")
+        sst_outfile = os.path.join(outdir, "gpu_fft.out")
+        sst_errfile = os.path.join(outdir, "gpu_fft.err")
+        mpifiles    = os.path.join(outdir, "gpu_fft.testfile")
+
+        # Region-handler map (order matters — first match wins):
+        #   uart0 : capture the correct_words= banner (must precede sub_ram, else
+        #           UART at 0x10000000 falls into sub_ram and is filtered away)
+        #   kernel_dram / sub_ram : guest RAM is FILTERED — serviced by QEMU and
+        #     consumed locally in SST (the normal Quetz sysmode path). The FFT
+        #     compute runs in QEMU's memory; only the doorbells/UART are modeled.
+        #     FFT arrays + stack live below 0x80100000; the GPU MMIO window
+        #     (slot-0 MmioForwardRegionHandler) owns 0x80100000+.
+        # (The firmware enables mstatus.FS in _start so its float ops don't trap.)
+        memmaps = [
+            ("uart0",       0x10000000, 0x10000FFF, "uart"),
+            ("kernel_dram", 0x80000000, 0x800FFFFF, "filtered"),
+            ("sub_ram",     0x00000000, 0x7FFFFFFF, "filtered"),
+        ]
+        make_sysmode_env(sst_prefix, sst_libexec, qemu_bin, exe_abs,
+                         "-machine virt -nographic -bios none",
+                         "-kernel", 0, 0xFFFFFFFF, memmaps)
+        os.environ["QUETZ_MMIO_START"] = "0x80100000"
+        os.environ["QUETZ_MMIO_END"]   = "0x801003FF"
+        enable_mmio_payload_delivery()
+
+        self.run_sst(sdlfile, sst_outfile, sst_errfile,
+                     mpi_out_files=mpifiles, set_cwd=outdir, timeout_sec=180)
+
+        stats = parse_stats(sst_outfile)
+        with open(sst_outfile, "r") as f:
+            raw_output = f.read()
+
+        # Bit-exact FFT: impulse -> 1+0j everywhere (512 float words for N=256).
+        self.assertIn("GPU FFT (synthetic) correct_words=512/512", raw_output,
+            "CPU FFT not bit-exact through the synthetic-GPU timed run")
+
+        mmio_writes = stats.get("cpu.mmio_write_requests.0", 0)
+        kernels_launched = stat_sum(raw_output, "gpu.kernels_launched")
+        busy_cycles      = stat_sum(raw_output, "gpu.busy_cycles")
+        doorbell_while_busy = stat_sum(raw_output, "gpu.doorbell_while_busy")
+
+        # 11 timed kernels => >= 22 mmio writes (latency-override + doorbell each).
+        self.assertGreaterEqual(mmio_writes, 2 * 11,
+            "11 timed kernels => >= 22 mmio writes (latency-override + doorbell)")
+        self.assertIsNotNone(kernels_launched,
+            "gpu.kernels_launched not found in output")
+        self.assertEqual(kernels_launched, 11,
+            "FFT issues 11 timed kernels (1 H2D + 1 bitrev + 8 stages + 1 D2H)")
+        self.assertIsNotNone(busy_cycles, "gpu.busy_cycles not found in output")
+        # Each launch overrides latency to 5000 cycles; 11 * 5000 minus small slack.
+        self.assertGreaterEqual(busy_cycles, 11 * 5000 - 11,
+            "gpu.busy_cycles should reflect 11 timed 5000-cycle kernels")
+        self.assertIsNotNone(doorbell_while_busy,
+            "gpu.doorbell_while_busy not found in output")
+        self.assertEqual(doorbell_while_busy, 0,
+            "synchronous timed launches: each doorbell waits out the prior kernel")
+
+    # -------------------------------------------------------------------------
     def test_quetz_sysmode_gpu_async(self):
         """P4 async offload: posted submit + ticket/completed poll overlap.
 
