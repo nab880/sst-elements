@@ -164,6 +164,10 @@ Hali::Hali(ComponentId_t id, Params& params) : Component(id) {
  *****************************************************************************/
 void Hali::init(unsigned phase) {
     if (mmioIface_) mmioIface_->init(phase);
+    // Forward the init phase to the interception agent so an agent that owns a
+    // memHierarchy StandardMem interface can complete its untimed init handshake
+    // (default agentInit is a no-op for ring-only agents).
+    if (interceptionAgent_) interceptionAgent_->agentInit(phase);
     if (verbose_) {
         out_->output("Phase: Init(%u), %s\n", phase, getName().c_str());
         out_->output("    %s: highlink_=%p, lowlink_=%p\n", getName().c_str(),
