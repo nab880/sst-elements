@@ -848,20 +848,14 @@ MpiApi::startReduceScatter(CollectiveOp* op)
 
 CollectiveOpBase::ptr
 MpiApi::startReduceScatter(const char*  /*name*/, MPI_Comm  /*comm*/, const int*  /*recvcounts*/,
-                           MPI_Datatype type, MPI_Op mop, const void* src, void* dst)
+                           MPI_Datatype  /*type*/, MPI_Op  /*mop*/, const void*  /*src*/, void*  /*dst*/)
 {
-  SST::Hg::abort("sumi::reduce_scatter");
-
-  CollectiveOp::ptr op;
-  startMpiCollective(Iris::sumi::Collective::reduce_scatter, src, dst, type, type, op.get());
-  auto* msg = startReduceScatter(op.get());
-  if (msg){
-    op->complete = true;
-    delete msg;
-  }
-  op->op = mop;
-
-  return std::move(op);
+  // Vector MPI_Reduce_scatter (per-rank recvcounts) is unsupported: the ring DAG
+  // assumes near-equal chunks and takes no per-rank count vector. Use
+  // MPI_Reduce_scatter_block (uniform count), which is wired to the ring engine.
+  SST::Hg::abort("sumi: MPI_Reduce_scatter (vector recvcounts) is not implemented; "
+                 "use MPI_Reduce_scatter_block");
+  return nullptr;
 }
 
 int
