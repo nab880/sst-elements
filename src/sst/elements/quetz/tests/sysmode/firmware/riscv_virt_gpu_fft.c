@@ -92,8 +92,8 @@ void kernel_main(void)
 {
     /* impulse: x[0] = 1+0j, rest 0 */
     for (uint32_t i = 0; i < FFT_N; i++) {
-        host_in[i].re = (i == 0) ? 1.0f : 0.0f;
-        host_in[i].im = 0.0f;
+        host_in[i].re = (i == 0) ? FFT_ONE : FFT_ZERO;
+        host_in[i].im = FFT_ZERO;
     }
 
     /* 11 timed kernels mirroring the balar FFT call structure. */

@@ -995,6 +995,83 @@ class testcase_quetz_sysmode(SSTTestCase):
             "synchronous timed launches: each doorbell waits out the prior kernel")
 
     # -------------------------------------------------------------------------
+    def test_quetz_sysmode_gpu_fft_coldfire(self):
+        """ColdFire (m68k) 256-pt FFT computed on the guest CPU, TIMED by the
+        synthetic GPU. Same as the RISC-V gpu_fft test but for the 32-bit
+        big-endian NXP mcf5208evb — the FPU-less ColdFire computes the FFT in
+        Q16.16 fixed point (the m68k libgcc soft-float helpers hang on ColdFire),
+        and the synthetic QuetzGpuDevice times the same 11 kernels. Bit-exact
+        (correct_words=512/512), balar-free (no GPGPUSIM_ROOT / .cfg / cuda)."""
+        test_path = self.get_testsuite_dir()
+        sst_prefix, sst_bindir, sst_libexec = sst_paths()
+
+        qemu_target = "qemu-system-m68k"
+        exe_rel     = "sysmode/firmware/coldfire_gpu_fft"
+        import shutil
+        qemu_bin = os.path.join(sst_bindir, qemu_target)
+        if not os.path.exists(qemu_bin):
+            found = shutil.which(qemu_target)
+            if found:
+                qemu_bin = found
+        exe_abs = os.path.normpath(os.path.join(test_path, exe_rel))
+
+        if not os.path.exists(qemu_bin):
+            self.skipTest("{} not found; rebuild QEMU with m68k-softmmu".format(qemu_target))
+        if not os.path.exists(exe_abs):
+            self.skipTest("coldfire_gpu_fft not found at {}; "
+                          "run M68K_CC=m68k-linux-gnu-gcc ./build.sh".format(exe_abs))
+
+        outdir = os.path.join(self.get_test_output_run_dir(),
+                              "quetz_sysmode_tests", "gpu_fft_coldfire")
+        os.makedirs(outdir, exist_ok=True)
+
+        sdlfile     = os.path.join(test_path, "sysmode", "basic_quetz_gpu_coldfire.py")
+        sst_outfile = os.path.join(outdir, "gpu_fft_coldfire.out")
+        sst_errfile = os.path.join(outdir, "gpu_fft_coldfire.err")
+        mpifiles    = os.path.join(outdir, "gpu_fft_coldfire.testfile")
+
+        # ColdFire mcf5208evb: SDRAM 0x40000000 (filtered guest RAM), synthetic GPU
+        # at 0x70000000, UART 0xfc060000, TestFinisher sentinel 0x80000000. The SDL
+        # installs those handlers; make_sysmode_env just sets exe/qemu/args.
+        make_sysmode_env(sst_prefix, sst_libexec, qemu_bin, exe_abs,
+                         "-machine mcf5208evb -display none -serial stdio -m 128M",
+                         "-kernel", 0x40000000, 0x47FFFFFF, [])
+        os.environ["QUETZ_MMIO_START"] = "0x70000000"
+        os.environ["QUETZ_MMIO_END"]   = "0x700003FF"
+        os.environ.pop("QUETZ_PLATFORM", None)
+        enable_mmio_payload_delivery()
+
+        self.run_sst(sdlfile, sst_outfile, sst_errfile,
+                     mpi_out_files=mpifiles, set_cwd=outdir, timeout_sec=180)
+
+        raw = ""
+        if os.path.exists(sst_outfile):
+            with open(sst_outfile, "r") as f:
+                raw = f.read()
+        self.assertNotIn("FATAL", raw)
+
+        self.assertIn("GPU FFT (synthetic) correct_words=512/512", raw,
+            "ColdFire fixed-point FFT not bit-exact through the synthetic-GPU run")
+        self.assertIn("TESTFINISH[0]", raw,
+            "TestFinisher sentinel not triggered; sim may have hung")
+
+        stats = parse_stats(sst_outfile)
+        mmio_writes = stats.get("cpu.mmio_write_requests.0", 0)
+        kernels_launched = stat_sum(raw, "gpu.kernels_launched")
+        busy_cycles      = stat_sum(raw, "gpu.busy_cycles")
+        doorbell_while_busy = stat_sum(raw, "gpu.doorbell_while_busy")
+
+        self.assertGreaterEqual(mmio_writes, 2 * 11,
+            "11 timed kernels => >= 22 mmio writes (latency-override + doorbell)")
+        self.assertEqual(kernels_launched, 11,
+            "FFT issues 11 timed kernels (1 H2D + 1 bitrev + 8 stages + 1 D2H)")
+        self.assertIsNotNone(busy_cycles, "gpu.busy_cycles not found in output")
+        self.assertGreaterEqual(busy_cycles, 11 * 5000 - 11,
+            "gpu.busy_cycles should reflect 11 timed 5000-cycle kernels")
+        self.assertEqual(doorbell_while_busy, 0,
+            "synchronous timed launches: each doorbell waits out the prior kernel")
+
+    # -------------------------------------------------------------------------
     def test_quetz_sysmode_gpu_async(self):
         """P4 async offload: posted submit + ticket/completed poll overlap.
 

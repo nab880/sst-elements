@@ -97,6 +97,20 @@ echo "=== ColdFire mcf5208evb balar vectorAdd ASYNC (m68k, P4) ==="
 $M68K_CC $M68K_FLAGS coldfire_startup.S coldfire_gpu_async.c -o coldfire_gpu_async
 echo "  -> coldfire_gpu_async"
 
+# Synthetic-GPU FFT (balar-free): CPU soft-float FFT timed by the synthetic GPU
+# doorbell. ColdFire V2 has no FPU, so -msoft-float + libgcc (__*sf3 helpers).
+# ColdFire V2 has no FPU and the m68k libgcc soft-float helpers (__mulsf3 &c.)
+# hang on it, so the FFT uses Q16.16 integer fixed point (-DFFT_FIXED_POINT).
+M68K_FP_FLAGS="-mcpu=5208 -O2 -DFFT_FIXED_POINT \
+  -nostdlib -nostartfiles -ffreestanding \
+  -T link_m68k.ld -Wl,--build-id=none"
+# NO -lgcc: this m68k libgcc's helpers (__mulsf3, __muldi3, ...) hang on ColdFire
+# V2. The firmware supplies its own __muldi3 (fft_muldi3.h) built from 32-bit
+# multiplies, which is the only runtime helper the Q16.16 FFT needs.
+echo "=== ColdFire mcf5208evb GPU FFT (synthetic, Q16.16 fixed-point, no balar) ==="
+$M68K_CC $M68K_FP_FLAGS coldfire_startup.S coldfire_gpu_fft.c -o coldfire_gpu_fft
+echo "  -> coldfire_gpu_fft"
+
 echo "=== ARM Cortex-M7 hello ==="
 $ARM_CC $ARM_CFLAGS -T link_arm_m7.ld -Wl,--build-id=none \
   arm_m7_startup.S arm_m7_hello.c -o arm_m7_hello

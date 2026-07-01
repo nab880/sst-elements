@@ -12,9 +12,16 @@
  * (the host twin of fft.cu). No libm, no balar, no wire packet. The twiddle table
  * comes from fft_firmware_data_256.h (fft_tw_bits[], IEEE-754 float32 bits).
  *
+ * Scalar type:
+ *   - Default (RISC-V rv64gc): hardware float32. cfloat = {float re, im}.
+ *   - -DFFT_FIXED_POINT (ColdFire/m68k): Q16.16 fixed point in int32_t. ColdFire
+ *     V2 has no FPU and the m68k libgcc soft-float (__mulsf3 &c.) hangs on it, so
+ *     the m68k firmware uses integer arithmetic instead. The twiddle table is
+ *     converted from float32 bits to Q16.16 on read.
+ *
  * Impulse input (x[0]=1, rest 0) -> X[k] = 1+0j for all k. The twiddles only ever
- * multiply zero in that case, so the result is BIT-EXACT vs 1.0f with no
- * tolerance — verify_impulse() counts exactly-correct words (512 for N=256).
+ * multiply zero in that case, so the result is BIT-EXACT (fixed or float) — no
+ * tolerance. verify_impulse() counts exactly-correct scalar words (512 for N=256).
  */
 
 #ifndef FFT_SYNTH_COMPUTE_H
@@ -24,22 +31,89 @@
 
 #include "fft_firmware_data_256.h"   /* FFT_N, FFT_LOGN, fft_tw_bits[] */
 
-typedef struct { float re, im; } cfloat;
+#ifdef FFT_FIXED_POINT
 
-/* IEEE-754 float32 bit pattern -> float, no strict-aliasing UB (memcpy-style). */
-static inline float fft_bits_to_f32(uint32_t bits)
+/* ---- Q16.16 fixed-point scalar (integer-only; for the FPU-less ColdFire) ---- */
+typedef int32_t fft_scalar;
+#define FFT_ONE   ((fft_scalar)0x00010000)   /* 1.0 in Q16.16 */
+#define FFT_ZERO  ((fft_scalar)0)
+
+/* Q16.16 multiply, computed with only 32-bit multiplies (no int64 — the FPU-less
+ * ColdFire would lower a 64-bit multiply to libgcc's __muldi3, which HANGS on
+ * ColdFire V2). We form the unsigned 64-bit product as hi:lo two 32-bit words
+ * from 16-bit-limb partials (each a 32-bit ColdFire mulu.l), take bits [47:16]
+ * as the Q16.16 magnitude, then apply the sign. Result matches
+ * ((int64_t)a*b)>>16 for the bounded FFT range (|value| < 2^24). */
+static inline fft_scalar fft_mul(fft_scalar a, fft_scalar b)
+{
+    int32_t neg = 0;
+    uint32_t ua = (a < 0) ? (neg ^= 1, (uint32_t)(-a)) : (uint32_t)a;
+    uint32_t ub = (b < 0) ? (neg ^= 1, (uint32_t)(-b)) : (uint32_t)b;
+
+    uint32_t a0 = ua & 0xFFFFu, a1 = ua >> 16;   /* 16-bit limbs */
+    uint32_t b0 = ub & 0xFFFFu, b1 = ub >> 16;
+
+    /* 64-bit product = lo (bits[31:0]) + hi (bits[63:32]), carry-correct. */
+    uint32_t p00 = a0 * b0;                 /* bits [31:0]  */
+    uint32_t p01 = a0 * b1;                 /* bits [47:16] */
+    uint32_t p10 = a1 * b0;                 /* bits [47:16] */
+    uint32_t p11 = a1 * b1;                 /* bits [63:32] */
+
+    uint32_t mid = (p00 >> 16) + (p01 & 0xFFFFu) + (p10 & 0xFFFFu);
+    uint32_t lo  = (p00 & 0xFFFFu) | (mid << 16);
+    uint32_t hi  = p11 + (p01 >> 16) + (p10 >> 16) + (mid >> 16);
+
+    /* magnitude >> 16 = low 16 bits of hi joined to high 16 bits of lo */
+    uint32_t mag = (lo >> 16) | (hi << 16);
+    return neg ? -(int32_t)mag : (int32_t)mag;
+}
+static inline fft_scalar fft_add(fft_scalar a, fft_scalar b) { return a + b; }
+static inline fft_scalar fft_sub(fft_scalar a, fft_scalar b) { return a - b; }
+
+/* IEEE-754 float32 bits -> Q16.16 (used only to load the twiddle table). */
+static inline fft_scalar fft_bits_to_scalar(uint32_t bits)
+{
+    uint32_t mant = (bits & 0x007FFFFFu) | 0x00800000u;  /* implicit 1 */
+    int32_t  exp  = (int32_t)((bits >> 23) & 0xFFu) - 127;
+    int32_t  sign = (bits & 0x80000000u) ? -1 : 1;
+    if (((bits >> 23) & 0xFFu) == 0u)                    /* zero/subnormal -> 0 */
+        return 0;
+    /* value = mant * 2^(exp-23); want Q16.16 => shift by (exp-23+16). */
+    int32_t sh = exp - 23 + 16;
+    int64_t m  = (int64_t)mant;
+    int64_t q  = (sh >= 0) ? (m << sh) : (m >> (-sh));
+    return (fft_scalar)(sign * (int32_t)q);
+}
+
+#else
+
+/* ---- float32 scalar (default; RISC-V rv64gc has hardware FP) ---------------- */
+typedef float fft_scalar;
+#define FFT_ONE   (1.0f)
+#define FFT_ZERO  (0.0f)
+
+static inline fft_scalar fft_mul(fft_scalar a, fft_scalar b) { return a * b; }
+static inline fft_scalar fft_add(fft_scalar a, fft_scalar b) { return a + b; }
+static inline fft_scalar fft_sub(fft_scalar a, fft_scalar b) { return a - b; }
+
+static inline fft_scalar fft_bits_to_scalar(uint32_t bits)
 {
     float f;
     __builtin_memcpy(&f, &bits, sizeof(f));
     return f;
 }
 
-/* fft_tw_bits[] is interleaved (re,im) float32 bits; expose it as cfloat tw[N/2]. */
+#endif  /* FFT_FIXED_POINT */
+
+typedef struct { fft_scalar re, im; } cfloat;
+
+/* fft_tw_bits[] is interleaved (re,im) float32 bits; expose it as cfloat tw[N/2]
+ * in the active scalar representation. */
 static inline cfloat fft_tw(uint32_t t)
 {
     cfloat w;
-    w.re = fft_bits_to_f32(fft_tw_bits[2u * t + 0u]);
-    w.im = fft_bits_to_f32(fft_tw_bits[2u * t + 1u]);
+    w.re = fft_bits_to_scalar(fft_tw_bits[2u * t + 0u]);
+    w.im = fft_bits_to_scalar(fft_tw_bits[2u * t + 1u]);
     return w;
 }
 
@@ -76,22 +150,22 @@ static inline void fft_stage(cfloat *a, uint32_t n, uint32_t s, uint32_t logn)
         cfloat   ai1   = a[i1];
         /* t = w * a[i1] (complex multiply) */
         cfloat   t;
-        t.re = w.re * ai1.re - w.im * ai1.im;
-        t.im = w.re * ai1.im + w.im * ai1.re;
+        t.re = fft_sub(fft_mul(w.re, ai1.re), fft_mul(w.im, ai1.im));
+        t.im = fft_add(fft_mul(w.re, ai1.im), fft_mul(w.im, ai1.re));
         cfloat   ai0   = a[i0];
-        a[i0].re = ai0.re + t.re;  a[i0].im = ai0.im + t.im;
-        a[i1].re = ai0.re - t.re;  a[i1].im = ai0.im - t.im;
+        a[i0].re = fft_add(ai0.re, t.re);  a[i0].im = fft_add(ai0.im, t.im);
+        a[i1].re = fft_sub(ai0.re, t.re);  a[i1].im = fft_sub(ai0.im, t.im);
     }
 }
 
 /* Impulse verification: X[k] must be exactly 1+0j for all k. Returns the count of
- * exactly-correct float words (2 per complex point => 2*N total). */
+ * exactly-correct scalar words (2 per complex point => 2*N total). */
 static inline uint32_t fft_verify_impulse(const cfloat *out, uint32_t n)
 {
     uint32_t correct = 0;
     for (uint32_t i = 0; i < n; i++) {
-        if (out[i].re == 1.0f) correct++;
-        if (out[i].im == 0.0f) correct++;
+        if (out[i].re == FFT_ONE)  correct++;
+        if (out[i].im == FFT_ZERO) correct++;
     }
     return correct;
 }
