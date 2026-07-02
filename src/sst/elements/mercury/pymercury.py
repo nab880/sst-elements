@@ -113,6 +113,13 @@ class HgOS(TemplateBase):
                                            "use_put_window",
                                            "compute_library_access_width",
                                            "compute_library_loop_overhead",
+                                           "allreduce_alg",
+                                           "reduce_alg",
+                                           "bcast_alg",
+                                           "reduce_scatter_alg",
+                                           "scan_alg",
+                                           "gather_alg",
+                                           "scatter_alg",
                                           ],
                                           "app1.")
         self._subscribeToPlatformParamSet("operating_system")

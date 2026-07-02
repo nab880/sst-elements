@@ -533,6 +533,10 @@ class CollectiveEngine
 
   CollectiveDoneMessage* deliverPending(Collective* coll, int tag, Collective::type_t ty);
 
+  // Name of the algorithm selected for op `ty` (Python param > SUMI_<OP>_ALG
+  // env > ""), resolved once at construction. Empty means "use built-in".
+  std::string engineAlgName(Collective::type_t ty) const;
+
  private:
   Transport* tport_;
 
@@ -559,6 +563,9 @@ class CollectiveEngine
 
   std::string alltoall_type_;
   std::string allgather_type_;
+
+  // Per-op user-selected algorithm names (see engineAlgName).
+  spkt_enum_map<Collective::type_t, std::string> alg_names_;
 
   int rdma_header_qos_;
   int rdma_get_qos_;

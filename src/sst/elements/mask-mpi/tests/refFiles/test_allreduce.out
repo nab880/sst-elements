@@ -1,0 +1,2 @@
+PASS: allreduce (8 ranks, 1024 elems, SUM=36)
+Simulation is complete, simulated time: 20.2572 us

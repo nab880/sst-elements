@@ -26,6 +26,9 @@ class testcase_mask_mpi(SSTTestCase):
     def test_reduce(self):
         self.mask_mpi_template("test_reduce")
 
+    def test_allreduce(self):
+        self.mask_mpi_template("test_allreduce")
+
     def test_alltoall(self):
         self.mask_mpi_template("test_alltoall")
 

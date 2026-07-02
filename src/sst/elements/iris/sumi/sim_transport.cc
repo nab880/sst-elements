@@ -18,6 +18,8 @@
 #include <sst/core/factory.h>
 #include <iris/sumi/transport.h>
 #include <iris/sumi/allreduce.h>
+#include <iris/sumi/ring_allreduce.h>
+#include <iris/sumi/collective_registry.h>
 #include <iris/sumi/reduce_scatter.h>
 #include <iris/sumi/reduce.h>
 #include <iris/sumi/allgather.h>
@@ -470,6 +472,31 @@ SimTransport::freeWorkspace(void *buf, uint64_t /*size*/)
   }
 }
 
+namespace {
+// Resolve an op's algorithm name: Python param wins, else SUMI_<OP>_ALG env,
+// else empty ("use built-in default").
+std::string resolveAlgName(SST::Params& params, const char* param_key,
+                           const char* env_key)
+{
+  std::string v = params.find<std::string>(param_key, "");
+  if (!v.empty()) return v;
+  const char* e = getenv(env_key);
+  if (e && *e) return std::string(e);
+  return std::string();
+}
+
+CollectiveFactoryArgs makeArgs(CollectiveEngine* engine, void* dst, void* src,
+    int root, int nelems, int type_size, int tag, int cq_id,
+    reduce_fxn fxn, Communicator* comm)
+{
+  CollectiveFactoryArgs a;
+  a.engine = engine; a.dst = dst; a.src = src; a.root = root;
+  a.nelems = nelems; a.type_size = type_size; a.tag = tag;
+  a.cq_id = cq_id; a.fxn = fxn; a.comm = comm;
+  return a;
+}
+}
+
 CollectiveEngine::CollectiveEngine(SST::Params& params, Transport *tport) :
   tport_(tport),
   global_domain_(nullptr),
@@ -483,6 +510,16 @@ CollectiveEngine::CollectiveEngine(SST::Params& params, Transport *tport) :
   alltoall_type_ = params.find<std::string>("alltoall", "bruck");
   allgather_type_ = params.find<std::string>("allgather", "bruck");
 
+  // Per-op algorithm selection for the registry-driven ops. Param "<op>_alg"
+  // (e.g. allreduce_alg=ring) wins over env SUMI_<OP>_ALG; empty => built-in.
+  alg_names_[Collective::allreduce]      = resolveAlgName(params, "allreduce_alg", "SUMI_ALLREDUCE_ALG");
+  alg_names_[Collective::reduce]         = resolveAlgName(params, "reduce_alg", "SUMI_REDUCE_ALG");
+  alg_names_[Collective::bcast]          = resolveAlgName(params, "bcast_alg", "SUMI_BCAST_ALG");
+  alg_names_[Collective::reduce_scatter] = resolveAlgName(params, "reduce_scatter_alg", "SUMI_REDUCE_SCATTER_ALG");
+  alg_names_[Collective::scan]           = resolveAlgName(params, "scan_alg", "SUMI_SCAN_ALG");
+  alg_names_[Collective::gather]         = resolveAlgName(params, "gather_alg", "SUMI_GATHER_ALG");
+  alg_names_[Collective::scatter]        = resolveAlgName(params, "scatter_alg", "SUMI_SCATTER_ALG");
+
   int default_qos = params.find<int>("default_qos", 0);
   rdma_get_qos_ = params.find<int>("collective_rdma_get_qos", default_qos);
   rdma_header_qos_ = params.find<int>("collective_rdma_header_qos", default_qos);
@@ -493,6 +530,13 @@ CollectiveEngine::CollectiveEngine(SST::Params& params, Transport *tport) :
 CollectiveEngine::~CollectiveEngine()
 {
   if (global_domain_) delete global_domain_;
+}
+
+std::string
+CollectiveEngine::engineAlgName(Collective::type_t ty) const
+{
+  auto it = alg_names_.find(ty);
+  return it == alg_names_.end() ? std::string() : it->second;
 }
 
 void
@@ -554,6 +598,16 @@ CollectiveEngine::allreduce(void* dst, void *src, int nelems, int type_size, int
 
   if (!comm) comm = global_domain_;
 
+  // A user-selected algorithm (param allreduce_alg / env SUMI_ALLREDUCE_ALG)
+  // is a flat single-DAG choice: it overrides the SMP-hierarchical composition.
+  std::string alg = engineAlgName(Collective::allreduce);
+  if (!alg.empty()){
+    auto args = makeArgs(this, dst, src, 0, nelems, type_size, tag, cq_id, fxn, comm);
+    Collective* c = CollectiveRegistry::make(Collective::allreduce, alg, args);
+    if (!c) sst_hg_abort_printf("unknown allreduce algorithm '%s' (allreduce_alg / SUMI_ALLREDUCE_ALG)", alg.c_str());
+    return startCollective(c);
+  }
+
   Collective* coll = nullptr;
   if (comm->smpComm()){
     //tags are restricted to 28 bits - the front 4 bits are mine for various internal operations
@@ -599,6 +653,13 @@ CollectiveEngine::reduceScatter(void* dst, void *src, int nelems, int type_size,
   if (msg) return msg;
 
   if (!comm) comm = global_domain_;
+  std::string alg = engineAlgName(Collective::reduce_scatter);
+  if (!alg.empty()){
+    auto args = makeArgs(this, dst, src, 0, nelems, type_size, tag, cq_id, fxn, comm);
+    Collective* c = CollectiveRegistry::make(Collective::reduce_scatter, alg, args);
+    if (!c) sst_hg_abort_printf("unknown reduce_scatter algorithm '%s' (reduce_scatter_alg / SUMI_REDUCE_SCATTER_ALG)", alg.c_str());
+    return startCollective(c);
+  }
   DagCollective* coll = new HalvingReduceScatter(this, dst, src, nelems, type_size, tag, fxn, cq_id, comm);
   return startCollective(coll);
 }
@@ -611,6 +672,13 @@ CollectiveEngine::scan(void* dst, void* src, int nelems, int type_size, int tag,
   if (msg) return msg;
 
   if (!comm) comm = global_domain_;
+  std::string alg = engineAlgName(Collective::scan);
+  if (!alg.empty()){
+    auto args = makeArgs(this, dst, src, 0, nelems, type_size, tag, cq_id, fxn, comm);
+    Collective* c = CollectiveRegistry::make(Collective::scan, alg, args);
+    if (!c) sst_hg_abort_printf("unknown scan algorithm '%s' (scan_alg / SUMI_SCAN_ALG)", alg.c_str());
+    return startCollective(c);
+  }
   DagCollective* coll = new SimultaneousBtreeScan(this, dst, src, nelems, type_size, tag, fxn, cq_id, comm);
   return startCollective(coll);
 }
@@ -624,6 +692,13 @@ CollectiveEngine::reduce(int root, void* dst, void *src, int nelems, int type_si
   if (msg) return msg;
 
   if (!comm) comm = global_domain_;
+  std::string alg = engineAlgName(Collective::reduce);
+  if (!alg.empty()){
+    auto args = makeArgs(this, dst, src, root, nelems, type_size, tag, cq_id, fxn, comm);
+    Collective* c = CollectiveRegistry::make(Collective::reduce, alg, args);
+    if (!c) sst_hg_abort_printf("unknown reduce algorithm '%s' (reduce_alg / SUMI_REDUCE_ALG)", alg.c_str());
+    return startCollective(c);
+  }
   DagCollective* coll = new WilkeHalvingReduce(this, root, dst, src, nelems, type_size, tag, fxn, cq_id, comm);
   return startCollective(coll);
 }
@@ -636,6 +711,13 @@ CollectiveEngine::bcast(int root, void *buf, int nelems, int type_size, int tag,
   if (msg) return msg;
 
   if (!comm) comm = global_domain_;
+  std::string alg = engineAlgName(Collective::bcast);
+  if (!alg.empty()){
+    auto args = makeArgs(this, buf, buf, root, nelems, type_size, tag, cq_id, nullptr, comm);
+    Collective* c = CollectiveRegistry::make(Collective::bcast, alg, args);
+    if (!c) sst_hg_abort_printf("unknown bcast algorithm '%s' (bcast_alg / SUMI_BCAST_ALG)", alg.c_str());
+    return startCollective(c);
+  }
   DagCollective* coll = new BinaryTreeBcastCollective(this, root, buf, nelems, type_size, tag, cq_id, comm);
   return startCollective(coll);
 }
@@ -662,6 +744,13 @@ CollectiveEngine::gather(int root, void *dst, void *src, int nelems, int type_si
   if (msg) return msg;
 
   if (!comm) comm = global_domain_;
+  std::string alg = engineAlgName(Collective::gather);
+  if (!alg.empty()){
+    auto args = makeArgs(this, dst, src, root, nelems, type_size, tag, cq_id, nullptr, comm);
+    Collective* c = CollectiveRegistry::make(Collective::gather, alg, args);
+    if (!c) sst_hg_abort_printf("unknown gather algorithm '%s' (gather_alg / SUMI_GATHER_ALG)", alg.c_str());
+    return startCollective(c);
+  }
   DagCollective* coll = new BtreeGather(this, root, dst, src, nelems, type_size, tag, cq_id, comm);
   return startCollective(coll);
 }
@@ -674,6 +763,13 @@ CollectiveEngine::scatter(int root, void *dst, void *src, int nelems, int type_s
   if (msg) return msg;
 
   if (!comm) comm = global_domain_;
+  std::string alg = engineAlgName(Collective::scatter);
+  if (!alg.empty()){
+    auto args = makeArgs(this, dst, src, root, nelems, type_size, tag, cq_id, nullptr, comm);
+    Collective* c = CollectiveRegistry::make(Collective::scatter, alg, args);
+    if (!c) sst_hg_abort_printf("unknown scatter algorithm '%s' (scatter_alg / SUMI_SCATTER_ALG)", alg.c_str());
+    return startCollective(c);
+  }
   DagCollective* coll = new BtreeScatter(this, root, dst, src, nelems, type_size, tag, cq_id, comm);
   return startCollective(coll);
 }
