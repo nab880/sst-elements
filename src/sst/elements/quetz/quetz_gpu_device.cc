@@ -11,8 +11,8 @@
 
 #include <sst_config.h>
 #include "quetz_gpu_device.h"
+#include "quetz_fft.h"
 
-#include <cmath>
 #include <cstring>
 #include <inttypes.h>
 
@@ -405,13 +405,9 @@ void QuetzGpuDevice::mmioHandlers::handle(StandardMem::WriteResp* resp) {
 // the modeled latency -> WRITING (DMA-write result) -> fftFinish (release the
 // held doorbell response). Buffers are little-endian float32 cfloat[N] (re,im).
 
+// The radix-2 FFT math lives in quetz_fft.h (host-side, unit-tested); here we
+// only marshal the little-endian float32 buffer to/from QuetzCf.
 namespace {
-// M_PI is feature-macro-gated (undefined under strict -std=c++17 on some libc),
-// so define the constant locally — mirrors balar's fft.cu (FFT_PI).
-constexpr double kFftPi = 3.14159265358979323846;
-
-struct DevCf { float re, im; };
-
 static float le32_to_f32(const uint8_t* p) {
     uint32_t b = (uint32_t)p[0] | ((uint32_t)p[1] << 8)
                | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
@@ -425,11 +421,6 @@ static void f32_to_le32(float f, uint8_t* p) {
     p[0] = (uint8_t)b; p[1] = (uint8_t)(b >> 8);
     p[2] = (uint8_t)(b >> 16); p[3] = (uint8_t)(b >> 24);
 }
-static uint32_t bitrev_u(uint32_t x, uint32_t logn) {
-    uint32_t r = 0;
-    for (uint32_t i = 0; i < logn; i++) { r = (r << 1) | (x & 1u); x >>= 1; }
-    return r;
-}
 } // namespace
 
 void QuetzGpuDevice::fftStartDma() {
@@ -438,7 +429,7 @@ void QuetzGpuDevice::fftStartDma() {
             "%s: fft REG_FFT_N=%" PRIu32 " must be a nonzero power of two.\n",
             getName().c_str(), fft_n_);
     }
-    fft_total_bytes_ = (uint64_t)fft_n_ * sizeof(DevCf);   /* 8 bytes/point */
+    fft_total_bytes_ = (uint64_t)fft_n_ * sizeof(QuetzCf);   /* 8 bytes/point */
     fft_bytes_.assign(fft_total_bytes_, 0);
     fft_req_off_.clear();
     fft_dma_outstanding_ = 0;
@@ -478,33 +469,14 @@ void QuetzGpuDevice::fftComputeAndStartBusy() {
     uint32_t logn = 0;
     while ((1u << logn) < n) logn++;
 
-    // unmarshal LE float32 -> host cfloat
-    std::vector<DevCf> x((size_t)n), a((size_t)n);
+    // unmarshal LE float32 -> host complex, run the radix-2 FFT (quetz_fft.h),
+    // then marshal the result back into fft_bytes_ (reused for the writeback).
+    std::vector<QuetzCf> a((size_t)n);
     for (uint32_t i = 0; i < n; i++) {
-        x[i].re = le32_to_f32(&fft_bytes_[(size_t)i * 8 + 0]);
-        x[i].im = le32_to_f32(&fft_bytes_[(size_t)i * 8 + 4]);
+        a[i].re = le32_to_f32(&fft_bytes_[(size_t)i * 8 + 0]);
+        a[i].im = le32_to_f32(&fft_bytes_[(size_t)i * 8 + 4]);
     }
-    // staged radix-2 FFT (mirror of fft_reference.py / fft_synth_compute.h),
-    // twiddles computed here in host double for accuracy.
-    for (uint32_t i = 0; i < n; i++) a[i] = x[bitrev_u(i, logn)];
-    for (uint32_t s = 1; s <= logn; s++) {
-        uint32_t half = 1u << (s - 1);
-        for (uint32_t k = 0; k < n / 2u; k++) {
-            uint32_t j     = k & (half - 1u);
-            uint32_t group = k >> (s - 1u);
-            uint32_t i0    = group * (half << 1u) + j;
-            uint32_t i1    = i0 + half;
-            double   ang   = -2.0 * kFftPi * (double)(j << (logn - s)) / (double)n;
-            float    wr    = (float)cos(ang), wi = (float)sin(ang);
-            DevCf    v     = a[i1];
-            float    tr    = wr * v.re - wi * v.im;
-            float    ti    = wr * v.im + wi * v.re;
-            DevCf    u     = a[i0];
-            a[i0].re = u.re + tr; a[i0].im = u.im + ti;
-            a[i1].re = u.re - tr; a[i1].im = u.im - ti;
-        }
-    }
-    // marshal result back to LE float32 in fft_bytes_ (reused for writeback)
+    quetz_fft_radix2(a.data(), n);
     for (uint32_t i = 0; i < n; i++) {
         f32_to_le32(a[i].re, &fft_bytes_[(size_t)i * 8 + 0]);
         f32_to_le32(a[i].im, &fft_bytes_[(size_t)i * 8 + 4]);
