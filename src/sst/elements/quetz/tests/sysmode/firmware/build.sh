@@ -64,6 +64,10 @@ echo "=== RISC-V virt GPU FFT (synthetic-GPU timing, no balar) ==="
 $RV64_CC $RV64_FLAGS riscv_virt_gpu_fft.c -o riscv_virt_gpu_fft
 echo "  -> riscv_virt_gpu_fft"
 
+echo "=== RISC-V virt GPU FFT OFFLOAD (device-computed; QuetzGpuDevice kernel_type=fft) ==="
+$RV64_CC $RV64_FLAGS riscv_virt_gpu_fft_offload.c -o riscv_virt_gpu_fft_offload
+echo "  -> riscv_virt_gpu_fft_offload"
+
 echo "=== RISC-V virt Balar kernel ==="
 $RV64_CC $RV64_FLAGS riscv_virt_balar_kernel.c -o riscv_virt_balar_kernel
 echo "  -> riscv_virt_balar_kernel"
@@ -110,6 +114,12 @@ M68K_FP_FLAGS="-mcpu=5208 -O2 -DFFT_FIXED_POINT \
 echo "=== ColdFire mcf5208evb GPU FFT (synthetic, Q16.16 fixed-point, no balar) ==="
 $M68K_CC $M68K_FP_FLAGS coldfire_startup.S coldfire_gpu_fft.c -o coldfire_gpu_fft
 echo "  -> coldfire_gpu_fft"
+
+# Device-computed FFT: no float/fixed-point math on the guest at all (raw u32
+# bit-pattern compares), so plain M68K_FLAGS — no soft-float, no fft headers.
+echo "=== ColdFire mcf5208evb GPU FFT OFFLOAD (device-computed) ==="
+$M68K_CC $M68K_FLAGS coldfire_startup.S coldfire_gpu_fft_offload.c -o coldfire_gpu_fft_offload
+echo "  -> coldfire_gpu_fft_offload"
 
 echo "=== ARM Cortex-M7 hello ==="
 $ARM_CC $ARM_CFLAGS -T link_arm_m7.ld -Wl,--build-id=none \

@@ -995,6 +995,101 @@ class testcase_quetz_sysmode(SSTTestCase):
             "synchronous timed launches: each doorbell waits out the prior kernel")
 
     # -------------------------------------------------------------------------
+    def test_quetz_sysmode_gpu_fft_offload(self):
+        """256-pt FFT computed ON THE DEVICE (kernel_type=fft), not the guest CPU.
+
+        The contrast to test_quetz_sysmode_gpu_fft: there the guest runs the
+        butterflies and the device only counts latency; here QuetzGpuDevice
+        DMA-reads the input from the SST-backed window (0x90000000, trapped by a
+        second sst-mmio-bridge aperture), computes the FFT in C++, stays BUSY for
+        coeff*N*log2(N) cycles, and DMA-writes the result back. The guest only
+        fills the input, programs 3 registers, rings one doorbell, and verifies.
+        Headline assertions: ONE kernel, modeled busy time, and a guest
+        instruction count far too small to have computed the FFT itself."""
+        test_path = self.get_testsuite_dir()
+        sst_prefix, sst_bindir, sst_libexec = sst_paths()
+
+        qemu_target = "qemu-system-riscv64"
+        exe_rel     = "sysmode/firmware/riscv_virt_gpu_fft_offload"
+        import shutil
+        qemu_bin = os.path.join(sst_bindir, qemu_target)
+        if not os.path.exists(qemu_bin):
+            found = shutil.which(qemu_target)
+            if found:
+                qemu_bin = found
+        exe_abs = os.path.normpath(os.path.join(test_path, exe_rel))
+
+        if not os.path.exists(qemu_bin):
+            self.skipTest("{} not found; skipping".format(qemu_target))
+        if not os.path.exists(exe_abs):
+            self.skipTest("gpu fft offload firmware not found at {}; "
+                          "run sysmode/firmware/build.sh".format(exe_abs))
+
+        outdir = os.path.join(self.get_test_output_run_dir(),
+                              "quetz_sysmode_tests", "gpu_fft_offload")
+        os.makedirs(outdir, exist_ok=True)
+
+        sdlfile     = os.path.join(test_path, "sysmode", "basic_quetz_gpu_compute.py")
+        sst_outfile = os.path.join(outdir, "gpu_fft_offload.out")
+        sst_errfile = os.path.join(outdir, "gpu_fft_offload.err")
+        mpifiles    = os.path.join(outdir, "gpu_fft_offload.testfile")
+
+        # The SDL installs its own region handlers (the FFT window needs none —
+        # window accesses arrive via the sync mailbox, not the trace path).
+        make_sysmode_env(sst_prefix, sst_libexec, qemu_bin, exe_abs,
+                         "-machine virt -nographic -bios none",
+                         "-kernel", 0, 0xFFFFFFFF, [])
+        os.environ["QUETZ_MMIO_START"] = "0x80100000"
+        os.environ["QUETZ_MMIO_END"]   = "0x801003FF"
+        # SST-backed buffer window: the launcher creates the second bridge
+        # aperture from these (without them the guest faults on its first store).
+        os.environ["QUETZ_SST_WIN_START"] = "0x90000000"
+        os.environ["QUETZ_SST_WIN_END"]   = "0x9000FFFF"
+        enable_mmio_payload_delivery()
+
+        try:
+            self.run_sst(sdlfile, sst_outfile, sst_errfile,
+                         mpi_out_files=mpifiles, set_cwd=outdir, timeout_sec=180)
+        finally:
+            os.environ.pop("QUETZ_SST_WIN_START", None)
+            os.environ.pop("QUETZ_SST_WIN_END", None)
+
+        stats = parse_stats(sst_outfile)
+        with open(sst_outfile, "r") as f:
+            raw_output = f.read()
+
+        # Bit-exact device FFT: impulse -> 1+0j everywhere, verified by the guest
+        # reading the DMA-written result back out of the SST window.
+        self.assertIn("GPU FFT offload correct_words=512/512", raw_output,
+            "device-computed FFT result not bit-exact through DMA writeback")
+
+        kernels_launched    = stat_sum(raw_output, "gpu.kernels_launched")
+        busy_cycles         = stat_sum(raw_output, "gpu.busy_cycles")
+        doorbell_while_busy = stat_sum(raw_output, "gpu.doorbell_while_busy")
+        mmio_writes = stats.get("cpu.mmio_write_requests.0", 0)
+        mmio_reads  = stats.get("cpu.mmio_read_requests.0", 0)
+        insn_count  = stats.get("cpu.instruction_count.0", 0)
+
+        self.assertEqual(kernels_launched, 1,
+            "device FFT is ONE kernel (no per-stage doorbells)")
+        # Modeled compute: coeff(20) * N(256) * log2N(8) = 40960 cycles.
+        self.assertGreaterEqual(busy_cycles, 20 * 256 * 8,
+            "gpu.busy_cycles should reflect coeff*N*log2(N) modeled compute")
+        self.assertEqual(doorbell_while_busy, 0,
+            "blocking doorbell: guest cannot re-ring while the op is in flight")
+        # 512 input-fill stores + 3 setup registers + 1 doorbell.
+        self.assertGreaterEqual(mmio_writes, 512 + 3 + 1,
+            "guest must fill the input buffer through the SST window")
+        # 512 verify loads (+ status poll).
+        self.assertGreaterEqual(mmio_reads, 512,
+            "guest must read the DMA-written result back from the SST window")
+        # The headline: the guest issued no butterflies. The CPU-compute variant
+        # executes hundreds of thousands of instructions; the offload guest only
+        # fills/verifies buffers. Generous bound to absorb QEMU boot noise.
+        self.assertLess(insn_count, 50000,
+            "guest instruction count too high — did the CPU compute the FFT?")
+
+    # -------------------------------------------------------------------------
     def test_quetz_sysmode_gpu_fft_coldfire(self):
         """ColdFire (m68k) 256-pt FFT computed on the guest CPU, TIMED by the
         synthetic GPU. Same as the RISC-V gpu_fft test but for the 32-bit
@@ -1070,6 +1165,92 @@ class testcase_quetz_sysmode(SSTTestCase):
             "gpu.busy_cycles should reflect 11 timed 5000-cycle kernels")
         self.assertEqual(doorbell_while_busy, 0,
             "synchronous timed launches: each doorbell waits out the prior kernel")
+
+    # -------------------------------------------------------------------------
+    def test_quetz_sysmode_gpu_fft_offload_coldfire(self):
+        """ColdFire (m68k) 256-pt FFT computed ON THE DEVICE (kernel_type=fft).
+
+        The big-endian counterpart of test_quetz_sysmode_gpu_fft_offload — and
+        the proof that the sync-MMIO window needs no guest byte-swapping: the
+        bridge mailbox carries values, SST serializes them little-endian into
+        the window, so the FPU-less ColdFire just stores/compares raw IEEE bit
+        patterns (0x3F800000 == 1.0f). No soft-float, no Q16.16, no butterflies
+        on the guest."""
+        test_path = self.get_testsuite_dir()
+        sst_prefix, sst_bindir, sst_libexec = sst_paths()
+
+        qemu_target = "qemu-system-m68k"
+        exe_rel     = "sysmode/firmware/coldfire_gpu_fft_offload"
+        import shutil
+        qemu_bin = os.path.join(sst_bindir, qemu_target)
+        if not os.path.exists(qemu_bin):
+            found = shutil.which(qemu_target)
+            if found:
+                qemu_bin = found
+        exe_abs = os.path.normpath(os.path.join(test_path, exe_rel))
+
+        if not os.path.exists(qemu_bin):
+            self.skipTest("{} not found; rebuild QEMU with m68k-softmmu".format(qemu_target))
+        if not os.path.exists(exe_abs):
+            self.skipTest("coldfire_gpu_fft_offload not found at {}; "
+                          "run M68K_CC=m68k-linux-gnu-gcc ./build.sh".format(exe_abs))
+
+        outdir = os.path.join(self.get_test_output_run_dir(),
+                              "quetz_sysmode_tests", "gpu_fft_offload_coldfire")
+        os.makedirs(outdir, exist_ok=True)
+
+        sdlfile     = os.path.join(test_path, "sysmode",
+                                   "basic_quetz_gpu_compute_coldfire.py")
+        sst_outfile = os.path.join(outdir, "gpu_fft_offload_coldfire.out")
+        sst_errfile = os.path.join(outdir, "gpu_fft_offload_coldfire.err")
+        mpifiles    = os.path.join(outdir, "gpu_fft_offload_coldfire.testfile")
+
+        make_sysmode_env(sst_prefix, sst_libexec, qemu_bin, exe_abs,
+                         "-machine mcf5208evb -display none -serial stdio -m 128M",
+                         "-kernel", 0x40000000, 0x47FFFFFF, [])
+        os.environ["QUETZ_MMIO_START"] = "0x70000000"
+        os.environ["QUETZ_MMIO_END"]   = "0x700003FF"
+        os.environ["QUETZ_SST_WIN_START"] = "0x71000000"
+        os.environ["QUETZ_SST_WIN_END"]   = "0x7100FFFF"
+        os.environ.pop("QUETZ_PLATFORM", None)
+        enable_mmio_payload_delivery()
+
+        try:
+            self.run_sst(sdlfile, sst_outfile, sst_errfile,
+                         mpi_out_files=mpifiles, set_cwd=outdir, timeout_sec=180)
+        finally:
+            os.environ.pop("QUETZ_SST_WIN_START", None)
+            os.environ.pop("QUETZ_SST_WIN_END", None)
+
+        raw = ""
+        if os.path.exists(sst_outfile):
+            with open(sst_outfile, "r") as f:
+                raw = f.read()
+        self.assertNotIn("FATAL", raw)
+
+        self.assertIn("GPU FFT offload correct_words=512/512", raw,
+            "device-computed FFT result not bit-exact on the big-endian guest")
+        self.assertIn("TESTFINISH[0]", raw,
+            "TestFinisher sentinel not triggered; sim may have hung")
+
+        stats = parse_stats(sst_outfile)
+        kernels_launched    = stat_sum(raw, "gpu.kernels_launched")
+        busy_cycles         = stat_sum(raw, "gpu.busy_cycles")
+        doorbell_while_busy = stat_sum(raw, "gpu.doorbell_while_busy")
+        mmio_writes = stats.get("cpu.mmio_write_requests.0", 0)
+        mmio_reads  = stats.get("cpu.mmio_read_requests.0", 0)
+
+        self.assertEqual(kernels_launched, 1,
+            "device FFT is ONE kernel (no per-stage doorbells)")
+        self.assertGreaterEqual(busy_cycles, 20 * 256 * 8,
+            "gpu.busy_cycles should reflect coeff*N*log2(N) modeled compute")
+        self.assertEqual(doorbell_while_busy, 0,
+            "blocking doorbell: guest cannot re-ring while the op is in flight")
+        # 256 points * 2 u32 words = 512 fill stores, plus 3 setup regs + doorbell.
+        self.assertGreaterEqual(mmio_writes, 512 + 3 + 1,
+            "guest must fill the input buffer through the SST window")
+        self.assertGreaterEqual(mmio_reads, 512,
+            "guest must read the DMA-written result back from the SST window")
 
     # -------------------------------------------------------------------------
     def test_quetz_sysmode_gpu_async(self):

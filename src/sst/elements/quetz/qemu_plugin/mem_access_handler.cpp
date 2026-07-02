@@ -38,6 +38,16 @@ void QemuMemAccessHandler::handle(unsigned int vcpu_index,
         return;
     }
 
+    if (g_sst_win_size != 0 && vaddr >= g_sst_win_base &&
+        vaddr < g_sst_win_base + g_sst_win_size) {
+        // SST-backed memory window: the access already reached SST synchronously
+        // through the sst-mmio-bridge aperture (blocking mailbox round-trip), so
+        // its timing is modeled there. Emitting it on the trace ring too would
+        // double-issue it into the memory hierarchy.
+        flush_run(vcpu_index);
+        return;
+    }
+
     g_mem_seen[vcpu_index].store(true, std::memory_order_relaxed);
 
     if (g_insn_classifier && !g_insn_classifier->usesPreciseMemCallbacks())

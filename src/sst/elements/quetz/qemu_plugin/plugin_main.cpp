@@ -83,6 +83,10 @@ int qemu_plugin_install(qemu_plugin_id_t id,
             g_mmio_sync_base = strtoull(argv[i] + 10, nullptr, 0);
         else if (strncmp(argv[i], "mmio_size=", 10) == 0)
             g_mmio_sync_size = strtoull(argv[i] + 10, nullptr, 0);
+        else if (strncmp(argv[i], "win_base=", 9) == 0)
+            g_sst_win_base = strtoull(argv[i] + 9, nullptr, 0);
+        else if (strncmp(argv[i], "win_size=", 9) == 0)
+            g_sst_win_size = strtoull(argv[i] + 9, nullptr, 0);
     }
 
     if (g_detailed && !g_insn_classifier->usesPreciseMemCallbacks()) {

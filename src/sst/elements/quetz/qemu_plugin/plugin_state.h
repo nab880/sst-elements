@@ -38,6 +38,12 @@ extern MemAccessHandler*    g_mem_handler;
 extern uint64_t             g_mmio_sync_base;
 extern uint64_t             g_mmio_sync_size;
 
+// SST-backed memory window (win_base=/win_size=): like the MMIO range, guest
+// accesses here are delivered synchronously via the sst-mmio-bridge device, so
+// they must NOT also be emitted on the trace ring.
+extern uint64_t             g_sst_win_base;
+extern uint64_t             g_sst_win_size;
+
 // Per-vCPU compute-run accumulator (P2): consecutive same-class non-memory
 // insns are batched into one QUETZ_CMD_COMPUTE_RUN instead of one NOP each.
 extern QuetzInsnClass       g_run_cls[PLUGIN_MAX_VCPUS];

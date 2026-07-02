@@ -12,6 +12,8 @@
 #include <sst_config.h>
 #include "quetz_gpu_device.h"
 
+#include <cmath>
+#include <cstring>
 #include <inttypes.h>
 
 using namespace SST;
@@ -33,6 +35,16 @@ QuetzGpuDevice::QuetzGpuDevice(ComponentId_t id, Params& params)
       deferred_doorbell_resp_(nullptr),
       handlers(nullptr),
       iface(nullptr),
+      kernel_type_(KernelType::NONE),
+      fft_latency_coeff_(params.find<uint64_t>("fft_latency_coeff", 20)),
+      mem_iface_(nullptr),
+      fft_in_addr_(0),
+      fft_out_addr_(0),
+      fft_n_(0),
+      fft_phase_(FftPhase::IDLE),
+      fft_total_bytes_(0),
+      fft_dma_outstanding_(0),
+      fft_doorbell_resp_(nullptr),
       stat_kernels_launched_(nullptr),
       stat_busy_cycles_(nullptr),
       stat_doorbell_writes_(nullptr),
@@ -76,6 +88,37 @@ QuetzGpuDevice::QuetzGpuDevice(ComponentId_t id, Params& params)
 
     handlers = new mmioHandlers(this, &out);
 
+    // kernel_type: 'none' (pure latency model, default) or 'fft' (real compute).
+    std::string ktype = params.find<std::string>("kernel_type", "none");
+    if (ktype == "none") {
+        kernel_type_ = KernelType::NONE;
+    } else if (ktype == "fft") {
+        kernel_type_ = KernelType::FFT;
+    } else {
+        out.fatal(CALL_INFO, -1,
+            "%s: unknown kernel_type '%s' (want 'none' or 'fft').\n",
+            getName().c_str(), ktype.c_str());
+    }
+
+    if (kernel_type_ == KernelType::FFT) {
+        // fft mode needs a memory initiator to DMA the guest buffers, and it must
+        // hold the doorbell response until the result is written back.
+        mem_iface_ = loadUserSubComponent<StandardMem>(
+            "mem_iface", ComponentInfo::SHARE_NONE, tc_,
+            new StandardMem::Handler<QuetzGpuDevice, &QuetzGpuDevice::handleEvent>(this));
+        if (!mem_iface_) {
+            out.fatal(CALL_INFO, -1,
+                "%s: kernel_type=fft requires a 'mem_iface' subcomponent "
+                "(memHierarchy.standardInterface) to DMA the FFT buffers.\n",
+                getName().c_str());
+        }
+        if (!doorbell_blocking_) {
+            out.fatal(CALL_INFO, -1,
+                "%s: kernel_type=fft requires doorbell_blocking=1 (the guest must "
+                "block until the result is in memory).\n", getName().c_str());
+        }
+    }
+
     registerClock(tc_, new Clock::Handler<QuetzGpuDevice, &QuetzGpuDevice::tickBusy>(this));
 
     registerAsPrimaryComponent();
@@ -99,10 +142,14 @@ QuetzGpuDevice::QuetzGpuDevice(ComponentId_t id, Params& params)
 
 void QuetzGpuDevice::init(unsigned int phase) {
     iface->init(phase);
+    if (mem_iface_)
+        mem_iface_->init(phase);
 }
 
 void QuetzGpuDevice::setup() {
     iface->setup();
+    if (mem_iface_)
+        mem_iface_->setup();
 }
 
 bool QuetzGpuDevice::isBusyAt(uint64_t ) const {
@@ -110,7 +157,8 @@ bool QuetzGpuDevice::isBusyAt(uint64_t ) const {
 }
 
 bool QuetzGpuDevice::hasOutstandingWork() const {
-    return busy_until_clk_ != 0 || !pending_latencies_.empty();
+    return busy_until_clk_ != 0 || !pending_latencies_.empty()
+        || fft_phase_ != FftPhase::IDLE;
 }
 
 void QuetzGpuDevice::startKernel(uint64_t now_clk, uint64_t latency) {
@@ -145,6 +193,15 @@ void QuetzGpuDevice::updatePrimaryHold(bool allow_ok_to_end) {
 void QuetzGpuDevice::retireIfReady(uint64_t now_clk) {
     if (busy_until_clk_ == 0 || now_clk <= busy_until_clk_)
         return;
+
+    // fft mode: the "BUSY" window models compute time; when it ends the result
+    // is not yet in guest memory — kick off the writeback DMA. kernel_id and the
+    // doorbell release happen in fftFinish() once the last WriteResp lands.
+    if (kernel_type_ == KernelType::FFT && fft_phase_ == FftPhase::READING) {
+        busy_until_clk_ = 0;
+        fftBeginWriteback();
+        return;
+    }
 
     kernel_id_++;
     busy_until_clk_ = 0;
@@ -209,6 +266,24 @@ void QuetzGpuDevice::mmioHandlers::handle(StandardMem::Write* write) {
         "%s: Write offset=0x%" PRIx64 " size=%zu\n",
         gpu->getName().c_str(), offset, write->size);
 
+    // kernel_type=fft: the doorbell kicks off a real compute op (DMA-read the
+    // input, compute in C++, DMA-write the result). The doorbell response is held
+    // for the whole op so the guest's STATUS/blocking read only completes once the
+    // result is in memory. One op in flight at a time.
+    if (offset == REG_DOORBELL && gpu->kernel_type_ == QuetzGpuDevice::KernelType::FFT) {
+        gpu->stat_doorbell_writes_->addData(1);
+        if (gpu->fft_phase_ != QuetzGpuDevice::FftPhase::IDLE || gpu->isBusyAt(gpu->gpu_clk_)) {
+            out->fatal(CALL_INFO, -1,
+                "%s: fft doorbell while an FFT op is in flight (guest must "
+                "wait for STATUS idle).\n", gpu->getName().c_str());
+        }
+        if (!write->posted)
+            gpu->fft_doorbell_resp_ = write->makeResponse();
+        gpu->submit_id_++;
+        gpu->fftStartDma();
+        return;
+    }
+
     if (offset == REG_DOORBELL) {
         uint64_t latency = gpu->latency_override_;
         if (latency == 0)
@@ -241,6 +316,12 @@ void QuetzGpuDevice::mmioHandlers::handle(StandardMem::Write* write) {
         out->verbose(CALL_INFO, 2, 0,
             "%s: latency_override=%" PRIu64 "\n",
             gpu->getName().c_str(), gpu->latency_override_);
+    } else if (offset == REG_FFT_IN_ADDR) {
+        gpu->fft_in_addr_ = dataToU64(&write->data);
+    } else if (offset == REG_FFT_OUT_ADDR) {
+        gpu->fft_out_addr_ = dataToU64(&write->data);
+    } else if (offset == REG_FFT_N) {
+        gpu->fft_n_ = (uint32_t)dataToU64(&write->data);
     } else if (offset == REG_STATUS || offset == REG_KERNEL_ID ||
                offset == REG_TICKET || offset == REG_RESULT) {
         gpu->stat_wrong_direction_accesses_->addData(1);
@@ -276,7 +357,11 @@ void QuetzGpuDevice::mmioHandlers::handle(StandardMem::Read* read) {
 
     if (offset == REG_STATUS) {
         gpu->retireIfReady(now_clk);
-        value = gpu->isBusyAt(now_clk) ? 1 : 0;
+        // An FFT op is busy for its whole doorbell-to-writeback lifetime, not
+        // just the modeled-latency window (busy_until_clk_ is 0 during the DMA
+        // read/write phases) — a poller must not see idle and re-ring mid-op.
+        value = (gpu->isBusyAt(now_clk) ||
+                 gpu->fft_phase_ != QuetzGpuDevice::FftPhase::IDLE) ? 1 : 0;
         gpu->stat_status_polls_->addData(1);
     } else if (offset == REG_KERNEL_ID) {
         gpu->retireIfReady(now_clk);
@@ -304,6 +389,176 @@ void QuetzGpuDevice::mmioHandlers::handle(StandardMem::Read* read) {
         static_cast<StandardMem::ReadResp*>(read->makeResponse());
     resp->data = payload;
     gpu->iface->send(resp);
+}
+
+// --- mem_iface response handlers (fft DMA) -----------------------------------
+void QuetzGpuDevice::mmioHandlers::handle(StandardMem::ReadResp* resp) {
+    gpu->fftOnReadResp(resp);
+}
+void QuetzGpuDevice::mmioHandlers::handle(StandardMem::WriteResp* resp) {
+    gpu->fftOnWriteResp(resp);
+}
+
+// --- kernel_type=fft: DMA + C++ FFT ------------------------------------------
+//
+// Sequence per doorbell: READING (DMA-read input) -> compute in C++ -> BUSY for
+// the modeled latency -> WRITING (DMA-write result) -> fftFinish (release the
+// held doorbell response). Buffers are little-endian float32 cfloat[N] (re,im).
+
+namespace {
+// M_PI is feature-macro-gated (undefined under strict -std=c++17 on some libc),
+// so define the constant locally — mirrors balar's fft.cu (FFT_PI).
+constexpr double kFftPi = 3.14159265358979323846;
+
+struct DevCf { float re, im; };
+
+static float le32_to_f32(const uint8_t* p) {
+    uint32_t b = (uint32_t)p[0] | ((uint32_t)p[1] << 8)
+               | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+    float f;
+    memcpy(&f, &b, sizeof(f));
+    return f;
+}
+static void f32_to_le32(float f, uint8_t* p) {
+    uint32_t b;
+    memcpy(&b, &f, sizeof(b));
+    p[0] = (uint8_t)b; p[1] = (uint8_t)(b >> 8);
+    p[2] = (uint8_t)(b >> 16); p[3] = (uint8_t)(b >> 24);
+}
+static uint32_t bitrev_u(uint32_t x, uint32_t logn) {
+    uint32_t r = 0;
+    for (uint32_t i = 0; i < logn; i++) { r = (r << 1) | (x & 1u); x >>= 1; }
+    return r;
+}
+} // namespace
+
+void QuetzGpuDevice::fftStartDma() {
+    if (fft_n_ == 0 || (fft_n_ & (fft_n_ - 1)) != 0) {
+        out.fatal(CALL_INFO, -1,
+            "%s: fft REG_FFT_N=%" PRIu32 " must be a nonzero power of two.\n",
+            getName().c_str(), fft_n_);
+    }
+    fft_total_bytes_ = (uint64_t)fft_n_ * sizeof(DevCf);   /* 8 bytes/point */
+    fft_bytes_.assign(fft_total_bytes_, 0);
+    fft_req_off_.clear();
+    fft_dma_outstanding_ = 0;
+    fft_phase_ = FftPhase::READING;
+
+    out.verbose(CALL_INFO, 2, 0,
+        "%s: fft doorbell — DMA-reading %" PRIu64 " bytes from 0x%" PRIx64 "\n",
+        getName().c_str(), fft_total_bytes_, fft_in_addr_);
+
+    for (uint64_t off = 0; off < fft_total_bytes_; off += kFftDmaChunk) {
+        uint64_t n = fft_total_bytes_ - off;
+        if (n > kFftDmaChunk) n = kFftDmaChunk;
+        auto* rd = new StandardMem::Read(fft_in_addr_ + off, (size_t)n);
+        fft_req_off_[rd->getID()] = off;
+        fft_dma_outstanding_++;
+        mem_iface_->send(rd);
+    }
+    updatePrimaryHold(false);
+}
+
+void QuetzGpuDevice::fftOnReadResp(StandardMem::ReadResp* resp) {
+    auto it = fft_req_off_.find(resp->getID());
+    if (it == fft_req_off_.end()) {
+        out.fatal(CALL_INFO, -1, "%s: fft ReadResp with unknown id.\n",
+            getName().c_str());
+    }
+    uint64_t off = it->second;
+    fft_req_off_.erase(it);
+    for (size_t i = 0; i < resp->data.size() && off + i < fft_total_bytes_; i++)
+        fft_bytes_[off + i] = resp->data[i];
+    if (--fft_dma_outstanding_ == 0)
+        fftComputeAndStartBusy();
+}
+
+void QuetzGpuDevice::fftComputeAndStartBusy() {
+    uint32_t n = fft_n_;
+    uint32_t logn = 0;
+    while ((1u << logn) < n) logn++;
+
+    // unmarshal LE float32 -> host cfloat
+    std::vector<DevCf> x((size_t)n), a((size_t)n);
+    for (uint32_t i = 0; i < n; i++) {
+        x[i].re = le32_to_f32(&fft_bytes_[(size_t)i * 8 + 0]);
+        x[i].im = le32_to_f32(&fft_bytes_[(size_t)i * 8 + 4]);
+    }
+    // staged radix-2 FFT (mirror of fft_reference.py / fft_synth_compute.h),
+    // twiddles computed here in host double for accuracy.
+    for (uint32_t i = 0; i < n; i++) a[i] = x[bitrev_u(i, logn)];
+    for (uint32_t s = 1; s <= logn; s++) {
+        uint32_t half = 1u << (s - 1);
+        for (uint32_t k = 0; k < n / 2u; k++) {
+            uint32_t j     = k & (half - 1u);
+            uint32_t group = k >> (s - 1u);
+            uint32_t i0    = group * (half << 1u) + j;
+            uint32_t i1    = i0 + half;
+            double   ang   = -2.0 * kFftPi * (double)(j << (logn - s)) / (double)n;
+            float    wr    = (float)cos(ang), wi = (float)sin(ang);
+            DevCf    v     = a[i1];
+            float    tr    = wr * v.re - wi * v.im;
+            float    ti    = wr * v.im + wi * v.re;
+            DevCf    u     = a[i0];
+            a[i0].re = u.re + tr; a[i0].im = u.im + ti;
+            a[i1].re = u.re - tr; a[i1].im = u.im - ti;
+        }
+    }
+    // marshal result back to LE float32 in fft_bytes_ (reused for writeback)
+    for (uint32_t i = 0; i < n; i++) {
+        f32_to_le32(a[i].re, &fft_bytes_[(size_t)i * 8 + 0]);
+        f32_to_le32(a[i].im, &fft_bytes_[(size_t)i * 8 + 4]);
+    }
+
+    // Model compute time: coeff * N * log2(N), unless the guest forced a latency.
+    uint64_t latency = latency_override_;
+    latency_override_ = 0;
+    if (latency == 0)
+        latency = fft_latency_coeff_ * (uint64_t)n * (uint64_t)(logn ? logn : 1);
+    stat_kernels_launched_->addData(1);
+    busy_until_clk_ = gpu_clk_ + latency;
+    out.verbose(CALL_INFO, 2, 0,
+        "%s: fft computed (N=%" PRIu32 "), BUSY %" PRIu64 " cycles then writeback\n",
+        getName().c_str(), n, latency);
+    updatePrimaryHold(false);
+    // fftBeginWriteback() is invoked from retireIfReady() when BUSY ends.
+}
+
+void QuetzGpuDevice::fftBeginWriteback() {
+    fft_phase_ = FftPhase::WRITING;
+    fft_dma_outstanding_ = 0;
+    out.verbose(CALL_INFO, 2, 0,
+        "%s: fft DMA-writing %" PRIu64 " bytes to 0x%" PRIx64 "\n",
+        getName().c_str(), fft_total_bytes_, fft_out_addr_);
+    for (uint64_t off = 0; off < fft_total_bytes_; off += kFftDmaChunk) {
+        uint64_t n = fft_total_bytes_ - off;
+        if (n > kFftDmaChunk) n = kFftDmaChunk;
+        std::vector<uint8_t> chunk(fft_bytes_.begin() + off,
+                                   fft_bytes_.begin() + off + n);
+        auto* wr = new StandardMem::Write(fft_out_addr_ + off, (size_t)n, chunk);
+        fft_dma_outstanding_++;
+        mem_iface_->send(wr);
+    }
+    updatePrimaryHold(false);
+}
+
+void QuetzGpuDevice::fftOnWriteResp(StandardMem::WriteResp* ) {
+    if (fft_dma_outstanding_ == 0) return;
+    if (--fft_dma_outstanding_ == 0)
+        fftFinish();
+}
+
+void QuetzGpuDevice::fftFinish() {
+    fft_phase_ = FftPhase::IDLE;
+    kernel_id_++;
+    out.verbose(CALL_INFO, 2, 0,
+        "%s: fft op complete, result in memory (kernel_id=%" PRIu64 ")\n",
+        getName().c_str(), kernel_id_);
+    if (fft_doorbell_resp_) {
+        iface->send(fft_doorbell_resp_);   // release the guest's blocking doorbell
+        fft_doorbell_resp_ = nullptr;
+    }
+    updatePrimaryHold(true);
 }
 
 void QuetzGpuDevice::printStatus(Output& statusOut) {

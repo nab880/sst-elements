@@ -5,7 +5,15 @@ quetz_test_helpers.py — shared fixtures for Quetz SST testsuites.
 
 import os
 
-from sst_unittest_support import LineFilter
+try:
+    from sst_unittest_support import LineFilter
+except ImportError:
+    # SDL decks import this module (for sst_prefix) under a plain `sst` process,
+    # where the test-framework module is not importable (it installs to
+    # $SST_PREFIX/libexec, which is not on the default path). LineFilter — and the
+    # QuetzStatsFilter subclass below — are only exercised by the testsuite, which
+    # runs under sst-test-elements where the real import succeeds.
+    LineFilter = object
 
 
 def sst_prefix():
@@ -43,10 +51,14 @@ _TIMING_KEYWORDS = (
 
 # Round 2 Balar doorbell stats: zero in non-Balar tests and absent from pre-r2 gold.
 # cached_truncated_writes: zero unless a >64B store is split; absent from older gold.
+# async_*: P4 async-offload stats, zero in non-async tests and absent from pre-P4 gold.
 _GOLD_EXCLUDE_KEYWORDS = (
     "mmio_doorbell_flushes",
     "mmio_doorbell_flush_cycles",
     "cached_truncated_writes",
+    "async_submits",
+    "async_completions",
+    "async_overlap_cycles",
 )
 
 
@@ -141,6 +153,10 @@ def make_sysmode_env(sst_prefix, sst_libexec, qemu_bin, exe_abs,
     """Populate os.environ for basic_quetz_sysmode.py runs."""
     _clear_region_handler_env()
     os.environ.pop("QUETZ_MMIO_PAYLOAD", None)
+    # SST-backed window (second bridge aperture): only device-compute tests set
+    # these; stale values would map the aperture into every later run.
+    os.environ.pop("QUETZ_SST_WIN_START", None)
+    os.environ.pop("QUETZ_SST_WIN_END", None)
     os.environ["QUETZ_EXE"] = exe_abs
     os.environ["QUETZ_QEMU"] = qemu_bin
     os.environ["QUETZ_PLUGIN"] = os.path.join(sst_libexec, "libqemu_sst_plugin.so")

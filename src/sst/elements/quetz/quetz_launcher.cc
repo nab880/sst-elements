@@ -70,6 +70,26 @@ pid_t QemuLauncher::spawn(const QuetzConfig& cfg,
         plugin_arg += plug_mmio;
     }
 
+    // Optional SST-backed memory window (QUETZ_SST_WIN_START/END): a guest-phys
+    // range whose accesses are trapped by a second sst-mmio-bridge aperture and
+    // served synchronously by the SST memory hierarchy (router -> directory ->
+    // MemController), so a device DMA and the guest see the same bytes. The
+    // plugin is told the range so those accesses are NOT also trace-streamed.
+    const char* win_start_env = getenv("QUETZ_SST_WIN_START");
+    const char* win_end_env   = getenv("QUETZ_SST_WIN_END");
+    uint64_t win_base = 0;
+    uint64_t win_size = 0;
+    if (win_start_env && win_end_env) {
+        win_base = strtoull(win_start_env, nullptr, 0);
+        uint64_t win_end = strtoull(win_end_env, nullptr, 0);
+        if (win_end >= win_base)
+            win_size = win_end - win_base + 1;
+        char plug_win[128];
+        snprintf(plug_win, sizeof(plug_win),
+            ",win_base=0x%" PRIx64 ",win_size=0x%" PRIx64, win_base, win_size);
+        plugin_arg += plug_win;
+    }
+
     std::vector<std::string> argv_strs;
     argv_strs.reserve(8 + cfg.qemu_extra_args.size() + cfg.app_args.size());
     argv_strs.push_back(cfg.qemu_bin);
@@ -96,6 +116,19 @@ pid_t QemuLauncher::spawn(const QuetzConfig& cfg,
             shmem_region_name.c_str(), mmio_base, mmio_size);
         argv_strs.push_back("-sst-mmio-range");
         argv_strs.push_back(range);
+    }
+
+    if (win_size != 0) {
+        if (!cfg.system_mode)
+            output_->fatal(CALL_INFO, -1,
+                "QUETZ_SST_WIN_START/END is only supported in system mode "
+                "(the window is an sst-mmio-bridge device aperture).\n");
+        char dev[256];
+        snprintf(dev, sizeof(dev),
+            "sst-mmio-bridge,shmname=%s,base=0x%" PRIx64 ",size=0x%" PRIx64 ",vcpu_id=0",
+            shmem_region_name.c_str(), win_base, win_size);
+        argv_strs.push_back("-device");
+        argv_strs.push_back(dev);
     }
 
     if (cfg.system_mode && !cfg.system_mode_loader.empty())

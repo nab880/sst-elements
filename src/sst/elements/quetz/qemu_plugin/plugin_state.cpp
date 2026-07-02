@@ -23,6 +23,8 @@ InsnClassifier*     g_insn_classifier  = nullptr;
 MemAccessHandler*   g_mem_handler      = nullptr;
 uint64_t            g_mmio_sync_base   = 0;
 uint64_t            g_mmio_sync_size   = 0;
+uint64_t            g_sst_win_base     = 0;
+uint64_t            g_sst_win_size     = 0;
 QuetzInsnClass      g_run_cls[PLUGIN_MAX_VCPUS];
 uint32_t            g_run_count[PLUGIN_MAX_VCPUS]  = {0};
 uint64_t            g_run_pc[PLUGIN_MAX_VCPUS];
