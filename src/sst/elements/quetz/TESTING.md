@@ -52,14 +52,14 @@ In a clean run you should see **all integration tests passing** (matrix usermode
 
 ```bash
 cd /path/to/raptor
-docker build -t raptor-quetz-test -f quetz-docker/Dockerfile .
+docker build --target build -t raptor-quetz-test -f quetz-docker/Dockerfile .
 ```
 
 Override the image name if needed:
 
 ```bash
 export RAPTOR_QUETZ_IMAGE=my-quetz-test
-docker build -t "${RAPTOR_QUETZ_IMAGE}" -f quetz-docker/Dockerfile .
+docker build --target build -t "${RAPTOR_QUETZ_IMAGE}" -f quetz-docker/Dockerfile .
 ```
 
 The Dockerfile compiles QEMU with plugin support, then SST-Core and SST-Elements (including Quetz). Rebuild is required after changing **build system** files (`Makefile.am`, `configure.m4`) or when the image does not yet contain your sources.
