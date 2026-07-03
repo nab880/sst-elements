@@ -3,8 +3,9 @@ basic_quetz_gpu_compute_coldfire.py — QuetzGpuDevice in COMPUTE mode for a
 ColdFire (m68k) guest.
 
 The m68k counterpart of basic_quetz_gpu_compute.py: the DEVICE computes the FFT
-(kernel_type=fft — DMA-read input, C++ compute, DMA-write result); the guest
-only fills the input, programs 3 registers, rings the doorbell, and verifies.
+(quetz.FFTKernel in the 'kernel' slot — DMA-read input, kernel compute,
+DMA-write result); the guest only fills the input, programs 3 registers, rings
+the doorbell, and verifies.
 
 ColdFire mcf5208evb map:
   0xfc060000  on-chip UART                  (uart handler, tx at +0x0C)
@@ -128,17 +129,19 @@ cpu_mmio_if = cpu.setSubComponent("mmio", "memHierarchy.standardInterface", 0)
 cpu_mmio_nic = cpu_mmio_if.setSubComponent("lowlink", "memHierarchy.MemNIC")
 cpu_mmio_nic.addParams({"group": CORE_GROUP, "destinations": CORE_DST, "network_bw": NETWORK_BW})
 
-# GPU device: MMIO target (iface) + memory initiator (mem_iface) for FFT DMA.
+# GPU device: MMIO target (iface) + memory initiator (mem_iface) for kernel DMA.
 gpu = sst.Component("gpu", "quetz.QuetzGpuDevice")
 gpu.addParams({
     "base_addr": mmio_start,
     "mmio_size": (mmio_end - mmio_start + 1),
     "clock": "1GHz",
-    "kernel_type": "fft",
-    "doorbell_blocking": 1,   # required by fft mode
-    "fft_latency_coeff": int(os.environ.get("QUETZ_FFT_LATENCY_COEFF", "20")),
+    "doorbell_blocking": 1,   # required when a kernel is loaded
 })
 gpu.enableAllStatistics()
+gpu_kernel = gpu.setSubComponent("kernel", "quetz.FFTKernel")
+gpu_kernel.addParams({
+    "fft_latency_coeff": int(os.environ.get("QUETZ_FFT_LATENCY_COEFF", "20")),
+})
 gpu_mmio_if = gpu.setSubComponent("iface", "memHierarchy.standardInterface")
 gpu_mmio_nic = gpu_mmio_if.setSubComponent("lowlink", "memHierarchy.MemNIC")
 gpu_mmio_nic.addParams({"group": MMIO_GROUP, "sources": MMIO_SRC,

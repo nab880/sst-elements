@@ -53,9 +53,12 @@ SDL parameters, and plain C++ behind a tiny component API. The demo uses two:
 
 - `quetz.QuetzGpuDevice` — the **generic accelerator**: a doorbell/status
   latency model (`REG_DOORBELL`, `REG_STATUS`, `REG_KERNEL_ID`,
-  `REG_LATENCY_OVERRIDE`, plus async ticket/completion registers, plus a real
-  device-compute example in `kernel_type=fft`). Your driver code exercises
-  submit → poll → complete against it unchanged.
+  `REG_LATENCY_OVERRIDE`, plus async ticket/completion registers). Load a
+  compute kernel into its `kernel` subcomponent slot and the device really
+  computes: DMA-read from `REG_ARG0`, run the kernel, DMA-write to
+  `REG_ARG1` (`quetz.FFTKernel` is the shipped example; write your own by
+  subclassing `QuetzKernel` — two methods, see `quetz_kernel_api.h`). Your
+  driver code exercises submit → poll → complete against it unchanged.
 - `quetz.QuetzStreamDevice` — the **sensor feed**: replays any recorded byte
   stream (samples, telemetry, CAN log) through four registers:
 

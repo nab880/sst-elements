@@ -21,6 +21,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "quetz_kernel_api.h"
+
 namespace SST {
 namespace Quetz {
 
@@ -32,7 +34,8 @@ public:
         "quetz",
         "QuetzGpuDevice",
         SST_ELI_ELEMENT_VERSION(1, 0, 0),
-        "Synthetic GPU MMIO device with configurable kernel latency",
+        "Synthetic accelerator MMIO device: doorbell latency model, or real "
+        "compute via a QuetzKernel in the 'kernel' slot",
         COMPONENT_CATEGORY_MEMORY)
 
     SST_ELI_DOCUMENT_PARAMS(
@@ -40,31 +43,29 @@ public:
         { "clock", "(UnitAlgebra/string) Clock frequency", "1GHz" },
         { "base_addr", "(uint64) MMIO region base address", "0" },
         { "mmio_size", "(uint64) Size of MMIO region in bytes", "0x400" },
-        { "kernel_latency", "(uint64) Default kernel runtime in clock cycles", "5000" },
+        { "kernel_latency", "(uint64) Default kernel runtime in clock cycles "
+          "(used when no kernel is loaded, or when the loaded kernel returns "
+          "no latency opinion)", "5000" },
         { "doorbell_blocking",
           "(bool) If 1, defer the doorbell write response until the kernel "
           "retires (mimics balar's blocked_response). Lets the Quetz async "
           "engine's COMPLETED counter track real kernel completion. Default 0 "
-          "(respond immediately; guest polls REG_STATUS).", "0" },
+          "(respond immediately; guest polls REG_STATUS). Required when the "
+          "'kernel' slot is populated.", "0" },
         { "dma_bytes_per_kernel",
-          "(uint64) Synthetic DMA bytes per kernel (P2.b only; must be 0)", "0" },
-        { "kernel_type",
-          "(string) 'none' = pure latency model (default; no compute/DMA). "
-          "'fft' = the device actually computes a radix-2 FFT: on doorbell it "
-          "DMA-reads the input buffer (REG_FFT_IN_ADDR, little-endian float32 "
-          "cfloat[N]) from memory via mem_iface, computes the FFT in C++, stays "
-          "BUSY for fft_latency_coeff*N*log2(N) cycles, then DMA-writes the "
-          "result to REG_FFT_OUT_ADDR. Requires mem_iface + doorbell_blocking=1.",
-          "none" },
-        { "fft_latency_coeff",
-          "(uint64) fft mode: BUSY cycles = coeff * N * log2(N). Default 20. "
-          "REG_LATENCY_OVERRIDE still forces an explicit per-op latency.", "20" })
+          "(uint64) Synthetic DMA bytes per kernel (P2.b only; must be 0)", "0" })
 
     SST_ELI_DOCUMENT_SUBCOMPONENT_SLOTS(
         { "iface", "MMIO target interface (doorbell/status registers)",
           "SST::Interfaces::StandardMem" },
-        { "mem_iface", "Memory initiator for FFT DMA (kernel_type=fft only)",
-          "SST::Interfaces::StandardMem" })
+        { "mem_iface", "Memory initiator for kernel DMA (required when the "
+          "'kernel' slot is populated)",
+          "SST::Interfaces::StandardMem" },
+        { "kernel", "Compute kernel run per doorbell: the device DMA-reads "
+          "inputBytes() from REG_ARG0, calls compute(), stays BUSY for the "
+          "returned latency, then DMA-writes the output to REG_ARG1. Slot "
+          "empty = pure latency model.",
+          "SST::Quetz::QuetzKernel" })
 
     SST_ELI_DOCUMENT_STATISTICS(
         { "kernels_launched", "Doorbell writes that started a kernel", "kernels", 1 },
@@ -99,7 +100,7 @@ protected:
         virtual ~mmioHandlers() {}
         virtual void handle(Interfaces::StandardMem::Read* read) override;
         virtual void handle(Interfaces::StandardMem::Write* write) override;
-        // FFT DMA (mem_iface) responses.
+        // Kernel DMA (mem_iface) responses.
         virtual void handle(Interfaces::StandardMem::ReadResp* resp) override;
         virtual void handle(Interfaces::StandardMem::WriteResp* resp) override;
 
@@ -119,13 +120,13 @@ protected:
     void startKernel(uint64_t now_clk, uint64_t latency);
     void updatePrimaryHold(bool allow_ok_to_end);
 
-    // --- kernel_type=fft: DMA state machine + C++ FFT compute -----------------
-    void fftStartDma();          // on doorbell: begin DMA-read of the input buffer
-    void fftOnReadResp(Interfaces::StandardMem::ReadResp* resp);
-    void fftOnWriteResp(Interfaces::StandardMem::WriteResp* resp);
-    void fftComputeAndStartBusy(); // input fully read: compute, then go BUSY
-    void fftBeginWriteback();     // busy done: DMA-write the result
-    void fftFinish();             // writeback done: retire + release doorbell
+    // --- kernel-slot op: DMA state machine around the plugged compute ---------
+    void opStartDma();            // on doorbell: begin DMA-read of the input
+    void opOnReadResp(Interfaces::StandardMem::ReadResp* resp);
+    void opOnWriteResp(Interfaces::StandardMem::WriteResp* resp);
+    void opComputeAndStartBusy(); // input fully read: compute, then go BUSY
+    void opBeginWriteback();      // busy done: DMA-write the result
+    void opFinish();              // writeback done: retire + release doorbell
     Output out;
 
     TimeConverter tc_;
@@ -146,29 +147,28 @@ protected:
     mmioHandlers* handlers;
     Interfaces::StandardMem* iface;
 
-    // --- kernel_type=fft state -----------------------------------------------
-    enum class KernelType { NONE, FFT };
-    KernelType kernel_type_;
-    uint64_t   fft_latency_coeff_;
-    Interfaces::StandardMem* mem_iface_;   // memory initiator (fft mode)
+    // --- kernel-slot state -----------------------------------------------------
+    QuetzKernel* kernel_;                  // nullptr = pure latency model
+    Interfaces::StandardMem* mem_iface_;   // memory initiator (kernel ops)
 
-    // Programmed by the guest before the doorbell (little-endian float32 buffers).
-    uint64_t fft_in_addr_;
-    uint64_t fft_out_addr_;
-    uint32_t fft_n_;
+    // Guest-programmed operand registers (REG_ARG0..3), captured into a
+    // KernelArgs at doorbell time.
+    uint64_t arg_regs_[4];
+    KernelArgs op_args_;
 
-    // DMA phases of one FFT op.
-    enum class FftPhase { IDLE, READING, WRITING };
-    FftPhase fft_phase_;
-    std::vector<uint8_t> fft_bytes_;                 // marshalled buffer (LE f32)
-    uint64_t fft_total_bytes_;
-    uint64_t fft_dma_outstanding_;                   // in-flight mem requests
-    // held doorbell response for the whole fft op (released at fftFinish)
-    Interfaces::StandardMem::Request* fft_doorbell_resp_;
-    // map mem request id -> byte offset into fft_bytes_ (for read reassembly)
-    std::unordered_map<Interfaces::StandardMem::Request::id_t, uint64_t> fft_req_off_;
+    // DMA phases of one kernel op.
+    enum class OpPhase { IDLE, READING, WRITING };
+    OpPhase op_phase_;
+    std::vector<uint8_t> op_in_;                     // DMA-read input bytes
+    std::vector<uint8_t> op_out_;                    // kernel output bytes
+    uint64_t op_in_bytes_;
+    uint64_t op_dma_outstanding_;                    // in-flight mem requests
+    // held doorbell response for the whole op (released at opFinish)
+    Interfaces::StandardMem::Request* op_doorbell_resp_;
+    // map mem request id -> byte offset into op_in_ (for read reassembly)
+    std::unordered_map<Interfaces::StandardMem::Request::id_t, uint64_t> op_req_off_;
 
-    static constexpr uint64_t kFftDmaChunk = 64;     // bytes per DMA request
+    static constexpr uint64_t kOpDmaChunk = 64;      // bytes per DMA request
 
     Statistic<uint64_t>* stat_kernels_launched_;
     Statistic<uint64_t>* stat_busy_cycles_;
@@ -189,10 +189,12 @@ protected:
     // `while (REG_KERNEL_ID < my_ticket);` after reading its ticket here.
     static constexpr uint64_t REG_TICKET           = 0x20;  // R: last submit ticket
     static constexpr uint64_t REG_RESULT           = 0x28;  // R: last completed result
-    // kernel_type=fft: guest programs these before the doorbell.
-    static constexpr uint64_t REG_FFT_IN_ADDR      = 0x30;  // W: input  cfloat[N] addr
-    static constexpr uint64_t REG_FFT_OUT_ADDR     = 0x38;  // W: output cfloat[N] addr
-    static constexpr uint64_t REG_FFT_N            = 0x40;  // W: N (power of two)
+    // Kernel operand registers: the guest programs these before the doorbell;
+    // meaning is kernel-defined (see KernelArgs in quetz_kernel_api.h).
+    static constexpr uint64_t REG_ARG0             = 0x30;  // W: input buffer addr
+    static constexpr uint64_t REG_ARG1             = 0x38;  // W: output buffer addr
+    static constexpr uint64_t REG_ARG2             = 0x40;  // W: kernel-defined (FFT: N)
+    static constexpr uint64_t REG_ARG3             = 0x48;  // W: kernel-defined
 };
 
 } // namespace Quetz

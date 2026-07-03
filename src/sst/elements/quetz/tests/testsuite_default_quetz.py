@@ -996,7 +996,7 @@ class testcase_quetz_sysmode(SSTTestCase):
 
     # -------------------------------------------------------------------------
     def test_quetz_sysmode_gpu_fft_offload(self):
-        """256-pt FFT computed ON THE DEVICE (kernel_type=fft), not the guest CPU.
+        """256-pt FFT computed ON THE DEVICE (quetz.FFTKernel), not the guest CPU.
 
         The contrast to test_quetz_sysmode_gpu_fft: there the guest runs the
         butterflies and the device only counts latency; here QuetzGpuDevice
@@ -1168,7 +1168,7 @@ class testcase_quetz_sysmode(SSTTestCase):
 
     # -------------------------------------------------------------------------
     def test_quetz_sysmode_gpu_fft_offload_coldfire(self):
-        """ColdFire (m68k) 256-pt FFT computed ON THE DEVICE (kernel_type=fft).
+        """ColdFire (m68k) 256-pt FFT computed ON THE DEVICE (quetz.FFTKernel).
 
         The big-endian counterpart of test_quetz_sysmode_gpu_fft_offload — and
         the proof that the sync-MMIO window needs no guest byte-swapping: the

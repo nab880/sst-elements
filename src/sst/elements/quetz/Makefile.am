@@ -46,6 +46,9 @@ libquetz_la_SOURCES = \
     quetz_region_handlers.h \
     quetz_gpu_device.cc \
     quetz_gpu_device.h \
+    quetz_kernel_api.h \
+    quetz_fft_kernel.cc \
+    quetz_fft_kernel.h \
     quetz_stream_device.cc \
     quetz_stream_device.h \
     quetz_mem_access.cc \
