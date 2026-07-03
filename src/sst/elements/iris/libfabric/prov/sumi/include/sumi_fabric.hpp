@@ -136,4 +136,12 @@ class FabricTransport : public SST::Iris::sumi::SimTransport {
 
 FabricTransport* sumi_fabric();
 
+// Drive outstanding non-blocking FI_COLLECTIVE operations from the CQ-read path
+// (application thread). Defined in sumi_coll.cc; called by fi_cq_read/sread so
+// that a client polling its CQ makes collective progress. No-op unless a pending
+// collective targets `cq_id`. See the non-blocking completion notes in
+// sumi_coll.cc.
+void sumi_progress_collectives(FabricTransport* tport, int cq_id,
+                               bool blocking, double timeout);
+
 #endif // SUMI_SUMI_HPP

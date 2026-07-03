@@ -409,7 +409,13 @@ struct sumi_fid_eq {
   struct sumi_fid_fabric* fabric;
   struct fid_wait* wait;
   struct fi_eq_attr attr;
+  void* events;   // SumiEqEventList* (functional event queue; see sumi_eq.cc)
 };
+
+// Post an event (e.g. FI_JOIN_COMPLETE from fi_join_collective) onto an EQ so a
+// client's fi_eq_read/sread observes it. Defined in sumi_eq.cc.
+void sumi_eq_post(struct sumi_fid_eq* eq, uint32_t event, fid_t fid,
+                  void* context, uint64_t data);
 
 struct sumi_progress_queue;
 struct sumi_fid_cq {

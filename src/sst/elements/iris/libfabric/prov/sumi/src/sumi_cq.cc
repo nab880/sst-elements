@@ -163,6 +163,12 @@ static ssize_t sstmaci_cq_read(bool blocking,
     } else if (blocking && pragma_timeout > 0) {
       timeout_s = pragma_timeout;
     }
+    // Drive any outstanding non-blocking FI_COLLECTIVE targeting this CQ, on the
+    // application thread, so its completion lands in rq->progress below. No-op
+    // unless a collective targets this CQ (see sumi_coll.cc).
+    if (rq->progress.items.empty()) {
+      sumi_progress_collectives(tport, cq_impl->id, blocking, timeout_s);
+    }
     SST::Iris::sumi::Message* msg = rq->progress.front(blocking, timeout_s);
     if (!msg){
       if (!blocking) {
