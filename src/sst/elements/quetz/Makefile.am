@@ -46,6 +46,8 @@ libquetz_la_SOURCES = \
     quetz_region_handlers.h \
     quetz_gpu_device.cc \
     quetz_gpu_device.h \
+    quetz_stream_device.cc \
+    quetz_stream_device.h \
     quetz_mem_access.cc \
     quetz_mem_access.h \
     quetz_mem_issue.cc \
@@ -155,6 +157,7 @@ check-quetz-integration:
 # ---------------------------------------------------------------------------
 EXTRA_DIST =	QUETZ_OUTLINE.md \
 	README.md \
+	SIMULATING-YOUR-SYSTEM.md \
 	TESTING.md \
 	tests/.gitignore \
 	tests/binaries/build_microbench.sh \
@@ -186,6 +189,9 @@ EXTRA_DIST =	QUETZ_OUTLINE.md \
 	tests/quetz_test_helpers.py \
 	tests/sysmode/basic_quetz_balar_coldfire.py \
 	tests/sysmode/basic_quetz_balar.py \
+	tests/sysmode/basic_quetz_coldfire_system.py \
+	tests/sysmode/data/gps_nmea.txt \
+	tests/sysmode/data/sensor_stream.bin \
 	tests/sysmode/basic_quetz_gpu_coldfire.py \
 	tests/sysmode/basic_quetz_gpu_compute_coldfire.py \
 	tests/sysmode/basic_quetz_gpu_compute.py \
@@ -207,6 +213,8 @@ EXTRA_DIST =	QUETZ_OUTLINE.md \
 	tests/sysmode/firmware/coldfire_hello.c \
 	tests/sysmode/firmware/coldfire_monitor.c \
 	tests/sysmode/firmware/coldfire_startup.S \
+	tests/sysmode/firmware/coldfire_system \
+	tests/sysmode/firmware/coldfire_system.c \
 	tests/sysmode/firmware/coldfire_uart.h \
 	tests/sysmode/firmware/cuda_runtime_types_firmware.h \
 	tests/sysmode/firmware/fft_firmware_data_256.h \

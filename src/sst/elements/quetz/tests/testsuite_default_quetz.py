@@ -2122,6 +2122,91 @@ class testcase_quetz_sysmode(SSTTestCase):
             "balar doorbell path issued no FlushAddr requests from ColdFire host")
 
     # -------------------------------------------------------------------------
+    def test_quetz_coldfire_system(self):
+        """ColdFire full embedded-system demo: uart + gps + sensors + accelerator.
+
+        The flagship functional-validation deck: a big-endian MCF5208 boots,
+        parses a recorded GPS NMEA log from UART0 RX (checksum-validating,
+        counting active fixes), drains and verifies a recorded sensor stream
+        from quetz.QuetzStreamDevice (sum32 trailer + CTRL rewind), and runs
+        two batches on the synthetic accelerator, polling completion. Both
+        MMIO devices share one bridge window behind a memHierarchy.Bus.
+        balar-free — runs anywhere qemu-system-m68k exists."""
+        test_path = self.get_testsuite_dir()
+        sst_prefix  = sstsimulator_conf_get_value("SSTCore", "prefix",     str, "")
+        sst_bindir  = sstsimulator_conf_get_value("SSTCore", "bindir",     str, "")
+        sst_libexec = sstsimulator_conf_get_value("SSTCore", "libexecdir", str, "")
+
+        import shutil
+        qemu_bin = os.path.join(sst_bindir, "qemu-system-m68k")
+        if not os.path.exists(qemu_bin):
+            found = shutil.which("qemu-system-m68k")
+            if found:
+                qemu_bin = found
+        if not os.path.exists(qemu_bin):
+            self.skipTest("qemu-system-m68k not found; rebuild QEMU with m68k-softmmu")
+
+        exe_abs = os.path.normpath(os.path.join(
+            test_path, "sysmode/firmware/coldfire_system"))
+        gps_file = os.path.normpath(os.path.join(
+            test_path, "sysmode/data/gps_nmea.txt"))
+        sensor_file = os.path.normpath(os.path.join(
+            test_path, "sysmode/data/sensor_stream.bin"))
+        if not os.path.exists(exe_abs):
+            self.skipTest(
+                "coldfire_system not found at {}; "
+                "run M68K_CC=m68k-linux-gnu-gcc ./build.sh".format(exe_abs))
+        if not os.path.exists(gps_file) or not os.path.exists(sensor_file):
+            self.skipTest("system-demo fixtures missing under sysmode/data/")
+
+        outdir = os.path.join(self.get_test_output_run_dir(),
+                              "quetz_sysmode_tests", "coldfire_system")
+        os.makedirs(outdir, exist_ok=True)
+
+        make_sysmode_env(sst_prefix, sst_libexec, qemu_bin, exe_abs,
+                         "-machine mcf5208evb -display none -serial stdio -m 128M",
+                         "-kernel", 0x40000000, 0x47FFFFFF, [],
+                         stdin_file=gps_file)
+        os.environ["QUETZ_MMIO_START"] = "0x70000000"
+        os.environ["QUETZ_MMIO_END"]   = "0x7001FFFF"
+        os.environ["QUETZ_SENSOR_FILE"] = sensor_file
+        enable_mmio_payload_delivery()
+
+        sdlfile     = os.path.join(test_path, "sysmode",
+                                   "basic_quetz_coldfire_system.py")
+        sst_outfile = os.path.join(outdir, "coldfire_system.out")
+        sst_errfile = os.path.join(outdir, "coldfire_system.err")
+        mpifiles    = os.path.join(outdir, "coldfire_system.testfile")
+
+        self.run_sst(sdlfile, sst_outfile, sst_errfile,
+                     mpi_out_files=mpifiles, set_cwd=outdir, timeout_sec=60 * 10)
+
+        raw = ""
+        if os.path.exists(sst_outfile):
+            with open(sst_outfile, "r") as f:
+                raw += f.read()
+        if os.path.exists(sst_errfile):
+            with open(sst_errfile, "r") as f:
+                raw += "\n" + f.read()
+        self.assertNotIn("FATAL", raw)
+
+        self.assertIn("gps: valid=8 active_fixes=6", raw,
+            "GPS NMEA parse mismatch; UART RX replay or checksum logic failed")
+        self.assertIn("sensors: stream=ok rewind=ok", raw,
+            "sensor stream verification failed against QuetzStreamDevice")
+        self.assertIn("accel: kernels_completed=2", raw,
+            "accelerator batches did not both retire")
+        self.assertIn("SYSTEM DEMO PASS", raw,
+            "firmware did not reach overall PASS")
+        self.assertIn("TESTFINISH[0]", raw,
+            "TestFinisherRegionHandler sentinel not triggered; sim may have hung")
+
+        self.assertGreaterEqual(stat_sum(raw, "sensors.bytes_delivered", 0), 260,
+            "QuetzStreamDevice delivered fewer bytes than the fixture + rewind read")
+        self.assertEqual(stat_sum(raw, "gpu.kernels_launched", 0), 2,
+            "synthetic accelerator did not launch exactly two kernels")
+
+    # -------------------------------------------------------------------------
     def test_quetz_coldfire_gpu_async(self):
         """ColdFire (m68k) P4 async offload: vectorAdd with a posted
         cudaThreadSynchronize through Quetz->balar.
