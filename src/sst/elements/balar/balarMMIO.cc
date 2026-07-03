@@ -622,6 +622,10 @@ void BalarMMIO::BalarHandlers::handle(SST::Interfaces::StandardMem::Write* write
     // to be not done so that our CUDA runtime lib will sync the cudaMemcpy
     balar->cuda_ret.is_cuda_call_done = false;
     balar->compact_return_pending = balar->compact_return_value;
+    // Drop any partially-drained compact D2H stream from the previous call, or
+    // the next return-value read would be served stale D2H bytes instead.
+    balar->compact_d2h_data.clear();
+    balar->compact_d2h_offset = 0;
 
     // Create a DMA request to read the cuda call packet from cache to balar
     DMAEngine::DMAEngineControlRegisters dma_registers;
