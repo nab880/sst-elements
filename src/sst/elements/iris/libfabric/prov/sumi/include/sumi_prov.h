@@ -446,6 +446,15 @@ int sumi_domain_open(struct fid_fabric *fabric, struct fi_info *info,
 int sumi_av_open(struct fid_domain *domain, struct fi_av_attr *attr,
 		 struct fid_av **av, void *context);
 
+// FI_COLLECTIVE group setup (see sumi_coll.cc): sumi_av_set builds an address
+// set from an AV; sumi_cm_join turns that set into a sumi Communicator whose
+// pointer is the multicast fi_addr passed to the collective ops.
+int sumi_av_set(struct fid_av *av, struct fi_av_set_attr *attr,
+		struct fid_av_set **av_set, void *context);
+
+int sumi_cm_join(struct fid_ep *ep, const void *addr, uint64_t flags,
+		 struct fid_mc **mc, void *context);
+
 int sumi_cq_open(struct fid_domain *domain, struct fi_cq_attr *attr,
 		 struct fid_cq **cq, void *context);
 

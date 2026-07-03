@@ -190,11 +190,56 @@ int main(int argc, char** argv)
     // but NOT exercised here: the engine's HalvingReduceScatter DAG is a stub on
     // devel (aborts "halving_reduce_scatter: not implemented"). It will work
     // once the engine actor is implemented -- no provider change needed.
+
+    // --- sub-communicator via fi_join_collective: even ranks only ---
+    // Build an address set of the even global ranks, join it into a
+    // sub-communicator, and allreduce over just those ranks. Proves coll_addr
+    // now selects a real subgroup (not the world) through the engine + registry.
+    struct fi_av_attr av_attr;
+    memset(&av_attr, 0, sizeof(av_attr));
+    av_attr.type = FI_AV_MAP;
+    struct fid_av* av = NULL;
+    CHECK(fi_av_open(dom, &av_attr, &av, NULL), "fi_av_open");
+
+    struct fid_av_set* aset = NULL;
+    CHECK(fi_av_set(av, NULL, &aset, NULL), "fi_av_set");
+
+    int32_t sub_sum = 0;
+    for (int r = 0; r < size; r += 2) {
+      char a[32];
+      snprintf(a, sizeof(a), "%010d.%05d", r, 0);
+      fi_addr_t fa = FI_ADDR_UNSPEC;
+      if (fi_av_insert(av, a, 1, &fa, 0, NULL) < 0) { printf("FAIL: fi_av_insert\n"); return 1; }
+      CHECK(fi_av_set_insert(aset, fa), "fi_av_set_insert");
+      sub_sum += (r + 1);
+    }
+
+    if (rank % 2 == 0) {   // only members join and collectively operate
+      struct fid_mc* mc = NULL;
+      ctx = (void*) 0x10;
+      CHECK(fi_join_collective(ep, FI_ADDR_UNSPEC, aset, 0, &mc, ctx),
+            "fi_join_collective");
+      fi_addr_t coll = fi_mc_addr(mc);
+
+      ctx = (void*) 0x11;
+      int32_t ssub = rank + 1, rsub = -1;
+      if (fi_allreduce(ep, &ssub, 1, NULL, &rsub, NULL, coll, FI_INT32, FI_SUM,
+                       0, ctx)) { printf("FAIL: sub allreduce\n"); return 1; }
+      DRAIN("sub-allreduce");
+      if (rsub != sub_sum) {
+        printf("FAIL: sub-allreduce (even) rank %d got %d expected %d\n",
+               rank, rsub, sub_sum);
+        return 1;
+      }
+      fi_close(&mc->fid);
+    }
+    fi_close(&aset->fid);
+    fi_close(&av->fid);
   }
 
   if (rank == 0) {
     const char* alg = getenv("SUMI_ALLREDUCE_ALG");
-    const char* vec = (size >= 4) ? ",allgather,gather,scatter" : "";
+    const char* vec = (size >= 4) ? ",allgather,gather,scatter,join+sub-allreduce" : "";
     printf("PASS: fi_collectives (%d ranks; barrier,broadcast,reduce,allreduce%s;"
            " SUM=%d, allreduce_alg=%s)\n",
            size, vec, result, alg ? alg : "default");
