@@ -47,6 +47,18 @@ QuetzStreamDevice::QuetzStreamDevice(ComponentId_t id, Params& params)
             getName().c_str(), stream_file.c_str());
     }
 
+    pace_bytes_   = params.find<uint64_t>("pace_bytes", 0);
+    budget_given_ = pace_bytes_ ? 0 : stream_.size();
+    avail_        = budget_given_;
+    if (pace_bytes_) {
+        // Refill clock only exists when pacing is on; the unpaced device stays
+        // purely reactive. Rewind resets the budget, so keep ticking for the
+        // whole sim rather than trying to re-register.
+        std::string period = params.find<std::string>("pace_period", "100us");
+        registerClock(period,
+            new Clock::Handler<QuetzStreamDevice, &QuetzStreamDevice::tickPace>(this));
+    }
+
     std::string clockfreq = params.find<std::string>("clock", "1GHz");
     TimeConverter tc = getTimeConverter(clockfreq);
 
@@ -66,6 +78,8 @@ QuetzStreamDevice::QuetzStreamDevice(ComponentId_t id, Params& params)
     stat_bytes_delivered_  = registerStatistic<uint64_t>("bytes_delivered");
     stat_status_polls_     = registerStatistic<uint64_t>("status_polls");
     stat_underruns_        = registerStatistic<uint64_t>("underruns");
+    stat_not_ready_reads_  = registerStatistic<uint64_t>("not_ready_reads");
+    stat_paced_refills_    = registerStatistic<uint64_t>("paced_refills");
     stat_rewinds_          = registerStatistic<uint64_t>("rewinds");
     stat_wrong_direction_accesses_ =
         registerStatistic<uint64_t>("wrong_direction_accesses");
@@ -80,6 +94,17 @@ QuetzStreamDevice::QuetzStreamDevice(ComponentId_t id, Params& params)
 void QuetzStreamDevice::init(unsigned int phase) { iface_->init(phase); }
 void QuetzStreamDevice::setup() { iface_->setup(); }
 
+bool QuetzStreamDevice::tickPace(SST::Cycle_t) {
+    if (budget_given_ < stream_.size()) {
+        uint64_t take = stream_.size() - budget_given_;
+        if (take > pace_bytes_) take = pace_bytes_;
+        budget_given_ += take;
+        avail_        += take;
+        stat_paced_refills_->addData(1);
+    }
+    return false;
+}
+
 void QuetzStreamDevice::handleEvent(StandardMem::Request* req) {
     req->handle(handlers_);
     delete req;
@@ -90,22 +115,34 @@ void QuetzStreamDevice::mmioHandlers::handle(StandardMem::Read* read) {
     uint64_t value = 0;
 
     if (offset == REG_STATUS) {
-        value = dev->stream_.size() - dev->pos_;
+        value = dev->avail_;
         dev->stat_status_polls_->addData(1);
     } else if (offset == REG_DATA) {
         dev->stat_data_reads_->addData(1);
         if (dev->pos_ >= dev->stream_.size()) {
             dev->stat_underruns_->addData(1);
         } else {
-            unsigned n = 0;
-            while (n < 4 && dev->pos_ < dev->stream_.size()) {
-                value |= (uint64_t)dev->stream_[dev->pos_++] << (8 * n);
-                n++;
+            // Whole-pop-or-nothing: the next pop is min(4, stream tail) bytes;
+            // if pacing hasn't made that many available yet, return 0 without
+            // consuming — the guest polls STATUS/EOS (see SIMULATING doc).
+            uint64_t want = dev->stream_.size() - dev->pos_;
+            if (want > 4) want = 4;
+            if (dev->avail_ < want) {
+                dev->stat_not_ready_reads_->addData(1);
+            } else {
+                unsigned n = 0;
+                while (n < want) {
+                    value |= (uint64_t)dev->stream_[dev->pos_++] << (8 * n);
+                    n++;
+                }
+                dev->avail_ -= want;
+                dev->stat_bytes_delivered_->addData(n);
             }
-            dev->stat_bytes_delivered_->addData(n);
         }
     } else if (offset == REG_SEQ) {
         value = dev->pos_;
+    } else if (offset == REG_EOS) {
+        value = (dev->pos_ >= dev->stream_.size()) ? 1 : 0;
     } else if (offset == REG_CTRL) {
         dev->stat_wrong_direction_accesses_->addData(1);
     } else {
@@ -134,11 +171,16 @@ void QuetzStreamDevice::mmioHandlers::handle(StandardMem::Write* write) {
         }
         if (value == 1) {
             dev->pos_ = 0;
+            // Paced: replay restarts the budget too (the refill clock keeps
+            // running); unpaced: everything is immediately available again.
+            dev->budget_given_ = dev->pace_bytes_ ? 0 : dev->stream_.size();
+            dev->avail_        = dev->budget_given_;
             dev->stat_rewinds_->addData(1);
             out->verbose(CALL_INFO, 2, 0, "%s: stream rewound\n",
                 dev->getName().c_str());
         }
-    } else if (offset == REG_STATUS || offset == REG_DATA || offset == REG_SEQ) {
+    } else if (offset == REG_STATUS || offset == REG_DATA || offset == REG_SEQ ||
+               offset == REG_EOS) {
         dev->stat_wrong_direction_accesses_->addData(1);
     } else {
         dev->stat_bad_offset_accesses_->addData(1);

@@ -44,7 +44,14 @@ public:
         { "base_addr", "(uint64) MMIO region base address", "0" },
         { "mmio_size", "(uint64) Size of MMIO region in bytes", "0x100" },
         { "stream_file",
-          "(string) Binary fixture file replayed through REG_DATA (required)", "" })
+          "(string) Binary fixture file replayed through REG_DATA (required)", "" },
+        { "pace_bytes",
+          "(uint64) Pacing: bytes made available per pace_period (0 = whole "
+          "stream available at t=0, today's behavior). With pacing on, STATUS "
+          "reports bytes ready NOW and firmware must poll (STATUS==0 && "
+          "REG_EOS==0 means 'not ready yet').", "0" },
+        { "pace_period",
+          "(UnitAlgebra/string) Refill interval for pace_bytes", "100us" })
 
     SST_ELI_DOCUMENT_SUBCOMPONENT_SLOTS(
         { "iface", "MMIO target interface (stream registers)",
@@ -55,6 +62,9 @@ public:
         { "bytes_delivered", "Stream bytes handed to the guest", "bytes", 1 },
         { "status_polls", "Reads of the STATUS register", "requests", 1 },
         { "underruns", "DATA reads with the stream exhausted", "requests", 1 },
+        { "not_ready_reads",
+          "DATA reads before the paced refill made the bytes available", "requests", 1 },
+        { "paced_refills", "Pacing ticks that made new bytes available", "ticks", 1 },
         { "rewinds", "CTRL rewind commands", "requests", 1 },
         { "wrong_direction_accesses",
           "Reads/writes to mapped registers with the wrong direction", "requests", 1 },
@@ -73,10 +83,11 @@ public:
     //   value = b[i] | b[i+1]<<8 | b[i+2]<<16 | b[i+3]<<24
     // The guest extracts bytes with shifts/masks, so the packing is
     // endian-agnostic — identical firmware runs on ColdFire (BE) and RISC-V (LE).
-    static constexpr uint64_t REG_STATUS = 0x00;  // R: bytes remaining
+    static constexpr uint64_t REG_STATUS = 0x00;  // R: bytes ready now (unpaced: all remaining)
     static constexpr uint64_t REG_DATA   = 0x08;  // R: pop up to 4 bytes (packed)
     static constexpr uint64_t REG_SEQ    = 0x10;  // R: bytes consumed so far
     static constexpr uint64_t REG_CTRL   = 0x18;  // W: 1 = rewind to start
+    static constexpr uint64_t REG_EOS    = 0x20;  // R: 1 = stream fully consumed
 
 protected:
     ~QuetzStreamDevice() {}
@@ -100,6 +111,8 @@ protected:
     void printStatus(Output& out) override;
     void emergencyShutdown() override {}
 
+    bool tickPace(SST::Cycle_t cycle);
+
     Output out;
 
     uint64_t base_addr_;
@@ -108,6 +121,11 @@ protected:
     std::vector<uint8_t> stream_;
     size_t               pos_;
 
+    // Pacing (pace_bytes_ == 0 => whole stream available immediately).
+    uint64_t pace_bytes_;
+    uint64_t budget_given_;   // cumulative bytes made available
+    uint64_t avail_;          // bytes available and not yet popped
+
     mmioHandlers* handlers_;
     Interfaces::StandardMem* iface_;
 
@@ -115,6 +133,8 @@ protected:
     Statistic<uint64_t>* stat_bytes_delivered_;
     Statistic<uint64_t>* stat_status_polls_;
     Statistic<uint64_t>* stat_underruns_;
+    Statistic<uint64_t>* stat_not_ready_reads_;
+    Statistic<uint64_t>* stat_paced_refills_;
     Statistic<uint64_t>* stat_rewinds_;
     Statistic<uint64_t>* stat_wrong_direction_accesses_;
     Statistic<uint64_t>* stat_bad_offset_accesses_;
