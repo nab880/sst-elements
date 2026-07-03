@@ -879,6 +879,7 @@ extern "C" DIRECT_FN  int sumi_ep_open(struct fid_domain *domain, struct fi_info
   ep_impl->ep_fid.rma = &sumi_ep_rma_ops;
   ep_impl->ep_fid.tagged = &sumi_ep_tagged_ops;
   ep_impl->ep_fid.atomic = &sumi_ep_atomic_ops;
+  ep_impl->ep_fid.collective = &sumi_ep_collective_ops;
   ep_impl->domain = (sumi_fid_domain*) domain;
   ep_impl->caps = info->caps;
   if (info->tx_attr){

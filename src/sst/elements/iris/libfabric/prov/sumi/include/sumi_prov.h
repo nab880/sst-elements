@@ -107,7 +107,7 @@ struct sumi_mem_handle_t {
   (FI_LOCAL_COMM | FI_REMOTE_COMM | FI_SHARED_AV)
 
 #define SUMI_EP_PRIMARY_CAPS                                               \
-	(FI_MSG | FI_RMA | FI_TAGGED | FI_ATOMICS |                            \
+	(FI_MSG | FI_RMA | FI_TAGGED | FI_ATOMICS | FI_COLLECTIVE |            \
 	 FI_DIRECTED_RECV | FI_READ | FI_NAMED_RX_CTX |                        \
 	 FI_WRITE | FI_SEND | FI_RECV | FI_REMOTE_READ | FI_REMOTE_WRITE)
 
@@ -330,6 +330,7 @@ struct sumi_fid_ep {
 	struct sumi_fid_stx *stx_ctx;
 	struct sumi_fid_eq *eq;
   int qos;
+  int coll_tag; // monotonic tag for FI_COLLECTIVE ops (see sumi_coll.cc)
 };
 
 struct sumi_fid_sep {
