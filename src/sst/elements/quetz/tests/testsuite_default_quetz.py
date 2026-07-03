@@ -2122,6 +2122,76 @@ class testcase_quetz_sysmode(SSTTestCase):
             "balar doorbell path issued no FlushAddr requests from ColdFire host")
 
     # -------------------------------------------------------------------------
+    def test_quetz_coldfire_bsp_torture(self):
+        """BSP-survival invariants on mcf5208evb (m68k).
+
+        bsp_torture probes every MCF5208 BSP-init register range (SCM, FBCS,
+        PLL, WTM, GPIO, I2C, ...) plus wild addresses under a fault-catching
+        vector table. Empirical baseline (QEMU 9.2.1): the machine raises NO
+        memory faults — unmodeled space is RAZ/WI, so real BSPs hang on
+        status polls and silently lose config writes rather than crash. This
+        test pins that behavior; if a QEMU bump starts faulting or returning
+        live values in these ranges, the BSP-honesty docs and mitigations
+        need revisiting (see the porting guidance in SIMULATING-YOUR-SYSTEM.md)."""
+        test_path = self.get_testsuite_dir()
+        sst_prefix, sst_bindir, sst_libexec = sst_paths()
+
+        import shutil
+        qemu_bin = os.path.join(sst_bindir, "qemu-system-m68k")
+        if not os.path.exists(qemu_bin):
+            found = shutil.which("qemu-system-m68k")
+            if found:
+                qemu_bin = found
+        if not os.path.exists(qemu_bin):
+            self.skipTest("qemu-system-m68k not found; rebuild QEMU with m68k-softmmu")
+
+        exe_abs = os.path.normpath(os.path.join(
+            test_path, "sysmode/firmware/bsp_torture"))
+        if not os.path.exists(exe_abs):
+            self.skipTest("bsp_torture not found at {}; "
+                          "run M68K_CC=m68k-linux-gnu-gcc ./build.sh".format(exe_abs))
+
+        outdir = os.path.join(self.get_test_output_run_dir(),
+                              "quetz_sysmode_tests", "bsp_torture")
+        os.makedirs(outdir, exist_ok=True)
+
+        # The probes sweep the whole IPS space and wild addresses; filter the
+        # trace side so the memory model never sees out-of-range traffic.
+        make_sysmode_env(sst_prefix, sst_libexec, qemu_bin, exe_abs,
+                         "-machine mcf5208evb -display none -serial stdio -m 128M",
+                         "-kernel", 0x40000000, 0x47FFFFFF,
+                         [("uart0",    0xFC060000, 0xFC0600FF, "uart",
+                             {"tx_offset": 12}),
+                          ("finish",   0x80000000, 0x80000003, "testfinish"),
+                          ("ips",      0xFC000000, 0xFCFFFFFF, "filtered"),
+                          ("low",      0x00000000, 0x3FFFFFFF, "filtered"),
+                          ("high",     0x48000000, 0xFBFFFFFF, "filtered")])
+
+        sdlfile     = os.path.join(test_path, "sysmode", "basic_quetz_sysmode.py")
+        sst_outfile = os.path.join(outdir, "bsp_torture.out")
+        sst_errfile = os.path.join(outdir, "bsp_torture.err")
+        mpifiles    = os.path.join(outdir, "bsp_torture.testfile")
+
+        self.run_sst(sdlfile, sst_outfile, sst_errfile,
+                     mpi_out_files=mpifiles, set_cwd=outdir, timeout_sec=180)
+
+        raw = ""
+        if os.path.exists(sst_outfile):
+            with open(sst_outfile, "r") as f:
+                raw = f.read()
+        self.assertNotIn("FATAL", raw)
+
+        self.assertIn("catalogue done: clean=55 fault=0", raw,
+            "unmodeled-register behavior changed (was: all RAZ/WI, no faults) "
+            "— re-run the BSP-survival assessment")
+        self.assertIn("gpio write/readback: wrote 5a, read=0x00000000 (WI)", raw,
+            "GPIO write-ignore behavior changed")
+        self.assertIn("pll lock poll: TIMEOUT (RAZ)", raw,
+            "status-poll behavior changed (a poll that used to hang now exits)")
+        self.assertIn("TESTFINISH[0]", raw,
+            "TestFinisher sentinel not triggered; sim may have hung")
+
+    # -------------------------------------------------------------------------
     def test_quetz_coldfire_accel_scale(self):
         """ColdFire (m68k) sensor batch computed ON THE DEVICE
         (quetz.ScaleOffsetKernel).

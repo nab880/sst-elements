@@ -101,6 +101,10 @@ echo "=== ColdFire mcf5208evb accel scale/offset (device-computed, m68k) ==="
 $M68K_CC $M68K_FLAGS coldfire_startup.S coldfire_accel_scale.c -o coldfire_accel_scale
 echo "  -> coldfire_accel_scale"
 
+echo "=== ColdFire mcf5208evb BSP-survival probe catalogue (m68k) ==="
+$M68K_CC $M68K_FLAGS coldfire_startup.S bsp_torture.c -o bsp_torture
+echo "  -> bsp_torture"
+
 echo "=== ColdFire mcf5208evb balar vectorAdd (m68k) ==="
 $M68K_CC $M68K_FLAGS coldfire_startup.S coldfire_gpu.c -o coldfire_gpu
 echo "  -> coldfire_gpu"

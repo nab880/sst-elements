@@ -205,6 +205,8 @@ EXTRA_DIST =	QUETZ_OUTLINE.md \
 	tests/sysmode/basic_quetz_mmio.py \
 	tests/sysmode/basic_quetz_sysmode.py \
 	tests/sysmode/firmware/arm_m7_hello \
+	tests/sysmode/firmware/bsp_torture \
+	tests/sysmode/firmware/bsp_torture.c \
 	tests/sysmode/firmware/arm_m7_hello.c \
 	tests/sysmode/firmware/arm_m7_startup.S \
 	tests/sysmode/firmware/balar_fw_common.h \
