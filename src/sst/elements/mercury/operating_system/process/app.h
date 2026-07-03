@@ -192,6 +192,10 @@ class App : public Thread
 
   void createLibraries();
   Library* getLibrary(const std::string& name);
+  // Non-aborting lookup: true iff the app declared a library by this name.
+  bool hasLibrary(const std::string& name) const {
+    return libraries_.find(name) != libraries_.end();
+  }
 
   std::ostream& coutStream();
   std::ostream& cerrStream();

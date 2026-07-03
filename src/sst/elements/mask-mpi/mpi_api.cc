@@ -150,6 +150,10 @@ MpiApi::MpiApi(SST::Params& params, SST::Hg::App* app) :
 
   // GPU-aware MPI: pcie_* defaults match GpuLibrary for platform consistency.
   gpu_direct_ = params.find<bool>("gpu_direct", false);
+  // Cache once: only GPU apps declare "GpuLibrary". Non-GPU apps must never
+  // probe device pointers -- the probe resolves GpuLibrary via getLibrary,
+  // which aborts when it isn't declared.
+  has_gpu_lib_ = app->hasLibrary("GpuLibrary");
   pcie_latency_ =
     params.find<SST::UnitAlgebra>("pcie_latency", "1us").getValue().toDouble();
   pcie_bandwidth_ =
@@ -170,7 +174,9 @@ void
 MpiApi::stageDeviceBuffer(const void* buf, int count, MPI_Datatype datatype)
 {
   // Without gpu_direct_, device buffers are staged via host memory (PCIe on send/recv path).
-  if (gpu_direct_ || buf == nullptr) return;
+  // Skip entirely for non-GPU apps: they declare no GpuLibrary, so the probe below
+  // would abort, and no buffer they own can be a device pointer anyway.
+  if (gpu_direct_ || buf == nullptr || !has_gpu_lib_) return;
   if (!sst_hg_cuda_is_device_ptr(buf)) return;
   uint64_t bytes = static_cast<uint64_t>(count)
                  * static_cast<uint64_t>(typeSize(datatype));
@@ -178,6 +184,19 @@ MpiApi::stageDeviceBuffer(const void* buf, int count, MPI_Datatype datatype)
               + (pcie_bandwidth_ > 0.0 ? static_cast<double>(bytes) / pcie_bandwidth_
                                        : 0.0);
   if (secs > 0.0) activeThread()->os()->blockTimeout(SST::Hg::TimeDelta(secs));
+}
+
+void
+MpiApi::stageRecvOnComplete(MpiRequest* reqPtr)
+{
+  // Charge the H2D staging for a completed non-blocking recv exactly once, when
+  // the app observes completion (wait/test). Mirrors the blocking doRecv, which
+  // stages after progressLoop returns.
+  if (reqPtr && reqPtr->needsRecvStaging()){
+    reqPtr->clearRecvStaging();
+    stageDeviceBuffer(reqPtr->recvStageBuf(), reqPtr->recvStageCount(),
+                      reqPtr->recvStageType());
+  }
 }
 
 uint64_t

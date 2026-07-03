@@ -70,8 +70,11 @@ class GpuLibrary : public GpuComputeAPI, public Library
   void setDevice(int dev) override;
 
  private:
-  // Default stream barriers all work on the host; other streams advance without blocking.
-  void enqueue(void* stream, double seconds);
+  // Charge `seconds` of GPU work on `stream`. The default (NULL) stream keeps
+  // legacy ordering (serializes with every other stream) but only advances the
+  // device timeline; it blocks the host thread only when `blocking` is set
+  // (synchronous cudaMemcpy) so kernel launches overlap host work.
+  void enqueue(void* stream, double seconds, bool blocking);
   // Block the host thread until simulated time reaches `t` (no-op if past).
   void blockUntil(Timestamp t);
   // The latest cursor over the default and all explicit streams.

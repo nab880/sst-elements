@@ -47,6 +47,8 @@ Questions? Contact sst-macro-help@sandia.gov
 //#include <sumi-mpi/otf2_output_stat.h>
 #include <mercury/components/operating_system.h>
 #include <mercury/operating_system/process/thread.h>
+#include <cstdint>
+#include <limits>
 #//include <mercury/operating_system/process/ftq_scope.h>
 
 //#define do_coll(coll, fxn, ...) \
@@ -907,7 +909,15 @@ MpiApi::startReduceScatterBlock(const char*  /*name*/, MPI_Comm comm, int count,
 {
   // Block variant: every rank contributes the full array (count per rank x nproc)
   // and keeps its reduced chunk. The collective operates on the full array.
-  int total = count * getComm(comm)->size();
+  // Compute in 64-bit: count*nproc silently wraps negative past INT_MAX and would
+  // feed a negative element count into the ring DAG.
+  int64_t total64 = static_cast<int64_t>(count) * getComm(comm)->size();
+  if (total64 > std::numeric_limits<int>::max()){
+    sst_hg_abort_printf("MPI_Reduce_scatter_block: total elements %lld (count=%d x "
+                        "nproc=%d) exceeds INT_MAX; split into smaller chunks",
+                        (long long)total64, count, getComm(comm)->size());
+  }
+  int total = static_cast<int>(total64);
   auto op = CollectiveOp::create(total, total, getComm(comm));
   op->op = mop;
   startMpiCollective(Collective::reduce_scatter, src, dst, type, type, op.get());

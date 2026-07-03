@@ -234,6 +234,21 @@ class MpiRequest :
     return optype_;
   }
 
+  // Non-blocking recv H2D staging: armed at Irecv/Start, charged once when the
+  // request completes (in the wait/test path) since the blocking recv path
+  // stages after completion but Irecv+Wait otherwise never would.
+  void armRecvStaging(void* buf, int count, MPI_Datatype datatype){
+    recv_buf_ = buf;
+    recv_count_ = count;
+    recv_type_ = datatype;
+    stage_recv_ = true;
+  }
+  bool needsRecvStaging() const { return stage_recv_; }
+  void clearRecvStaging(){ stage_recv_ = false; }
+  void* recvStageBuf() const { return recv_buf_; }
+  int recvStageCount() const { return recv_count_; }
+  MPI_Datatype recvStageType() const { return recv_type_; }
+
   SST::Hg::Timestamp waitStart() const {
     return wait_start_;
   }
@@ -254,6 +269,12 @@ class MpiRequest :
 
   PersistentOp* persistent_op_;
   CollectiveOpBase::ptr collective_op_;
+
+  // Deferred H2D staging for non-blocking receives (see armRecvStaging).
+  void* recv_buf_ = nullptr;
+  int recv_count_ = 0;
+  MPI_Datatype recv_type_ = MPI_DATATYPE_NULL;
+  bool stage_recv_ = false;
 
   SST::Hg::Timestamp wait_start_;
 

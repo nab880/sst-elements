@@ -264,17 +264,22 @@ GpuLibrary::blockUntil(Timestamp t)
 }
 
 void
-GpuLibrary::enqueue(void* stream, double seconds)
+GpuLibrary::enqueue(void* stream, double seconds, bool blocking)
 {
   if (seconds < 0.0) seconds = 0.0;
   total_gpu_time_ += seconds;
   if (stream == nullptr) {
-    // Default stream: barrier all GPU work, charge on host, reset cursors.
-    blockUntil(maxCursor());
-    if (seconds > 0.0) parent()->os()->blockTimeout(TimeDelta(seconds));
-    Timestamp n = now();
-    default_until_ = n;
-    for (auto& kv : streams_) kv.second = n;
+    // Default (NULL) stream: legacy ordering -- it serializes with every other
+    // stream. Start after all outstanding GPU work, and push every stream's
+    // cursor past this op so later stream work waits for it. The op itself is
+    // async wrt the host (real CUDA launches don't block); only synchronous
+    // ops (cudaMemcpy, deviceSync) block, via `blocking`.
+    Timestamp cur = maxCursor();
+    Timestamp start = now() > cur ? now() : cur;
+    Timestamp end = start + TimeDelta(seconds);
+    default_until_ = end;
+    for (auto& kv : streams_) kv.second = end;
+    if (blocking) blockUntil(end);
   } else {
     // Async stream: advance cursor without blocking the host thread.
     Timestamp& cur = cursorFor(stream);
@@ -310,7 +315,9 @@ GpuLibrary::memcpy(void* /*dst*/, const void* /*src*/, uint64_t bytes,
                    int kind, void* stream)
 {
   ++memcpy_count_;
-  enqueue(stream, transferTime(bytes, kind));
+  // Synchronous cudaMemcpy uses the default stream (stream==nullptr) and blocks
+  // the host; cudaMemcpyAsync passes an explicit stream and does not.
+  enqueue(stream, transferTime(bytes, kind), /*blocking=*/stream == nullptr);
 }
 
 void
@@ -338,7 +345,9 @@ GpuLibrary::launch(const char* kernelName,
     t = kernelTime(computePeak, blocks, threadsPerBlock, flops, intops,
                    bytesRead, bytesWritten);
   }
-  enqueue(stream, t);
+  // Kernel launches are asynchronous wrt the host on every stream, including
+  // the default stream -- only their ordering synchronizes.
+  enqueue(stream, t, /*blocking=*/false);
 }
 
 void*
@@ -350,7 +359,14 @@ GpuLibrary::streamCreate()
 void
 GpuLibrary::streamDestroy(void* s)
 {
-  streams_.erase(s);
+  // Real cudaStreamDestroy lets queued work finish. Fold any pending time into
+  // the default cursor before erasing so a later deviceSync/maxCursor still
+  // waits for it (dropping the cursor would under-account the tail work).
+  auto it = streams_.find(s);
+  if (it != streams_.end()) {
+    if (it->second > default_until_) default_until_ = it->second;
+    streams_.erase(it);
+  }
 }
 
 void

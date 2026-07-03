@@ -191,6 +191,7 @@ MpiApi::doStart(MPI_Request req)
       queue_->send(reqPtr, op->count, op->datatype, op->partner, op->tag, commPtr, op->content);
     } else {
       queue_->recv(reqPtr, op->count, op->datatype, op->partner, op->tag, commPtr, op->content);
+      reqPtr->armRecvStaging(op->content, op->count, op->datatype); // charge H2D stage on wait/test
     }
   }
 
@@ -414,6 +415,7 @@ MpiApi::irecv(void *buf, int count, MPI_Datatype datatype, int source,
 
   if (source != MPI_PROC_NULL){
     queue_->recv(req, count, datatype, source, tag, commPtr, buf);
+    req->armRecvStaging(buf, count, datatype); // charge H2D stage on wait/test
   } else {
     req->setComplete(true); //just mark done
     req->setStatus(proc_null_status);
