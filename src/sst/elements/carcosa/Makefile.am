@@ -144,6 +144,7 @@ nobase_sst_HEADERS =                        \
     components/actionScorer.h               \
     components/faultInjManagerAPI.h         \
     components/interceptionAgentAPI.h       \
+    components/ringProtocol.h               \
     components/hyadesProtocol.h             \
     components/pipelineStateRegistry.h      \
     components/pingPongAgent.h              \
