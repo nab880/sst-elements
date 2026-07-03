@@ -18,6 +18,10 @@
 
 #include "sumi_prov.h"
 
+// FI_COLLECTIVE ops backed by the sumi CollectiveEngine + CollectiveRegistry
+// (see sumi_coll.cc). Not extern "C": it holds ordinary function pointers.
+extern struct fi_ops_collective sumi_ep_collective_ops;
+
 #ifdef __cplusplus
 extern "C" {
 #endif

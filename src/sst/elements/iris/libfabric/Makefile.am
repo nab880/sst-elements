@@ -15,14 +15,23 @@ AM_CPPFLAGS += \
 
 AM_CPPFLAGS += -D_GNU_SOURCE
 
-ext_LTLIBRARIES = libfabric.la
+ext_LTLIBRARIES = libfabric.la libfi_allreduce_test.la
 extdir = $(pkglibdir)/ext
+
+# Raw-libfabric client that exercises the FI_COLLECTIVE bridge end to end.
+libfi_allreduce_test_la_SOURCES = tests/fi_allreduce_test.cc
+libfi_allreduce_test_la_LDFLAGS = -module -avoid-version
+
+EXTRA_DIST = \
+  tests/fi_allreduce_test.cc \
+  tests/test_fi_allreduce.py
 
 sumi_sources = \
   prov/sumi/src/sumi_av.cc \
   prov/sumi/src/sumi_cm.cc \
   prov/sumi/src/sumi_cntr.cc \
   prov/sumi/src/sumi_cq.cc \
+  prov/sumi/src/sumi_coll.cc \
   prov/sumi/src/sumi_dom.cc \
   prov/sumi/src/sumi_ep.cc \
   prov/sumi/src/sumi_eq.cc \
