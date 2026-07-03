@@ -182,11 +182,26 @@ int main(int argc, char** argv)
       return 1;
     }
 
-    // NOTE: fi_reduce_scatter is wired in the provider (sumi_ep_reduce_scatter)
-    // but not exercised: the engine's HalvingReduceScatter DAG remains a stub on
-    // devel. A correct recursive-halving reduce-scatter is a feature in its own
-    // right (it produces a bit-reversed block permutation that must be mapped
-    // back to MPI order), separate from this provider bridge.
+    // --- reduce_scatter (SUM): each rank r must receive its own block r,
+    // reduced across every rank. Rank r contributes block j = (r+1)*(j+1), so
+    // block j reduces to (j+1)*sum(r+1) = (j+1)*n(n+1)/2 and rank r keeps that
+    // for j==r. Exercises the engine's HalvingReduceScatter DAG (recursive
+    // halving for power-of-two n, ring otherwise) end to end. count=1 element
+    // per rank; the input buffer holds one element per destination rank.
+    ctx = (void*) 0x25CA;
+    int32_t rssrc[64], rsdst = -1;
+    for (int j = 0; j < size; ++j) rssrc[j] = (rank + 1) * (j + 1);
+    if (fi_reduce_scatter(ep, rssrc, 1, NULL, &rsdst, NULL, FI_ADDR_UNSPEC,
+                          FI_INT32, FI_SUM, 0, ctx)) {
+      printf("FAIL: fi_reduce_scatter\n"); return 1;
+    }
+    DRAIN("reduce_scatter");
+    int32_t rs_expected = (rank + 1) * sum_expected;
+    if (rsdst != rs_expected) {
+      printf("FAIL: reduce_scatter rank %d got %d expected %d\n",
+             rank, rsdst, rs_expected);
+      return 1;
+    }
 
     // --- sub-communicator via fi_join_collective: even ranks only (>=2) ---
     if (size >= 4) {
@@ -238,7 +253,7 @@ int main(int argc, char** argv)
 
   if (rank == 0) {
     const char* alg = getenv("SUMI_ALLREDUCE_ALG");
-    const char* vec = (size >= 2) ? ",allgather,gather,scatter" : "";
+    const char* vec = (size >= 2) ? ",allgather,gather,scatter,reduce_scatter" : "";
     const char* jn  = (size >= 4) ? ",join+sub-allreduce" : "";
     printf("PASS: fi_collectives (%d ranks; barrier,broadcast,reduce,allreduce%s%s;"
            " SUM=%d, allreduce_alg=%s)\n",
