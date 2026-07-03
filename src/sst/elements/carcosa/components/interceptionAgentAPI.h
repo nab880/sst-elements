@@ -22,6 +22,7 @@
 #include <sst/elements/memHierarchy/memTypes.h>
 #include "sst/elements/carcosa/components/haliEvent.h"
 #include "sst/elements/carcosa/components/hyadesProtocol.h"
+#include "sst/elements/carcosa/components/ringProtocol.h"
 #include <cinttypes>
 #include <cstdio>
 #include <cstdint>
@@ -34,7 +35,7 @@ namespace Carcosa {
 //
 // An interception hub may receive control-region traffic via two transports:
 //   - data-plane MemEvents (Hali in the CPU load/store path, Vanadis), or
-//   - MMIO StandardMem requests (a region handler routing the range, Quetz).
+//   - MMIO StandardMem requests (an MMIO region handler routing the range).
 // Both normalize into a ControlAccess and dispatch to the same agent hook
 // (handleControlAccess), so a workload driver is written once, transport-free.
 // ---------------------------------------------------------------------------
@@ -76,11 +77,12 @@ public:
 
     virtual void notifyPartnerDone(unsigned iteration) { (void)iteration; }
 
-    // Default routes "done" to notifyPartnerDone for PingPong/FourState; VLA agents
-    // override this to consume "cmd"/"seqlen"/"exit"/"done" tags. Hali calls this for
-    // every run-phase HaliEvent when an interceptionAgent is configured.
+    // Default routes RingTag::Done to notifyPartnerDone for PingPong/FourState;
+    // accelerator agents override this to consume the Cmd/SeqLen/Exit/Done tags
+    // (see ringProtocol.h). Hali calls this for every run-phase HaliEvent when an
+    // interceptionAgent is configured.
     virtual void handleRingEvent(SST::Carcosa::HaliEvent* ev) {
-        if (ev && ev->getStr() == "done") {
+        if (ev && ev->getStr() == RingTag::Done) {
             notifyPartnerDone(ev->getNum());
         }
     }

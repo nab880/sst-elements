@@ -26,8 +26,8 @@ namespace Carcosa {
  * carcosa/hyades.h. The RISC-V binary reaches these registers via loads/stores
  * to HYADES_MMIO_BASE+offset; they arrive at an interception hub either as
  * data-plane MemEvents (Hali sitting in the load/store path, Vanadis) or as
- * MMIO StandardMem requests (a region handler routing the control range out a
- * dedicated port, Quetz). Both transports decode the same offsets below, so
+ * MMIO StandardMem requests (an MMIO region handler routing the control range
+ * out a dedicated port). Both transports decode the same offsets below, so
  * keep these constants in sync with hyades.h.
  */
 namespace HyadesAbi {

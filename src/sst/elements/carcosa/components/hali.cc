@@ -142,7 +142,7 @@ Hali::Hali(ComponentId_t id, Params& params) : Component(id) {
 
     // Optional MMIO-peripheral transport. When the mmio_iface slot is populated,
     // the control region arrives as StandardMem requests on a dedicated link
-    // (e.g. a Quetz region handler) rather than via data-plane interception;
+    // (e.g. an MMIO region handler) rather than via data-plane interception;
     // both transports dispatch to the agent's handleControlAccess hook.
     mmioBase_    = params.find<uint64_t>("mmio_base", 0xBEEF0000);
     mmioHandler_ = new MmioHandler(this, out_);

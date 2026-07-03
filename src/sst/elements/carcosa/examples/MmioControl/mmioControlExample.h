@@ -32,7 +32,7 @@ namespace Carcosa {
  *   - write @ kArmOffset   : arms a value and completes any parked read.
  * Hosted in a carcosa.Hali interceptionAgent slot, this exercises Hali's MMIO
  * transport plus the Deferred/completePendingRead path end to end -- no VLA,
- * no Quetz, no QEMU required.
+ * no external MMIO host, no QEMU required.
  */
 class ExampleControlAgent : public InterceptionAgentAPI {
 public:
