@@ -53,10 +53,27 @@
 #include "sumi_prov.h"
 #include "sumi_wait.h"
 
+#include <string.h>
+#include <deque>
 #include <vector>
 
 
 #define GNIX_EQ_DEFAULT_SIZE 1000
+
+// A minimal but functional event queue. The provider only needs to deliver
+// FI_JOIN_COMPLETE (from fi_join_collective) today, but read/sread/write are
+// implemented generally so any provider-posted event reaches the client. Each
+// stored event carries a fi_eq_entry payload (fid/context/data); errors and
+// larger event structs are not modeled (spike).
+namespace {
+struct SumiEqEvent {
+  uint32_t event;
+  struct fi_eq_entry entry;
+};
+struct SumiEqEventList {
+  std::deque<SumiEqEvent> q;
+};
+} // namespace
 
 DIRECT_FN STATIC ssize_t sumi_eq_read(struct fid_eq *eq, uint32_t *event,
               void *buf, size_t len, uint64_t flags);
@@ -144,19 +161,42 @@ extern "C" DIRECT_FN  int sumi_eq_open(struct fid_fabric *fabric, struct fi_eq_a
     return -FI_ENOSYS;
   }
 
+  eq->fabric = (sumi_fid_fabric*) fabric;   // needed by fi_ep_bind's fabric check
   eq->eq_fid.fid.fclass = FI_CLASS_EQ;
   eq->eq_fid.fid.context = context;
   eq->eq_fid.fid.ops = &sumi_fi_eq_ops;
   eq->eq_fid.ops = &sumi_eq_ops;
   eq->attr = *attr;
+  eq->events = new SumiEqEventList();
 
   *eq_ptr = (fid_eq*) &eq->eq_fid;
 
+  err.success();
   return FI_SUCCESS;
+}
+
+// Enqueue an event; the client observes it via fi_eq_read/sread.
+void sumi_eq_post(struct sumi_fid_eq* eq, uint32_t event, fid_t fid,
+                  void* context, uint64_t data)
+{
+  if (!eq || !eq->events) return;
+  SumiEqEvent e;
+  e.event = event;
+  e.entry.fid = fid;
+  e.entry.context = context;
+  e.entry.data = data;
+  ((SumiEqEventList*) eq->events)->q.push_back(e);
 }
 
 EXTERN_C DIRECT_FN STATIC  int sumi_eq_close(struct fid *fid)
 {
+  if (fid) {
+    sumi_fid_eq* eq = container_of(fid, struct sumi_fid_eq, eq_fid);
+    delete (SumiEqEventList*) eq->events;
+    eq->events = nullptr;
+    free(eq);
+  }
+  return FI_SUCCESS;
 #if 0
 	struct sumi_fid_eq *eq;
 	int references_held;
@@ -182,14 +222,27 @@ EXTERN_C DIRECT_FN STATIC  int sumi_eq_close(struct fid *fid)
 DIRECT_FN STATIC ssize_t sumi_eq_read(struct fid_eq *eq, uint32_t *event,
               void *buf, size_t len, uint64_t flags)
 {
-  return 0;
+  sumi_fid_eq* eq_priv = container_of(eq, struct sumi_fid_eq, eq_fid);
+  SumiEqEventList* q = (SumiEqEventList*) eq_priv->events;
+  if (!q || q->q.empty()) return -FI_EAGAIN;
+
+  const SumiEqEvent& e = q->q.front();
+  if (event) *event = e.event;
+  size_t n = len < sizeof(struct fi_eq_entry) ? len : sizeof(struct fi_eq_entry);
+  if (buf) memcpy(buf, &e.entry, n);
+  if (!(flags & FI_PEEK)) q->q.pop_front();
+  return (ssize_t) n;
 }
 
+// The join completion is posted synchronously (sumi_cm_join), so by the time a
+// client sreads it the event is already queued: a plain read satisfies the
+// blocking-wait contract. A fully deferred join would instead pump the
+// simulator here until the event lands.
 DIRECT_FN STATIC ssize_t sumi_eq_sread(struct fid_eq *eq, uint32_t *event,
                void *buf, size_t len, int timeout,
                uint64_t flags)
 {
-  return 0;
+  return sumi_eq_read(eq, event, buf, len, flags);
 }
 
 EXTERN_C DIRECT_FN STATIC  int sumi_eq_control(struct fid *eq, int command, void *arg)
@@ -256,50 +309,16 @@ DIRECT_FN STATIC ssize_t sumi_eq_write(struct fid_eq *eq, uint32_t event,
 				       const void *buf, size_t len,
 				       uint64_t flags)
 {
-  ssize_t ret = len;
-#if 0
-  struct sumi_fid_eq *eq_priv;
-	struct slist_entry *item;
-	struct sumi_eq_entry *entry;
-
-
-
-	eq_priv = container_of(eq, struct sumi_fid_eq, eq_fid);
-
-	fastlock_acquire(&eq_priv->lock);
-
-	item = _sumi_queue_get_free(eq_priv->events);
-	if (!item) {
-		SUMI_WARN(FI_LOG_EQ, "error creating eq_entry\n");
-		ret = -FI_ENOMEM;
-		goto err;
-	}
-
-	entry = container_of(item, struct sumi_eq_entry, item);
-
-	entry->the_entry = calloc(1, len);
-	if (!entry->the_entry) {
-		_sumi_queue_enqueue_free(eq_priv->events, &entry->item);
-		SUMI_WARN(FI_LOG_EQ, "error allocating buffer\n");
-		ret = -FI_ENOMEM;
-		goto err;
-	}
-
-	memcpy(entry->the_entry, buf, len);
-
-	entry->len = len;
-	entry->type = event;
-	entry->flags = flags;
-
-	_sumi_queue_enqueue(eq_priv->events, &entry->item);
-
-	if (eq_priv->wait)
-		_sumi_signal_wait_obj(eq_priv->wait);
-
-err:
-	fastlock_release(&eq_priv->lock);
-#endif
-	return ret;
+  sumi_fid_eq* eq_priv = container_of(eq, struct sumi_fid_eq, eq_fid);
+  SumiEqEventList* q = (SumiEqEventList*) eq_priv->events;
+  if (!q) return -FI_EINVAL;
+  SumiEqEvent e;
+  e.event = event;
+  memset(&e.entry, 0, sizeof(e.entry));
+  size_t n = len < sizeof(struct fi_eq_entry) ? len : sizeof(struct fi_eq_entry);
+  if (buf) memcpy(&e.entry, buf, n);
+  q->q.push_back(e);
+  return (ssize_t) len;
 }
 
 DIRECT_FN STATIC const char *sumi_eq_strerror(struct fid_eq *eq, int prov_errno,
