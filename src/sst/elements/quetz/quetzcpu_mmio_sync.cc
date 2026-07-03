@@ -86,19 +86,19 @@ void QuetzCPU::pollMmioSyncMailbox()
 
     for (uint32_t v = 0; v < cfg_.vcpu_count; v++) {
         QuetzMmioSyncRequest* req = &shared->mmio_req[v];
-        if (req->pending == 0)
+        // Acquire pairs with the producer's (QEMU bridge) release-store of
+        // `pending`, so the request fields it published beforehand are visible
+        // here even on weak-memory (e.g. ARM) hosts.
+        if (__atomic_load_n(&req->pending, __ATOMIC_ACQUIRE) == 0)
             continue;
 
-        // The fields below are published by the producer (QEMU bridge) before it
-        // sets `pending`, which it fences. Reading them after the volatile
-        // `pending` load is safe on an x86 (TSO) host — incl. Rosetta-emulated
-        // x86 — but would need an explicit acquire fence on a weak-memory host.
         uint32_t cmd = req->cmd;
         uint64_t addr = req->addr;
         uint32_t size = req->size;
         uint64_t wval = req->write_val;
-        req->pending = 0;
-        __sync_synchronize();
+        // Release so the producer sees our field reads as complete before it can
+        // reuse the slot for the next request.
+        __atomic_store_n(&req->pending, 0u, __ATOMIC_RELEASE);
 
         QuetzCommand fake{};
         fake.cmd  = (QuetzShmemCmd)cmd;

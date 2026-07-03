@@ -13,6 +13,8 @@
 #include "quetz_qemu_frontend.h"
 
 #include <sys/mman.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 using namespace SST;
 using namespace SST::Quetz;
@@ -46,7 +48,28 @@ void QemuFrontend::spawn(const QuetzConfig& cfg, bool detailed_tracking) {
 }
 
 void QemuFrontend::waitForChildAttach() {
-    tunnel_->waitForChild();
+    // Poll child liveness while waiting: if QEMU dies before the plugin attaches
+    // (bad plugin path, exec failure, plugin init error), a bare spin on the
+    // attach flag would hang SST in init forever at 100% CPU.
+    while (!tunnel_->sync().childAttached()) {
+        int pstat = 0;
+        pid_t rc = waitpid(launcher_.pid(), &pstat, WNOHANG);
+        if (rc == launcher_.pid()) {
+            if (WIFEXITED(pstat))
+                output_->fatal(CALL_INFO, -1,
+                    "QEMU exited with status %d before its SST plugin attached "
+                    "(check the qemu_plugin path and the QEMU command line).\n",
+                    WEXITSTATUS(pstat));
+            if (WIFSIGNALED(pstat))
+                output_->fatal(CALL_INFO, -1,
+                    "QEMU was terminated by signal %d before its SST plugin "
+                    "attached.\n", WTERMSIG(pstat));
+            output_->fatal(CALL_INFO, -1,
+                "QEMU stopped (pstat=%d) before its SST plugin attached.\n",
+                pstat);
+        }
+        usleep(1000);
+    }
 }
 
 void QemuFrontend::terminate() {

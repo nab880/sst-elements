@@ -29,12 +29,18 @@ public:
     }
 
     void announceAttach() {
-        __sync_fetch_and_add(&shared_->child_attached, 1u);
+        __atomic_fetch_add(&shared_->child_attached, 1u, __ATOMIC_RELEASE);
+    }
+
+    // Acquire pairs with announceAttach()'s release so the child's shared-memory
+    // initialization is visible on weak-memory (e.g. ARM) hosts, not just x86.
+    bool childAttached() const {
+        return __atomic_load_n(&shared_->child_attached, __ATOMIC_ACQUIRE) != 0;
     }
 
     void waitForChild() {
-        while (shared_->child_attached == 0)
-            __sync_synchronize();
+        while (!childAttached())
+            ;
     }
 
 private:

@@ -41,19 +41,27 @@ AC_DEFUN([SST_quetz_CONFIG], [
         done
     ])
 
+    dnl Missing header without an explicit --with-qemu-prefix just disables the
+    dnl quetz element (the standard sst-elements behavior for an element whose
+    dnl dependencies are absent); an explicit prefix that is wrong stays a hard
+    dnl error above.
     AC_MSG_CHECKING([for qemu-plugin.h])
     AS_IF([test -n "$QEMU_PLUGIN_H_DIR"],
         [AC_MSG_RESULT([$QEMU_PLUGIN_H_DIR/qemu-plugin.h])],
-        [AC_MSG_RESULT([not found])
-         AC_MSG_ERROR([qemu-plugin.h not found.  Install QEMU development headers or use --with-qemu-prefix=<qemu-install-root>.])])
+        [AC_MSG_RESULT([not found — disabling the quetz element (install QEMU development headers or use --with-qemu-prefix=<qemu-install-root> to enable it)])
+         sst_check_quetz="no"])
 
     AC_SUBST([QEMU_PLUGIN_H_DIR])
+
+    GLIB_CFLAGS=""
+    QEMU_BIN=""
+
+    AS_IF([test "$sst_check_quetz" = "yes"], [
 
     dnl -----------------------------------------------------------------------
     dnl Find glib-2.0 include path (required by qemu-plugin.h in QEMU 9.1+)
     dnl -----------------------------------------------------------------------
     AC_MSG_CHECKING([for glib-2.0 CFLAGS (needed by qemu-plugin.h)])
-    GLIB_CFLAGS=""
     AS_IF([pkg-config --exists glib-2.0 2>/dev/null],
         [GLIB_CFLAGS=`pkg-config --cflags glib-2.0`
          AC_MSG_RESULT([$GLIB_CFLAGS])],
@@ -61,7 +69,6 @@ AC_DEFUN([SST_quetz_CONFIG], [
          AS_IF([test -f "/usr/include/glib-2.0/glib.h"],
              [GLIB_CFLAGS="-I/usr/include/glib-2.0 -I/usr/lib/x86_64-linux-gnu/glib-2.0/include"],
              [AC_MSG_WARN([glib-2.0 headers not found; plugin may fail to compile against QEMU 9.1+ headers])])])
-    AC_SUBST([GLIB_CFLAGS])
 
     dnl -----------------------------------------------------------------------
     dnl Locate qemu-riscv64 user-mode binary (runtime only)
@@ -75,6 +82,9 @@ AC_DEFUN([SST_quetz_CONFIG], [
         [AC_MSG_RESULT([not found (simulations will need qemu-riscv64 at runtime)])],
         [AC_MSG_RESULT([$QEMU_BIN])])
 
+    ]) dnl end sst_check_quetz = yes
+
+    AC_SUBST([GLIB_CFLAGS])
     AC_SUBST([QEMU_BIN])
 
     dnl Linux ld only; Darwin rejects -Wl,-no-as-needed.
