@@ -107,6 +107,54 @@ doorbell submit/poll — are exactly the shape of real device drivers, which is
 the point: port your driver code into this scaffold, or link your existing
 sources against the same startup files.
 
+## Adding your own kernel (model *your* accelerator)
+
+The accelerator's compute is a subcomponent: subclass `QuetzKernel`
+(`quetz_kernel_api.h`), implement two methods, register it, and select it in
+the SDL — the device's doorbell, DMA, blocking, and BUSY-timing machinery are
+already done. Shipped examples: `quetz.FFTKernel` (LE float32, latency
+`coeff·N·log₂N`) and `quetz.ScaleOffsetKernel` (saturating int16 sensor
+transform, latency `coeff·N`). A minimal custom kernel:
+
+```cpp
+#include "quetz_kernel_api.h"
+
+class ChecksumKernel : public SST::Quetz::QuetzKernel {
+public:
+    SST_ELI_REGISTER_SUBCOMPONENT(ChecksumKernel, "myelem", "ChecksumKernel",
+        SST_ELI_ELEMENT_VERSION(1,0,0), "sum32 of a byte buffer",
+        SST::Quetz::QuetzKernel)
+
+    ChecksumKernel(ComponentId_t id, Params& p) : QuetzKernel(id, p) {}
+
+    // How many bytes to DMA-read from REG_ARG0. arg2/arg3 are yours.
+    uint64_t inputBytes(const SST::Quetz::KernelArgs& a, std::string& err) override {
+        if (a.arg2 == 0) { err = "length (REG_ARG2) must be nonzero"; return 0; }
+        return a.arg2;
+    }
+
+    // Bytes in -> bytes out (DMA-written to REG_ARG1), plus a latency opinion
+    // in device cycles (0 = use the device's kernel_latency default; the
+    // guest's REG_LATENCY_OVERRIDE beats both).
+    uint64_t compute(const SST::Quetz::KernelArgs& a,
+                     const std::vector<uint8_t>& in,
+                     std::vector<uint8_t>& out) override {
+        uint32_t sum = 0;
+        for (uint8_t b : in) sum += b;
+        out = { (uint8_t)sum, (uint8_t)(sum>>8), (uint8_t)(sum>>16), (uint8_t)(sum>>24) };
+        return a.arg2;   // e.g. one cycle per byte
+    }
+};
+```
+
+SDL: `gpu.setSubComponent("kernel", "myelem.ChecksumKernel")` — plus the
+device needs `mem_iface` wired and `doorbell_blocking=1` (it fatals with
+instructions if you forget). Guest contract: program `REG_ARG0..3`, ring the
+doorbell (blocking — it returns when the result is in memory), read the
+output buffer. Keep your kernel's math in a standalone header so it can be
+unit-tested on the host without SST — see `quetz_fft.h` /
+`quetz_scale_offset.h` and their tests under `tests/unit/`.
+
 ## Adding your own device
 
 Copy `quetz_stream_device.{h,cc}` (~150 lines of logic): a Component holding a
