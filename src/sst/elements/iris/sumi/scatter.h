@@ -78,6 +78,10 @@ class BtreeScatterActor :
   int nelems_;
   int midpoint_;
   int log2nproc_;
+  // True once this rank receives its final data in_place (into result_buffer_).
+  // If it never does, its data is left in the temp recv buffer and must be
+  // copied out in finalizeBuffers -- see initDag/finalizeBuffers.
+  bool recv_in_place_ = false;
 
 };
 
