@@ -155,4 +155,10 @@ sst.Link("bus_to_sensors").connect(
 
 sst.setProgramOption("timebase", "1ps")
 sst.setStatisticLoadLevel(4)
-sst.setStatisticOutput("sst.statOutputConsole")
+# QUETZ_STATS_OUT: write statistics as CSV to this path (the quetz-run
+# artifacts contract) instead of dumping them on the console.
+stats_out = os.environ.get("QUETZ_STATS_OUT", "")
+if stats_out:
+    sst.setStatisticOutput("sst.statOutputCSV", {"filepath": stats_out})
+else:
+    sst.setStatisticOutput("sst.statOutputConsole")
