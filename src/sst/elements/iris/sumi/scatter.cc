@@ -115,8 +115,11 @@ BtreeScatterActor::finalizeBuffers()
       my_api_->freeWorkspace(recv_buffer_,max_recv_buf_size);
     }
   } else {
-    if (me % 2 == 0){
-      //I sent from a temp buffer, need a memcpy
+    // If this rank never received its data in_place, the final data is still in
+    // the temp recv buffer and must be copied to the result. (The old me%2==0
+    // heuristic missed the nproc==2 midpoint, which receives packed_temp and,
+    // with midpoint==1, never reaches the in_place round.)
+    if (!recv_in_place_){
       my_api_->memcopy(result_buffer_, recv_buffer_, result_size);
     }
     my_api_->freeWorkspace(recv_buffer_, max_recv_buf_size);
@@ -206,6 +209,7 @@ BtreeScatterActor::initDag()
           bufty = RecvAction::packed_temp_buf; //not done - receive into temp buffer
         } else {
           bufty = RecvAction::in_place;
+          recv_in_place_ = true; //final data lands directly in result_buffer_
         }
         Action* ac = new RecvAction(round, partner, bufty);
         ac->offset = 0;

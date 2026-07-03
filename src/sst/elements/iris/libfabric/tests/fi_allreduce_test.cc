@@ -147,11 +147,7 @@ int main(int argc, char** argv)
   }
 
   // The vector collectives use size-element buffers; keep the test bounded.
-  // N>=4: the engine's BtreeScatter has a pre-existing edge bug at N=2 (the
-  // odd-ranked midpoint never copies its temp recv buffer into the result in
-  // finalizeBuffers), unrelated to this provider bridge. barrier/broadcast/
-  // reduce/allreduce above already cover the small-N cases.
-  if (size >= 4 && size <= 64) {
+  if (size >= 2 && size <= 64) {
     // --- allgather: result[i] must equal contribution of rank i (= i+1) ---
     ctx = (void*) 0xA11;
     int32_t agsrc = rank + 1, agdst[64];
@@ -187,11 +183,13 @@ int main(int argc, char** argv)
     }
 
     // NOTE: fi_reduce_scatter is wired in the provider (sumi_ep_reduce_scatter)
-    // but NOT exercised here: the engine's HalvingReduceScatter DAG is a stub on
-    // devel (aborts "halving_reduce_scatter: not implemented"). It will work
-    // once the engine actor is implemented -- no provider change needed.
+    // but not exercised: the engine's HalvingReduceScatter DAG remains a stub on
+    // devel. A correct recursive-halving reduce-scatter is a feature in its own
+    // right (it produces a bit-reversed block permutation that must be mapped
+    // back to MPI order), separate from this provider bridge.
 
-    // --- sub-communicator via fi_join_collective: even ranks only ---
+    // --- sub-communicator via fi_join_collective: even ranks only (>=2) ---
+    if (size >= 4) {
     // Build an address set of the even global ranks, join it into a
     // sub-communicator, and allreduce over just those ranks. Proves coll_addr
     // now selects a real subgroup (not the world) through the engine + registry.
@@ -235,14 +233,16 @@ int main(int argc, char** argv)
     }
     fi_close(&aset->fid);
     fi_close(&av->fid);
-  }
+    } // if (size >= 4): join
+  } // if (size >= 2): vector collectives
 
   if (rank == 0) {
     const char* alg = getenv("SUMI_ALLREDUCE_ALG");
-    const char* vec = (size >= 4) ? ",allgather,gather,scatter,join+sub-allreduce" : "";
-    printf("PASS: fi_collectives (%d ranks; barrier,broadcast,reduce,allreduce%s;"
+    const char* vec = (size >= 2) ? ",allgather,gather,scatter" : "";
+    const char* jn  = (size >= 4) ? ",join+sub-allreduce" : "";
+    printf("PASS: fi_collectives (%d ranks; barrier,broadcast,reduce,allreduce%s%s;"
            " SUM=%d, allreduce_alg=%s)\n",
-           size, vec, result, alg ? alg : "default");
+           size, vec, jn, result, alg ? alg : "default");
   }
   return 0;
 }
