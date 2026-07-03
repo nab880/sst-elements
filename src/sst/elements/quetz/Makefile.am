@@ -49,6 +49,9 @@ libquetz_la_SOURCES = \
     quetz_kernel_api.h \
     quetz_fft_kernel.cc \
     quetz_fft_kernel.h \
+    quetz_scale_offset.h \
+    quetz_scale_offset_kernel.cc \
+    quetz_scale_offset_kernel.h \
     quetz_stream_device.cc \
     quetz_stream_device.h \
     quetz_mem_access.cc \
@@ -206,6 +209,8 @@ EXTRA_DIST =	QUETZ_OUTLINE.md \
 	tests/sysmode/firmware/arm_m7_startup.S \
 	tests/sysmode/firmware/balar_fw_common.h \
 	tests/sysmode/firmware/build.sh \
+	tests/sysmode/firmware/coldfire_accel_scale \
+	tests/sysmode/firmware/coldfire_accel_scale.c \
 	tests/sysmode/firmware/coldfire_balar.h \
 	tests/sysmode/firmware/coldfire_gpu_async.c \
 	tests/sysmode/firmware/coldfire_gpu_fft \
@@ -266,6 +271,7 @@ EXTRA_DIST =	QUETZ_OUTLINE.md \
 	tests/unit/test_decoder_generic.cc \
 	tests/unit/test_decoder_riscv.cc \
 	tests/unit/test_fft_compute.cc \
+	tests/unit/test_scale_offset.cc \
 	tests/unit/test_ipc_layout.cc \
 	tests/unit/test_mem_issue_split.cc \
 	tests/unit/test_quetz_config.cc \

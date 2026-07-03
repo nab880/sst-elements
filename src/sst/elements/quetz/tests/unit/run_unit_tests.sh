@@ -48,6 +48,7 @@ compile test_command_buffer.cc test_command_buffer
 compile test_config_manager.cc test_config_manager \
     "${QUETZ_DIR}/quetz_platform_profiles.cc"
 compile test_fft_compute.cc test_fft_compute
+compile test_scale_offset.cc test_scale_offset
 
 TESTS=(
     test_smoke
@@ -61,6 +62,7 @@ TESTS=(
     test_command_buffer
     test_config_manager
     test_fft_compute
+    test_scale_offset
 )
 
 echo "=== Quetz unit tests ==="

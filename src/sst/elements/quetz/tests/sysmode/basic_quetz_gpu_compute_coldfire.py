@@ -138,10 +138,13 @@ gpu.addParams({
     "doorbell_blocking": 1,   # required when a kernel is loaded
 })
 gpu.enableAllStatistics()
-gpu_kernel = gpu.setSubComponent("kernel", "quetz.FFTKernel")
-gpu_kernel.addParams({
-    "fft_latency_coeff": int(os.environ.get("QUETZ_FFT_LATENCY_COEFF", "20")),
-})
+# Kernel selection: any quetz.QuetzKernel subclass (QUETZ_KERNEL env).
+kernel_name = os.environ.get("QUETZ_KERNEL", "quetz.FFTKernel")
+gpu_kernel = gpu.setSubComponent("kernel", kernel_name)
+if kernel_name == "quetz.FFTKernel":
+    gpu_kernel.addParams({
+        "fft_latency_coeff": int(os.environ.get("QUETZ_FFT_LATENCY_COEFF", "20")),
+    })
 gpu_mmio_if = gpu.setSubComponent("iface", "memHierarchy.standardInterface")
 gpu_mmio_nic = gpu_mmio_if.setSubComponent("lowlink", "memHierarchy.MemNIC")
 gpu_mmio_nic.addParams({"group": MMIO_GROUP, "sources": MMIO_SRC,

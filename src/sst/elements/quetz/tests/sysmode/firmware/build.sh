@@ -97,6 +97,10 @@ echo "=== ColdFire mcf5208evb system demo: uart+gps+sensors+accel (m68k) ==="
 $M68K_CC $M68K_FLAGS coldfire_startup.S coldfire_system.c -o coldfire_system
 echo "  -> coldfire_system"
 
+echo "=== ColdFire mcf5208evb accel scale/offset (device-computed, m68k) ==="
+$M68K_CC $M68K_FLAGS coldfire_startup.S coldfire_accel_scale.c -o coldfire_accel_scale
+echo "  -> coldfire_accel_scale"
+
 echo "=== ColdFire mcf5208evb balar vectorAdd (m68k) ==="
 $M68K_CC $M68K_FLAGS coldfire_startup.S coldfire_gpu.c -o coldfire_gpu
 echo "  -> coldfire_gpu"
