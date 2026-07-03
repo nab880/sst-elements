@@ -57,10 +57,33 @@ static inline uint32_t mmio_read32(uint32_t addr)
     return *(volatile uint32_t *)addr;
 }
 
-/* --- GPS: NMEA over UART0 RX ---------------------------------------------- */
+/* --- GPS: NMEA over a UART RX ----------------------------------------------
+ * Default: UART0 (console port; RX fed via appstdin — TX/RX are independent).
+ * Build with -DGPS_UART=1 for a dedicated GPS port on UART1, fed by a paced
+ * `-serial pipe:` chardev (tools/serial_feeder.py). g_gps_waits counts
+ * RXRDY-empty polls — the paced test asserts the guest actually waited. */
+
+#ifndef GPS_UART
+#define GPS_UART 0
+#endif
 
 #define GPS_TOTAL_LINES  10u   /* fixture line count — read exactly this many */
 #define NMEA_MAX         96u
+
+static uint32_t g_gps_waits;
+
+static char gps_getc(void)
+{
+#if GPS_UART == 1
+    while (!(UART1_SR & SR_RXRDY))
+        g_gps_waits++;
+    return (char)UART1_RB;
+#else
+    while (!(UART_SR & SR_RXRDY))
+        g_gps_waits++;
+    return (char)UART_RB;
+#endif
+}
 
 static uint32_t hexval(char c)
 {
@@ -75,7 +98,7 @@ static uint32_t gps_read_line(char *buf, uint32_t max)
 {
     uint32_t n = 0;
     for (;;) {
-        char c = uart_getc();
+        char c = gps_getc();
         if (c == '\r')
             continue;
         if (c == '\n')
@@ -120,35 +143,45 @@ static int gprmc_is_active(const char *s)
 
 /* --- Sensor stream: QuetzStreamDevice ------------------------------------- */
 
-/* Sum all payload bytes (stream minus the 4-byte trailer); the trailer is the
- * expected sum packed b0|b1<<8|b2<<16|b3<<24 — numeric packing on both ends,
- * so the same firmware is correct on big-endian ColdFire. */
+#define SENSOR_EOS        (SENSOR_BASE + 0x20UL) /* R: 1 = stream consumed */
+
+/* The canonical stream-drain pattern (works paced and unpaced): poll STATUS
+ * for readiness, distinguish "not ready yet" from "done" via REG_EOS, count
+ * the waits. Sum all payload bytes; the last word of the stream is a sum32
+ * trailer packed b0|b1<<8|b2<<16|b3<<24 — numeric packing on both ends, so
+ * the same firmware is correct on big-endian ColdFire. */
+static uint32_t g_sensor_waits;
+
 static int sensor_check(uint32_t *first_word_out)
 {
-    uint32_t total = mmio_read32(SENSOR_STATUS);
-    if (total < 8 || (total & 3u))
-        return 0;
+    uint32_t sum = 0, first = 0, prev = 0, prev_valid = 0;
 
-    uint32_t payload = total - 4;
-    uint32_t sum = 0, expect = 0, first = 0;
-    for (uint32_t off = 0; off < total; off += 4) {
-        uint32_t w = mmio_read32(SENSOR_DATA);
-        if (off == 0)
-            first = w;
-        if (off < payload) {
-            sum += (w & 0xFFu) + ((w >> 8) & 0xFFu)
-                 + ((w >> 16) & 0xFFu) + ((w >> 24) & 0xFFu);
-        } else {
-            expect = w;
+    for (;;) {
+        if (mmio_read32(SENSOR_STATUS) == 0) {
+            if (mmio_read32(SENSOR_EOS))
+                break;                     /* fully drained */
+            g_sensor_waits++;              /* paced refill not here yet */
+            continue;
         }
+        uint32_t w = mmio_read32(SENSOR_DATA);
+        if (prev_valid) {
+            sum += (prev & 0xFFu) + ((prev >> 8) & 0xFFu)
+                 + ((prev >> 16) & 0xFFu) + ((prev >> 24) & 0xFFu);
+        } else {
+            first = w;
+        }
+        prev = w;
+        prev_valid = 1;
     }
+
+    uint32_t total = mmio_read32(SENSOR_SEQ);
     *first_word_out = first;
 
+    if (total < 8 || (total & 3u))
+        return 0;
     if (mmio_read32(SENSOR_STATUS) != 0)   /* drained exactly */
         return 0;
-    if (mmio_read32(SENSOR_SEQ) != total)
-        return 0;
-    return sum == expect;
+    return prev_valid && sum == prev;      /* last word = trailer */
 }
 
 /* --- Accelerator: batch kernels on the synthetic GPU ---------------------- */
@@ -166,6 +199,9 @@ static void accel_run_batch(uint32_t cycles)
 void kernel_main(void)
 {
     uart_init();
+#if GPS_UART == 1
+    uart1_init();
+#endif
     uart_puts("ColdFire system demo: uart + gps + sensors + accelerator\n");
 
     /* GPS: consume the whole NMEA fixture from UART0 RX. */
@@ -183,17 +219,24 @@ void kernel_main(void)
     uart_put_u32_dec(gps_valid);
     uart_puts(" active_fixes=");
     uart_put_u32_dec(gps_active);
+    uart_puts(" waits=");
+    uart_put_u32_dec(g_gps_waits);
     uart_putc('\n');
 
-    /* Sensors: drain + verify the recorded stream, then prove rewind works. */
+    /* Sensors: drain + verify the recorded stream, then prove rewind works
+     * (paced: the replayed first word needs a refill, so poll STATUS). */
     uint32_t first_word = 0;
     int sensor_ok = sensor_check(&first_word);
     mmio_write32(SENSOR_CTRL, 1);          /* rewind */
+    while (mmio_read32(SENSOR_STATUS) == 0)
+        g_sensor_waits++;
     int rewind_ok = (mmio_read32(SENSOR_DATA) == first_word);
     uart_puts("sensors: stream=");
     uart_puts(sensor_ok ? "ok" : "BAD");
     uart_puts(" rewind=");
     uart_puts(rewind_ok ? "ok" : "BAD");
+    uart_puts(" waits=");
+    uart_put_u32_dec(g_sensor_waits);
     uart_putc('\n');
 
     /* Accelerator: two processing batches, confirm both retired. */

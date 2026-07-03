@@ -83,13 +83,30 @@ SDL parameters, and plain C++ behind a tiny component API. The demo uses two:
 
   | offset | reg    | dir | behavior |
   |-------:|--------|-----|----------|
-  | 0x00   | STATUS | R   | bytes remaining |
+  | 0x00   | STATUS | R   | bytes ready now (unpaced: all remaining) |
   | 0x08   | DATA   | R   | pop up to 4 bytes, packed `b0 | b1<<8 | b2<<16 | b3<<24` |
   | 0x10   | SEQ    | R   | bytes consumed so far |
-  | 0x18   | CTRL   | W   | write 1 to rewind |
+  | 0x18   | CTRL   | W   | write 1 to rewind (paced: restarts the refill budget) |
+  | 0x20   | EOS    | R   | 1 when the stream is fully consumed |
 
   The packing is numeric, so identical firmware is correct on big-endian
-  (ColdFire) and little-endian (RISC-V) guests.
+  (ColdFire) and little-endian (RISC-V) guests. Real sensors don't deliver
+  everything at t=0: set `pace_bytes` + `pace_period` and STATUS fills over
+  sim time, which exercises your polling/timeout logic. The canonical drain
+  (correct paced and unpaced — see `coldfire_system.c:sensor_check`):
+
+  ```c
+  for (;;) {
+      if (STATUS == 0) { if (EOS) break; /* not ready yet */ continue; }
+      word = DATA;   /* pops min(4, stream tail) bytes */
+  }
+  ```
+
+- **Dedicated serial ports**: the mcf5208evb has three UARTs on `-serial`
+  slots. Feed a recording into UART1 at device-realistic line rates with
+  `tools/serial_feeder.py` + a `pipe:` chardev (tests: `make_serial_feed`
+  helper; deck env: `QUETZ_SERIAL1`). The demo's GPS-on-UART1 variant is
+  `firmware/coldfire_system_gps1` (`-DGPS_UART=1`, same source).
 
 Multiple SST devices share **one** bridge window: put a `memHierarchy.Bus`
 between the CPU's `mmio_link_0` and the device interfaces and give each device

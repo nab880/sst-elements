@@ -99,6 +99,46 @@ def stat_sum(output, stat_substr, default=None):
     return default
 
 
+def make_serial_feed(name, data_file, hz=0.0):
+    """FIFO-backed `-serial pipe:` feed for a dedicated guest serial port.
+
+    Creates <base>.in/.out FIFOs in a fresh local tmpdir (NOT the test outdir:
+    FIFOs are unreliable on bind-mounted trees under Docker Desktop), starts
+    tools/serial_feeder.py writing data_file into it (line-paced at `hz`), and
+    returns (serial_arg, cleanup) where serial_arg is the fragment to append
+    to QUETZ_QEMU_ARGS (e.g. "-serial pipe:/tmp/qz_serial_x/gps") and
+    cleanup() stops the feeder and removes the FIFOs — call it in a finally.
+    """
+    import shutil
+    import subprocess
+    import sys as _sys
+    import tempfile
+
+    tmpdir = tempfile.mkdtemp(prefix="qz_serial_")
+    base = os.path.join(tmpdir, name)
+    os.mkfifo(base + ".in")
+    os.mkfifo(base + ".out")
+
+    feeder = os.path.normpath(os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", "tools",
+        "serial_feeder.py"))
+    cmd = [_sys.executable, feeder, data_file, base + ".in"]
+    if hz:
+        cmd += ["--hz", str(hz)]
+    proc = subprocess.Popen(cmd)
+
+    def cleanup():
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+    return "-serial pipe:" + base, cleanup
+
+
 def enable_mmio_payload_delivery():
     """Enable QEMU bridge / linux-user MMIO sync (launcher reads these)."""
     os.environ["QUETZ_MMIO_PAYLOAD"] = "1"

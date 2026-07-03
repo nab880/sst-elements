@@ -46,6 +46,12 @@ plugin     = os.environ.get("QUETZ_PLUGIN",
                             os.path.join(sst_home, "libexec", "libqemu_sst_plugin.so"))
 qemu_args  = os.environ.get("QUETZ_QEMU_ARGS",
                             "-machine mcf5208evb -display none -serial stdio -m 128M")
+# Dedicated second serial port (e.g. a paced GPS feed): QUETZ_SERIAL1 carries
+# the chardev spec ("pipe:/tmp/.../gps" from make_serial_feed) and lands on
+# UART1 (-serial slots map positionally; slot 0 stays the stdio console).
+serial1 = os.environ.get("QUETZ_SERIAL1", "")
+if serial1:
+    qemu_args += " -serial " + serial1
 loader     = os.environ.get("QUETZ_LOADER", "-kernel")
 clock      = os.environ.get("QUETZ_CLOCK", "1GHz")
 stdin_file = os.environ.get("QUETZ_STDIN_FILE",
@@ -96,8 +102,10 @@ cpu.addParams(cpu_params)
 # First-match-wins; the MMIO window/uart/sentinel must precede the DRAM default.
 mmio_rh = cpu.setSubComponent("region_handler", "quetz.MmioForwardRegionHandler", 0)
 mmio_rh.addParams({"start": mmio_start, "end": mmio_end})
+# Covers all three mcf5208 UARTs (0xfc060000/4000/8000) so a dedicated GPS
+# port on UART1 is trace-filtered too; tx_offset still captures UART0 TX only.
 uart_rh = cpu.setSubComponent("region_handler", "quetz.UartRegionHandler", 1)
-uart_rh.addParams({"start": uart_addr, "end": uart_addr + 0xFF, "tx_offset": 0x0C})
+uart_rh.addParams({"start": uart_addr, "end": uart_addr + 0x8FFF, "tx_offset": 0x0C})
 fin_rh = cpu.setSubComponent("region_handler", "quetz.TestFinisherRegionHandler", 2)
 fin_rh.addParams({"start": sentinel_addr, "end": sentinel_addr + 3})
 cpu.enableAllStatistics()
@@ -123,12 +131,15 @@ gpu.addParams({
 gpu.enableAllStatistics()
 gpu_if = gpu.setSubComponent("iface", "memHierarchy.standardInterface")
 
-# Sensor stream (file-backed data feed).
+# Sensor stream (file-backed data feed). QUETZ_SENSOR_PACE_BYTES paces the
+# replay (bytes per QUETZ_SENSOR_PACE_PERIOD); 0 = all available at t=0.
 sensors = sst.Component("sensors", "quetz.QuetzStreamDevice")
 sensors.addParams({
     "base_addr": sensor_base,
     "mmio_size": 0x100,
     "stream_file": sensor_file,
+    "pace_bytes": int(os.environ.get("QUETZ_SENSOR_PACE_BYTES", "0")),
+    "pace_period": os.environ.get("QUETZ_SENSOR_PACE_PERIOD", "100us"),
 })
 sensors.enableAllStatistics()
 sensors_if = sensors.setSubComponent("iface", "memHierarchy.standardInterface")

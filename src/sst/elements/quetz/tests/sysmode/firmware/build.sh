@@ -97,6 +97,10 @@ echo "=== ColdFire mcf5208evb system demo: uart+gps+sensors+accel (m68k) ==="
 $M68K_CC $M68K_FLAGS coldfire_startup.S coldfire_system.c -o coldfire_system
 echo "  -> coldfire_system"
 
+echo "=== ColdFire system demo, GPS on dedicated UART1 (m68k) ==="
+$M68K_CC $M68K_FLAGS -DGPS_UART=1 coldfire_startup.S coldfire_system.c -o coldfire_system_gps1
+echo "  -> coldfire_system_gps1"
+
 echo "=== ColdFire mcf5208evb accel scale/offset (device-computed, m68k) ==="
 $M68K_CC $M68K_FLAGS coldfire_startup.S coldfire_accel_scale.c -o coldfire_accel_scale
 echo "  -> coldfire_accel_scale"

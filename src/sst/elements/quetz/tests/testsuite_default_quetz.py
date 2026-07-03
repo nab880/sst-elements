@@ -30,6 +30,7 @@ from quetz_test_helpers import (
     should_compare_gold,
     enable_mmio_payload_delivery,
     filtered_stat_lines,
+    make_serial_feed,
     make_sysmode_env,
     make_usermode_env,
     parse_stats,
@@ -2352,6 +2353,92 @@ class testcase_quetz_sysmode(SSTTestCase):
             "QuetzStreamDevice delivered fewer bytes than the fixture + rewind read")
         self.assertEqual(stat_sum(raw, "gpu.kernels_launched", 0), 2,
             "synthetic accelerator did not launch exactly two kernels")
+
+    # -------------------------------------------------------------------------
+    def test_quetz_coldfire_system_paced(self):
+        """System demo with realistic input timing: GPS on a dedicated UART1
+        (line-paced pipe-chardev feed via tools/serial_feeder.py) and a paced
+        sensor stream (pace_bytes/pace_period + REG_EOS poll loop).
+
+        Asserts the same functional results as the unpaced demo PLUS evidence
+        the guest actually waited: sensors waits > 0 in the transcript and
+        the device's paced_refills statistic matches the pacing math."""
+        test_path = self.get_testsuite_dir()
+        sst_prefix, sst_bindir, sst_libexec = sst_paths()
+
+        import shutil
+        qemu_bin = os.path.join(sst_bindir, "qemu-system-m68k")
+        if not os.path.exists(qemu_bin):
+            found = shutil.which("qemu-system-m68k")
+            if found:
+                qemu_bin = found
+        if not os.path.exists(qemu_bin):
+            self.skipTest("qemu-system-m68k not found; rebuild QEMU with m68k-softmmu")
+
+        exe_abs = os.path.normpath(os.path.join(
+            test_path, "sysmode/firmware/coldfire_system_gps1"))
+        gps_file = os.path.normpath(os.path.join(
+            test_path, "sysmode/data/gps_nmea.txt"))
+        if not os.path.exists(exe_abs):
+            self.skipTest("coldfire_system_gps1 not found at {}; "
+                          "run M68K_CC=m68k-linux-gnu-gcc ./build.sh".format(exe_abs))
+
+        outdir = os.path.join(self.get_test_output_run_dir(),
+                              "quetz_sysmode_tests", "coldfire_system_paced")
+        os.makedirs(outdir, exist_ok=True)
+
+        serial_arg, feed_cleanup = make_serial_feed("gps", gps_file, hz=20.0)
+        make_sysmode_env(sst_prefix, sst_libexec, qemu_bin, exe_abs,
+                         "-machine mcf5208evb -display none -serial stdio -m 128M",
+                         "-kernel", 0x40000000, 0x47FFFFFF, [],
+                         stdin_file="/dev/null")
+        os.environ["QUETZ_MMIO_START"] = "0x70000000"
+        os.environ["QUETZ_MMIO_END"]   = "0x7001FFFF"
+        os.environ["QUETZ_SERIAL1"] = serial_arg.replace("-serial ", "", 1)
+        os.environ["QUETZ_SENSOR_PACE_BYTES"]  = "64"
+        os.environ["QUETZ_SENSOR_PACE_PERIOD"] = "100us"
+        enable_mmio_payload_delivery()
+
+        sdlfile     = os.path.join(test_path, "sysmode",
+                                   "basic_quetz_coldfire_system.py")
+        sst_outfile = os.path.join(outdir, "coldfire_system_paced.out")
+        sst_errfile = os.path.join(outdir, "coldfire_system_paced.err")
+        mpifiles    = os.path.join(outdir, "coldfire_system_paced.testfile")
+
+        try:
+            self.run_sst(sdlfile, sst_outfile, sst_errfile,
+                         mpi_out_files=mpifiles, set_cwd=outdir,
+                         timeout_sec=60 * 10)
+        finally:
+            feed_cleanup()
+            os.environ.pop("QUETZ_SERIAL1", None)
+            os.environ.pop("QUETZ_SENSOR_PACE_BYTES", None)
+            os.environ.pop("QUETZ_SENSOR_PACE_PERIOD", None)
+
+        raw = ""
+        if os.path.exists(sst_outfile):
+            with open(sst_outfile, "r") as f:
+                raw += f.read()
+        if os.path.exists(sst_errfile):
+            with open(sst_errfile, "r") as f:
+                raw += "\n" + f.read()
+        self.assertNotIn("FATAL", raw)
+
+        self.assertIn("gps: valid=8 active_fixes=6", raw,
+            "GPS NMEA parse mismatch over the dedicated UART1 pipe feed")
+        self.assertIn("sensors: stream=ok rewind=ok", raw,
+            "paced sensor drain/rewind failed (REG_EOS poll loop)")
+        self.assertIn("SYSTEM DEMO PASS", raw)
+        self.assertIn("TESTFINISH[0]", raw)
+
+        import re
+        m = re.search(r"sensors: stream=ok rewind=ok waits=(\d+)", raw)
+        self.assertIsNotNone(m, "sensors waits count missing from transcript")
+        self.assertGreater(int(m.group(1)), 0,
+            "paced stream never made the guest wait — pacing had no effect")
+        # 256-byte fixture at 64 bytes/refill = 4 refills, +1 after the rewind.
+        self.assertGreaterEqual(stat_sum(raw, "sensors.paced_refills", 0), 4,
+            "paced_refills stat below the pacing math")
 
     # -------------------------------------------------------------------------
     def test_quetz_coldfire_gpu_async(self):

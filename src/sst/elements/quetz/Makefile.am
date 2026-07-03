@@ -225,6 +225,7 @@ EXTRA_DIST =	QUETZ_OUTLINE.md \
 	tests/sysmode/firmware/coldfire_startup.S \
 	tests/sysmode/firmware/coldfire_system \
 	tests/sysmode/firmware/coldfire_system.c \
+	tests/sysmode/firmware/coldfire_system_gps1 \
 	tests/sysmode/firmware/coldfire_uart.h \
 	tests/sysmode/firmware/cuda_runtime_types_firmware.h \
 	tests/sysmode/firmware/fft_firmware_data_256.h \
@@ -268,6 +269,7 @@ EXTRA_DIST =	QUETZ_OUTLINE.md \
 	tools/check_nmea.py \
 	tools/dump_stream.py \
 	tools/make_stream.py \
+	tools/serial_feeder.py \
 	tests/unit/doctest.h \
 	tests/unit/run_unit_tests.sh \
 	tests/unit/sst_stubs.h \

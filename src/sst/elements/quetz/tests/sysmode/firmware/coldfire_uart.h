@@ -13,6 +13,13 @@
 #define SR_RXRDY     0x01u
 #define SR_TXRDY     0x04u
 
+/* UART1 (same programming model, second -serial slot) — e.g. a dedicated GPS
+ * feed via `-serial pipe:...` while UART0 stays the console. */
+#define UART1_BASE   0xfc064000UL
+#define UART1_SR     (*(volatile uint8_t*)(UART1_BASE + 0x04))
+#define UART1_UCR    (*(volatile uint8_t*)(UART1_BASE + 0x08))
+#define UART1_RB     (*(volatile uint8_t*)(UART1_BASE + 0x0c))
+
 #define TESTDEV      (*(volatile uint32_t*)0x80000000UL)
 #define TESTDEV_PASS 0x5555u
 #define TESTDEV_FAIL 0x3333u
@@ -42,6 +49,13 @@ static inline char uart_getc(void)
     while (!(UART_SR & SR_RXRDY))
         ;
     return (char)UART_RB;
+}
+
+static inline void uart1_init(void)
+{
+    UART1_UCR = 0x20;
+    UART1_UCR = 0x30;
+    UART1_UCR = 0x05;
 }
 
 static inline void uart_put_u32_dec(uint32_t v)
