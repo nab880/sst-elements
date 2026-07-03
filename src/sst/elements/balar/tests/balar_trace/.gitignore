@@ -2,3 +2,5 @@ vectorAdd
 *.ptx
 *.objdump
 libcudart.so.9.1
+fft
+fft_double
