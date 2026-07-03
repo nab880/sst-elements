@@ -257,11 +257,15 @@ EXTRA_DIST =	QUETZ_OUTLINE.md \
 	tests/sysmode/preset_quetz_sysmode.py \
 	tests/sysmode/README-coldfire-demo.md \
 	tests/sysmode/run_mmio_test.sh \
+	tests/sysmode/template_system.py \
 	tests/sysmode/small/arm_m7_hello/sst.stdout.gold \
 	tests/sysmode/small/riscv64_virt_gpu_trace/sst.stdout.gold \
 	tests/sysmode/small/riscv64_virt_hello/sst.stdout.gold \
 	tests/sysmode/small/uart_echo/sst.stdout.gold \
 	tests/testsuite_default_quetz.py \
+	tools/check_nmea.py \
+	tools/dump_stream.py \
+	tools/make_stream.py \
 	tests/unit/doctest.h \
 	tests/unit/run_unit_tests.sh \
 	tests/unit/sst_stubs.h \

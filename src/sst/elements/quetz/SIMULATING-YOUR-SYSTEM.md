@@ -14,7 +14,26 @@ The worked example throughout is the shipped **`coldfire_system`** demo:
 - fixtures: `tests/sysmode/data/gps_nmea.txt`, `tests/sysmode/data/sensor_stream.bin`
 - test: `test_quetz_coldfire_system` in `tests/testsuite_default_quetz.py`
 
-Run it:
+## Quickstart (three commands)
+
+From a clean checkout of the workspace (with docker):
+
+```sh
+docker build --target runtime -t quetz-sim -f quetz-docker/Dockerfile .
+./quetz-docker/quetz-run --out artifacts/
+cat artifacts/transcript.txt artifacts/result.txt
+```
+
+`quetz-run` runs the shipped demo (freestanding firmware — see the note it
+prints about board BSPs), and leaves `transcript.txt` (guest serial),
+`stats.csv`, `sst.log`, and `result.txt` in `--out`. Exit code: 0 = the
+guest's sentinel reported PASS, 2 = FAIL, 1 = error/timeout — drop it
+straight into CI. Swap in your own pieces with `--firmware my_app.elf`,
+`--stdin my_gps.nmea`, `--sensor my_stream.bin`, `--deck my_system.py`
+(start from `tests/sysmode/template_system.py`). Fixtures are built from
+recordings with `tools/make_stream.py` and `tools/check_nmea.py`.
+
+Running `sst` directly instead (inside the test container):
 
 ```sh
 export QUETZ_MMIO_PAYLOAD=1 QUETZ_MMIO_START=0x70000000 QUETZ_MMIO_END=0x7001FFFF
