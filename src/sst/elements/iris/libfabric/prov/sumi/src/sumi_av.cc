@@ -95,7 +95,8 @@ static struct fi_ops_av sumi_av_ops = {
   .insertsym = sumi_av_insertsym,
   .remove = sumi_av_remove,
   .lookup = sumi_av_lookup,
-  .straddr = sumi_av_straddr
+  .straddr = sumi_av_straddr,
+  .av_set = sumi_av_set
 };
 
 static struct fi_ops sumi_fi_av_ops = {
