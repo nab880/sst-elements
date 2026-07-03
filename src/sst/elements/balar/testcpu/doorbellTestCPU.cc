@@ -332,10 +332,23 @@ public:
             std::string arguments = lookup_param(params_map, "args", out_);
             size_t offset = 0;
             while (!arguments.empty()) {
+                // Every value and size is '/'-terminated (val/size/val/size/...).
+                // A missing separator would leave `arguments` unchanged and loop
+                // forever, so treat it as a malformed trace.
                 size_t pos = arguments.find("/");
+                if (pos == std::string::npos) {
+                    out_->fatal(CALL_INFO, -1,
+                                "Malformed kernel args (missing '/' after value): '%s'\n",
+                                arguments.c_str());
+                }
                 std::string arg_val = arguments.substr(0, pos);
                 arguments = arguments.substr(pos + 1);
                 pos = arguments.find("/");
+                if (pos == std::string::npos) {
+                    out_->fatal(CALL_INFO, -1,
+                                "Malformed kernel args (missing '/' after size of arg '%s'): '%s'\n",
+                                arg_val.c_str(), arguments.c_str());
+                }
                 std::string arg_size_str = arguments.substr(0, pos);
                 arguments = arguments.substr(pos + 1);
                 size_t arg_size = (size_t)parse_u64("kernel arg size", arg_size_str, out_);
