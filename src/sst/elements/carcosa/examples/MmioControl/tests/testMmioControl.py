@@ -5,7 +5,7 @@ in MMIO-peripheral mode, which dispatches the control accesses to
 ExampleControlAgent via the transport-neutral handleControlAccess hook. The
 agent parks the value read (Deferred) until the driver arms a value, then
 completes it via completePendingRead. Exercises Hali's MMIO transport plus the
-Deferred path end to end -- no VLA, no Quetz, no QEMU.
+Deferred path end to end -- no VLA, no external host, no QEMU.
 
 Expect output lines: 'step 0', 'step 1', then
   'PASS: deferred read returned 0xabcd via completePendingRead'

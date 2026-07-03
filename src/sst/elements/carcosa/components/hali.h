@@ -60,7 +60,7 @@ public:
 
     SST_ELI_DOCUMENT_SUBCOMPONENT_SLOTS(
         {"interceptionAgent", "Optional agent for intercepted memory accesses (e.g. Carcosa.PingPongAgent). If unset, no interception.", "SST::Carcosa::InterceptionAgentAPI"},
-        {"mmio_iface", "Optional StandardMem interface delivering the control region as MMIO requests (MMIO-peripheral transport, e.g. from a Quetz region handler).", "SST::Interfaces::StandardMem"}
+        {"mmio_iface", "Optional StandardMem interface delivering the control region as MMIO requests (MMIO-peripheral transport, e.g. from an MMIO region handler).", "SST::Interfaces::StandardMem"}
     )
 
     SST_ELI_DOCUMENT_PORTS(
