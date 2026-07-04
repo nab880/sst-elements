@@ -26,7 +26,7 @@ namespace SST::Iris::sumi {
 void
 RingAllreduceActor::finalizeBuffers()
 {
-  long buffer_size = nelems_ * type_size_;
+  long buffer_size = static_cast<long>(nelems_) * type_size_; // widen before multiply, matches initBuffers
   my_api_->freeWorkspace(recv_buffer_, buffer_size);
   //send buffer aliases the result buffer
 }

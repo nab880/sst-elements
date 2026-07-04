@@ -48,6 +48,7 @@
 #include <mercury/operating_system/launch/app_launcher.h>
 
 #include <cstring>
+#include <cctype>
 
 using SST::Hg::TimeDelta;
 
@@ -539,6 +540,31 @@ CollectiveEngine::engineAlgName(Collective::type_t ty) const
   return it == alg_names_.end() ? std::string() : it->second;
 }
 
+bool
+CollectiveEngine::startAlgOverride(Collective::type_t ty,
+    void* dst, void* src, int root, int nelems, int type_size, int tag,
+    int cq_id, reduce_fxn fxn, Communicator* comm, CollectiveDoneMessage** msg)
+{
+  std::string alg = engineAlgName(ty);
+  if (alg.empty()) return false;
+
+  auto args = makeArgs(this, dst, src, root, nelems, type_size, tag, cq_id, fxn, comm);
+  Collective* c = CollectiveRegistry::make(ty, alg, args);
+  if (!c){
+    const char* op = Collective::tostr(ty);
+    std::string env(op);
+    for (char& ch : env) ch = std::toupper((unsigned char)ch);
+    sst_hg_abort_printf("unknown %s algorithm '%s' (%s_alg / SUMI_%s_ALG)",
+                        op, alg.c_str(), op, env.c_str());
+  }
+  // Override selected: this is a flat single-DAG choice that always wins,
+  // even when startCollective() returns nullptr because the collective is
+  // still in flight (the common async, multi-rank case) — the caller must
+  // not fall through to the built-in default in that case.
+  *msg = startCollective(c);
+  return true;
+}
+
 void
 CollectiveEngine::notifyCollectiveDone(int rank, Collective::type_t ty, int tag)
 {
@@ -598,15 +624,11 @@ CollectiveEngine::allreduce(void* dst, void *src, int nelems, int type_size, int
 
   if (!comm) comm = global_domain_;
 
-  // A user-selected algorithm (param allreduce_alg / env SUMI_ALLREDUCE_ALG)
-  // is a flat single-DAG choice: it overrides the SMP-hierarchical composition.
-  std::string alg = engineAlgName(Collective::allreduce);
-  if (!alg.empty()){
-    auto args = makeArgs(this, dst, src, 0, nelems, type_size, tag, cq_id, fxn, comm);
-    Collective* c = CollectiveRegistry::make(Collective::allreduce, alg, args);
-    if (!c) sst_hg_abort_printf("unknown allreduce algorithm '%s' (allreduce_alg / SUMI_ALLREDUCE_ALG)", alg.c_str());
-    return startCollective(c);
-  }
+  // A user-selected algorithm is a flat single-DAG choice: it overrides the
+  // SMP-hierarchical composition below.
+  CollectiveDoneMessage* alg_msg;
+  if (startAlgOverride(Collective::allreduce, dst, src, 0, nelems, type_size, tag, cq_id, fxn, comm, &alg_msg))
+    return alg_msg;
 
   Collective* coll = nullptr;
   if (comm->smpComm()){
@@ -653,13 +675,9 @@ CollectiveEngine::reduceScatter(void* dst, void *src, int nelems, int type_size,
   if (msg) return msg;
 
   if (!comm) comm = global_domain_;
-  std::string alg = engineAlgName(Collective::reduce_scatter);
-  if (!alg.empty()){
-    auto args = makeArgs(this, dst, src, 0, nelems, type_size, tag, cq_id, fxn, comm);
-    Collective* c = CollectiveRegistry::make(Collective::reduce_scatter, alg, args);
-    if (!c) sst_hg_abort_printf("unknown reduce_scatter algorithm '%s' (reduce_scatter_alg / SUMI_REDUCE_SCATTER_ALG)", alg.c_str());
-    return startCollective(c);
-  }
+  CollectiveDoneMessage* alg_msg;
+  if (startAlgOverride(Collective::reduce_scatter, dst, src, 0, nelems, type_size, tag, cq_id, fxn, comm, &alg_msg))
+    return alg_msg;
   DagCollective* coll = new HalvingReduceScatter(this, dst, src, nelems, type_size, tag, fxn, cq_id, comm);
   return startCollective(coll);
 }
@@ -672,13 +690,9 @@ CollectiveEngine::scan(void* dst, void* src, int nelems, int type_size, int tag,
   if (msg) return msg;
 
   if (!comm) comm = global_domain_;
-  std::string alg = engineAlgName(Collective::scan);
-  if (!alg.empty()){
-    auto args = makeArgs(this, dst, src, 0, nelems, type_size, tag, cq_id, fxn, comm);
-    Collective* c = CollectiveRegistry::make(Collective::scan, alg, args);
-    if (!c) sst_hg_abort_printf("unknown scan algorithm '%s' (scan_alg / SUMI_SCAN_ALG)", alg.c_str());
-    return startCollective(c);
-  }
+  CollectiveDoneMessage* alg_msg;
+  if (startAlgOverride(Collective::scan, dst, src, 0, nelems, type_size, tag, cq_id, fxn, comm, &alg_msg))
+    return alg_msg;
   DagCollective* coll = new SimultaneousBtreeScan(this, dst, src, nelems, type_size, tag, fxn, cq_id, comm);
   return startCollective(coll);
 }
@@ -692,13 +706,9 @@ CollectiveEngine::reduce(int root, void* dst, void *src, int nelems, int type_si
   if (msg) return msg;
 
   if (!comm) comm = global_domain_;
-  std::string alg = engineAlgName(Collective::reduce);
-  if (!alg.empty()){
-    auto args = makeArgs(this, dst, src, root, nelems, type_size, tag, cq_id, fxn, comm);
-    Collective* c = CollectiveRegistry::make(Collective::reduce, alg, args);
-    if (!c) sst_hg_abort_printf("unknown reduce algorithm '%s' (reduce_alg / SUMI_REDUCE_ALG)", alg.c_str());
-    return startCollective(c);
-  }
+  CollectiveDoneMessage* alg_msg;
+  if (startAlgOverride(Collective::reduce, dst, src, root, nelems, type_size, tag, cq_id, fxn, comm, &alg_msg))
+    return alg_msg;
   DagCollective* coll = new WilkeHalvingReduce(this, root, dst, src, nelems, type_size, tag, fxn, cq_id, comm);
   return startCollective(coll);
 }
@@ -711,13 +721,9 @@ CollectiveEngine::bcast(int root, void *buf, int nelems, int type_size, int tag,
   if (msg) return msg;
 
   if (!comm) comm = global_domain_;
-  std::string alg = engineAlgName(Collective::bcast);
-  if (!alg.empty()){
-    auto args = makeArgs(this, buf, buf, root, nelems, type_size, tag, cq_id, nullptr, comm);
-    Collective* c = CollectiveRegistry::make(Collective::bcast, alg, args);
-    if (!c) sst_hg_abort_printf("unknown bcast algorithm '%s' (bcast_alg / SUMI_BCAST_ALG)", alg.c_str());
-    return startCollective(c);
-  }
+  CollectiveDoneMessage* alg_msg;
+  if (startAlgOverride(Collective::bcast, buf, buf, root, nelems, type_size, tag, cq_id, nullptr, comm, &alg_msg))
+    return alg_msg;
   DagCollective* coll = new BinaryTreeBcastCollective(this, root, buf, nelems, type_size, tag, cq_id, comm);
   return startCollective(coll);
 }
@@ -744,13 +750,9 @@ CollectiveEngine::gather(int root, void *dst, void *src, int nelems, int type_si
   if (msg) return msg;
 
   if (!comm) comm = global_domain_;
-  std::string alg = engineAlgName(Collective::gather);
-  if (!alg.empty()){
-    auto args = makeArgs(this, dst, src, root, nelems, type_size, tag, cq_id, nullptr, comm);
-    Collective* c = CollectiveRegistry::make(Collective::gather, alg, args);
-    if (!c) sst_hg_abort_printf("unknown gather algorithm '%s' (gather_alg / SUMI_GATHER_ALG)", alg.c_str());
-    return startCollective(c);
-  }
+  CollectiveDoneMessage* alg_msg;
+  if (startAlgOverride(Collective::gather, dst, src, root, nelems, type_size, tag, cq_id, nullptr, comm, &alg_msg))
+    return alg_msg;
   DagCollective* coll = new BtreeGather(this, root, dst, src, nelems, type_size, tag, cq_id, comm);
   return startCollective(coll);
 }
@@ -763,13 +765,9 @@ CollectiveEngine::scatter(int root, void *dst, void *src, int nelems, int type_s
   if (msg) return msg;
 
   if (!comm) comm = global_domain_;
-  std::string alg = engineAlgName(Collective::scatter);
-  if (!alg.empty()){
-    auto args = makeArgs(this, dst, src, root, nelems, type_size, tag, cq_id, nullptr, comm);
-    Collective* c = CollectiveRegistry::make(Collective::scatter, alg, args);
-    if (!c) sst_hg_abort_printf("unknown scatter algorithm '%s' (scatter_alg / SUMI_SCATTER_ALG)", alg.c_str());
-    return startCollective(c);
-  }
+  CollectiveDoneMessage* alg_msg;
+  if (startAlgOverride(Collective::scatter, dst, src, root, nelems, type_size, tag, cq_id, nullptr, comm, &alg_msg))
+    return alg_msg;
   DagCollective* coll = new BtreeScatter(this, root, dst, src, nelems, type_size, tag, cq_id, comm);
   return startCollective(coll);
 }

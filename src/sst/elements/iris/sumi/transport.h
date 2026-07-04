@@ -537,6 +537,15 @@ class CollectiveEngine
   // env > ""), resolved once at construction. Empty means "use built-in".
   std::string engineAlgName(Collective::type_t ty) const;
 
+  // If a user algorithm is selected for op `ty` (see engineAlgName), build it
+  // from the registry, start it, and write the result (possibly nullptr, if
+  // the collective hasn't completed synchronously) to *msg; returns true.
+  // Returns false when no override is set, so callers fall through to the
+  // built-in default; *msg is untouched in that case.
+  bool startAlgOverride(Collective::type_t ty,
+      void* dst, void* src, int root, int nelems, int type_size, int tag,
+      int cq_id, reduce_fxn fxn, Communicator* comm, CollectiveDoneMessage** msg);
+
  private:
   Transport* tport_;
 
