@@ -47,6 +47,8 @@ Questions? Contact sst-macro-help@sandia.gov
 //#include <sumi-mpi/otf2_output_stat.h>
 #include <mercury/components/operating_system.h>
 #include <mercury/operating_system/process/thread.h>
+#include <cstdint>
+#include <limits>
 #//include <mercury/operating_system/process/ftq_scope.h>
 
 //#define do_coll(coll, fxn, ...) \
@@ -840,32 +842,22 @@ MpiApi::ireduce(int count, MPI_Datatype type, MPI_Op op, int root, MPI_Comm comm
 Iris::sumi::CollectiveDoneMessage*
 MpiApi::startReduceScatter(CollectiveOp* op)
 {
-  SST::Hg::abort("sumi::reduce_scatter");
-
   Iris::sumi::reduce_fxn fxn = getCollectiveFunction(op);
-  return nullptr;
-  //transport::allreduce(op->tmp_recvbuf, op->tmp_sendbuf, op->sendcnt,
-  //                     op->sendtype->packed_size(), op->tag,
-  //                     fxn, false, options::initial_context, op->comm);
-
+  return engine_->reduceScatter(op->tmp_recvbuf, op->tmp_sendbuf, op->sendcnt,
+                                op->sendtype->packed_size(), op->tag, fxn,
+                                queue_->collCqId(), op->comm);
 }
 
 CollectiveOpBase::ptr
 MpiApi::startReduceScatter(const char*  /*name*/, MPI_Comm  /*comm*/, const int*  /*recvcounts*/,
-                           MPI_Datatype type, MPI_Op mop, const void* src, void* dst)
+                           MPI_Datatype  /*type*/, MPI_Op  /*mop*/, const void*  /*src*/, void*  /*dst*/)
 {
-  SST::Hg::abort("sumi::reduce_scatter");
-
-  CollectiveOp::ptr op;
-  startMpiCollective(Iris::sumi::Collective::reduce_scatter, src, dst, type, type, op.get());
-  auto* msg = startReduceScatter(op.get());
-  if (msg){
-    op->complete = true;
-    delete msg;
-  }
-  op->op = mop;
-
-  return std::move(op);
+  // Vector MPI_Reduce_scatter (per-rank recvcounts) is unsupported: the ring DAG
+  // assumes near-equal chunks and takes no per-rank count vector. Use
+  // MPI_Reduce_scatter_block (uniform count), which is wired to the ring engine.
+  SST::Hg::abort("sumi: MPI_Reduce_scatter (vector recvcounts) is not implemented; "
+                 "use MPI_Reduce_scatter_block");
+  return nullptr;
 }
 
 int
@@ -912,15 +904,24 @@ MpiApi::ireduceScatter(int *recvcnts, MPI_Datatype type,
 }
 
 CollectiveOpBase::ptr
-MpiApi::startReduceScatterBlock(const char*  /*name*/, MPI_Comm  /*comm*/, int  /*count*/, MPI_Datatype type,
+MpiApi::startReduceScatterBlock(const char*  /*name*/, MPI_Comm comm, int count, MPI_Datatype type,
                                     MPI_Op mop, const void* src, void* dst)
 {
-  SST::Hg::abort("sumi::reduce_scatter: not implemented");
-
-  CollectiveOp::ptr op;
+  // Block variant: every rank contributes the full array (count per rank x nproc)
+  // and keeps its reduced chunk. The collective operates on the full array.
+  // Compute in 64-bit: count*nproc silently wraps negative past INT_MAX and would
+  // feed a negative element count into the ring DAG.
+  int64_t total64 = static_cast<int64_t>(count) * getComm(comm)->size();
+  if (total64 > std::numeric_limits<int>::max()){
+    sst_hg_abort_printf("MPI_Reduce_scatter_block: total elements %lld (count=%d x "
+                        "nproc=%d) exceeds INT_MAX; split into smaller chunks",
+                        (long long)total64, count, getComm(comm)->size());
+  }
+  int total = static_cast<int>(total64);
+  auto op = CollectiveOp::create(total, total, getComm(comm));
+  op->op = mop;
   startMpiCollective(Collective::reduce_scatter, src, dst, type, type, op.get());
   auto* msg = startReduceScatter(op.get());
-  op->op = mop;
   if (msg){
     op->complete = true;
     delete msg;
