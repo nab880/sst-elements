@@ -554,17 +554,23 @@ Reset vector → startup.S → C firmware
 
 ### 5.4 Firmware build flow
 
-`tests/sysmode/firmware/build.sh` cross-compiles with `riscv64-unknown-elf-gcc`, `arm-none-eabi-gcc`, etc. Linker scripts (`link_rv64.ld`, `link_arm_m7.ld`, `link_x86.ld`) place sections at addresses QEMU expects.
+`tests/sysmode/firmware/build.sh` cross-compiles with
+`riscv64-unknown-elf-gcc`, `m68k-linux-gnu-gcc` (ColdFire, the primary
+embedded-target scaffold: `coldfire_startup.S`, `link_m68k.ld` with a
+`.vectors` section for interrupt-taking firmware, `coldfire_uart.h` /
+`coldfire_intc.h`), `arm-none-eabi-gcc`, etc. Linker scripts place sections
+at addresses QEMU expects.
 
 ### 5.5 Driver-visible gaps
 
 | Gap | Consequence |
 |-----|-------------|
-| No IRQ timing | UART RX, timers, DMA completion instantaneous in QEMU |
-| No DMA modeling | Block copies appear as CPU loads/stores unless device DMAs in QEMU hidden from plugin |
+| IRQ *timing* | Interrupts work — QEMU-native devices vector normally, and SST-window devices inject INTC lines through the bridge's reverse mailbox — but delivery latency is functional (poll-timer scale), not modeled. Assert function, not timing. |
+| No DMA modeling on the trace path | Block copies appear as CPU loads/stores unless the device DMAs inside SST (kernel-compute ops DMA against the SST-backed window) |
 | No fence/IO ordering | Weak memory effects not modeled beyond what memHierarchy provides |
 | Semihosting | ARM test exits via QEMU magic, not Quetz EXIT command |
 | Multi-core firmware | Limited tests; halt quorum handles EXIT per vCPU |
+| Board BSP init | Unmodeled SoC space is RAZ/WI: init hangs on status polls / silently loses writes — see SIMULATING-YOUR-SYSTEM.md § What works today |
 
 ---
 
@@ -584,29 +590,43 @@ Improvements should preserve the **lowering barrier** value: run bare-metal ELFs
 
 ### 6.2 High-impact improvements (recommended priority)
 
+*(Status pass 2026-07: much of this list has landed; kept with status
+markers as the design rationale.)*
+
 #### P0 — Correctness and trust
 
 1. **Robust memory event capture** — Always register QEMU mem callbacks for decoded ISAs; use classifier only for tagging. Eliminates silent drops (RVC, AMO quirks, future opcodes).
-2. **Regenerate / validate gold files** — Compare against QEMU `libmem.so` ground truth; document acceptable delta for cache-line splitting.
-3. **IPC versioning + tests** — Fuzz `QuetzCommand` layout; CI builds plugin and SST together.
+2. **Regenerate / validate gold files** — ✅ largely landed: `libmem.so` ground-truth comparison runs in CI (warn-only), gold refresh documented in TESTING.md.
+3. **IPC versioning + tests** — partially landed: `tests/unit/test_ipc_layout.cc` pins `QuetzCommand`/`QuetzSharedData`/IRQ-slot layout against the QEMU overlay's C mirror.
 
 #### P1 — Bare-metal workflow
 
-4. **Platform description file (YAML/JSON)** — Machine name, RAM range, MMIO regions with types (`dram`, `uart`, `ignore`, `device`), QEMU args template. SDL reads one file instead of many env vars.
-5. **First-class `mmioEx` integration** — Use `MmioForwardRegionHandler` + `mmio_link_N` to forward selected regions to SST devices; keep `filtered` for the rest.
-6. **Exit detection** — Optional watch on test-finisher MMIO write to call `primaryComponentOKToEndSim` without relying on guest calling `exit()` / plugin atexit.
+4. **Platform description file (YAML/JSON)** — open. Partial substitute: `platform` presets + deck env conventions.
+5. **First-class MMIO integration** — ✅ landed and exceeded: `MmioForwardRegionHandler` + `mmio_link_N`, plus the *synchronous* MMIO window (sst-mmio-bridge), SST-side devices (accelerator / stream / sink), and the SST-backed memory window. See README § System mode and § MMIO device components.
+6. **Exit detection** — ✅ landed: `TestFinisherRegionHandler` sentinel (PASS/FAIL) ends the simulation.
 
 #### P2 — Fidelity knobs
 
-7. **`UartMmioDevice` component** — LSR/THR behavior, configurable baud delay, optional IRQ pin to simple interrupt controller.
-8. **IO port plugin support** — For x86 bare-metal without `-serial` side channel.
-9. **Larger store payload** — Extend `QuetzCommand.data` or side channel for DMA-sized stores.
+7. **`UartMmioDevice` component** — open as designed; in practice covered otherwise: QEMU-native UARTs are functional (incl. IRQs), TX capture + paced `-serial pipe:` feeds handle observation/stimulus.
+8. **IO port plugin support** — open (x86 bare-metal without `-serial` side channel).
+9. **Larger store payload** — open; `mmio_truncated_writes` / `cached_truncated_writes` stats make the cap observable.
 
 #### P3 — Usability and scale
 
-10. **Documentation** — One “bare-metal getting started” page: build firmware → `basic_quetz_sysmode.py` → interpret stats.
+10. **Documentation** — ✅ landed: SIMULATING-YOUR-SYSTEM.md (tutorial, limits first) + README reference + TESTING.md workflow.
 11. **Multi-node** — Merlin test exists for user-mode; extend sysmode multi-core firmware tests.
 12. **Checkpoint / replay** — QEMU snapshots + frozen stat windows (hard; long-term).
+
+#### Landed beyond the original list
+
+- **Device IRQ injection** (SST devices raise INTC lines through a reverse
+  shared-memory mailbox; m68k vector/INTC firmware scaffold) — was the
+  "lock-step for interrupt-driven drivers" long-term item in § 6.5,
+  delivered functionally without lock-step.
+- **Pluggable compute kernels** (`QuetzKernel` slot: FFT, scale/offset) and
+  **accelerator ports** (balar flush-before-doorbell, posted/async engine).
+- **Packaging**: `quetz-run` runner + `quetz-sim` runtime image with a CI
+  exit-code contract.
 
 ### 6.3 Simulation methodology recommendations
 
@@ -634,7 +654,7 @@ Improvements should preserve the **lowering barrier** value: run bare-metal ELFs
 
 **Medium-term:** Quetz as a **hybrid front-end** — QEMU runs functional devices; SST models **DRAM + selected MMIO devices** with correct address routing.
 
-**Long-term:** Optional **lock-step** or **periodic sync** with QEMU device models for interrupt-driven drivers, without requiring a full in-order CPU pipeline.
+**Long-term:** Optional **lock-step** or **periodic sync** with QEMU device models for interrupt-driven drivers, without requiring a full in-order CPU pipeline. *(2026-07: the interrupt-driven-driver goal landed without lock-step — synchronous MMIO plus reverse-mailbox IRQ injection; lock-step remains unneeded until someone needs modeled IRQ latency.)*
 
 ---
 
@@ -642,42 +662,66 @@ Improvements should preserve the **lowering barrier** value: run bare-metal ELFs
 
 | Parameter | Typical bare-metal use |
 |-----------|------------------------|
-| `system_mode=1` | `qemu-system-*` + `-machine virt` |
+| `system_mode=1` | `qemu-system-*` + `-machine virt` / `-machine mcf5208evb` |
 | `qemu_args` | `-machine virt -nographic -bios none` |
 | `system_mode_loader` | `-kernel` for ELF firmware |
-| `memmap_count` / `memmapN_*` | Filter platform RAM / MMIO |
+| `region_handler` subcomponents | Route/filter/observe address ranges (first match wins) — see README |
 | `appstdin` | UART RX test vectors |
 | `detailed_instruction_tracking=1` | Per-class compute stats (RISC-V/AArch64) |
 | `exec_latency_vec` | Model vector memory pipeline depth |
+
+Launcher env vars (`QUETZ_MMIO_*`, `QUETZ_SST_WIN_*`, `QUETZ_IRQ_*`) are
+tabulated in README § Environment variables.
 
 ## Appendix B — Source file map
 
 ```
 quetz/
-├── quetzcpu.h / quetzcpu.cc           # SST component: ELI, lifecycle, tick, halt quorum
-├── quetz_config.h / quetz_config.cc   # QuetzConfig — parameter parsing + validation
-├── quetz_launcher.h / quetz_launcher.cc  # QemuLauncher — argv, fork/exec, stdio/env
+├── quetzcpu.h / quetzcpu.cc           # SST component: ELI, lifecycle, tick, halt quorum,
+│                                      #   sync-MMIO mailbox routing, irq_link handling
+├── quetz_config*.{h,cc}               # QuetzConfig(Manager) — parameter parsing + presets
+├── quetz_platform_profiles.cc         # Built-in `platform` presets
+├── quetz_launcher.h / quetz_launcher.cc  # QemuLauncher — argv (bridge/IRQ devices), fork/exec
+├── quetz_qemu_frontend.h / .cc        # SHMParent tunnel owner, child attach/terminate
 ├── quetzcore.h / quetzcore.cc         # Per-vCPU queue: refillQueue, processQueue
+├── quetz_core_backend.h / .cc         # Frontend/backend seam for the core event source
 ├── quetz_region_handler.h             # MemRegionHandler API
-├── quetz_region_handlers.h / .cc      # Forward, Filtered, Uart, MmioForward
+├── quetz_region_handlers.h / .cc      # Forward, Filtered, Uart, MmioForward, GpuTrace, TestFinisher
 ├── quetz_region_table.h / .cc         # First-match region lookup
-├── quetz_pipeline_api.h               # PipelineInput/Filter/Transform/Output APIs
+├── quetz_pipeline*.{h,cc}             # PipelineInput/Filter/Transform/Output stages + logging
 ├── quetz_mem_issue.h / quetz_mem_issue.cc  # MemRequestEmitter — line split, StandardMem
+├── quetz_mem_access.h / .cc           # Region-table access strategy
 ├── quetz_stats.h / quetz_stats.cc     # QuetzCoreStats — bundled statistics
-├── quetz_shmem.h                      # IPC protocol (SST + plugin)
+├── quetz_shmem.h                      # QuetzTunnel (ring + sync + stats + mmio/irq mailboxes)
+├── quetz_ipc_types.h                  # Shared-memory ABI (commands, MMIO slots, IRQ slots)
+├── quetz_mmio_sync.h                  # Sync-MMIO response + IRQ-slot publication
+├── quetz_irq_event.h                  # QuetzIrqEvent (device irq port -> cpu irq_link)
+├── quetz_accelerator_port.h           # AcceleratorHost/AcceleratorPort APIs
+├── quetz_balar_accelerator_port.h/.cc # Balar port: doorbell flush, posted/async engine
+├── quetz_gpu_device.h / .cc           # Synthetic accelerator (latency model / kernel compute)
+├── quetz_kernel_api.h                 # QuetzKernel subcomponent API
+├── quetz_fft_kernel.* / quetz_fft.h   # FFT kernel + host-testable math
+├── quetz_scale_offset_kernel.* / quetz_scale_offset.h  # Scale/offset kernel + math
+├── quetz_stream_device.h / .cc        # Recorded-data feed (pacing, data-ready IRQ)
+├── quetz_sink_device.h / .cc          # Write-side capture file
 ├── qemu_plugin/
 │   ├── plugin_main.cpp                # qemu_plugin_install, cb_atexit
 │   ├── plugin_state.h / .cpp          # Shared globals, write_cmd
 │   ├── instrument.h / .cpp            # cb_tb_trans, mem/exec callbacks
-│   ├── decoder_riscv.h                # RISC-V + RVC classifiers (inline)
-│   ├── decoder_aarch64.h              # AArch64 classifier (inline)
-│   └── decoder_generic.h              # Size-based fallback (inline)
+│   ├── insn_classifier.h / .cpp       # Class tagging entry point
+│   ├── decoder_riscv.*                # RISC-V + RVC classifiers
+│   ├── decoder_aarch64.*              # AArch64 classifier
+│   └── decoder_generic.*              # Size-based fallback
 ├── configure.m4 / Makefile.am
-├── README.md
+├── README.md                          # Reference (components, devices, env vars)
+├── SIMULATING-YOUR-SYSTEM.md          # Embedded-system tutorial (limits first)
+├── TESTING.md                         # Build + test workflow
 ├── QUETZ_OUTLINE.md                   # this file
+├── tools/                             # Fixture converters, serial feeder, stream dump
 └── tests/
+    ├── unit/                          # doctest units (decoders, IPC layout, kernels, ...)
     ├── usermode/                      # user-mode SDL + golds
-    └── sysmode/                       # system-mode SDL, firmware, golds
+    └── sysmode/                       # system-mode SDL, firmware (+ ColdFire scaffold), golds
 ```
 
 ---

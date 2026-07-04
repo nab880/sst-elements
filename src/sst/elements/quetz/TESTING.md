@@ -42,7 +42,24 @@ This script:
 === All Quetz tests passed ===
 ```
 
-In a clean run you should see **all integration tests passing** (matrix usermode/sysmode tests plus invariant checks: multicore quorum, class balance, wide split, determinism, config negative, sysmode filtered-only, UART capture, and more). Unit tests run first via `check-quetz-unit`.
+In a clean run you should see **all integration tests passing** (matrix
+usermode/sysmode tests, the invariant checks, and the ColdFire
+embedded-system tests: full system demo, paced variant, device-computed
+kernels, sink loop, IRQ demo, BSP-survival probe). Balar-dependent and
+missing-toolchain tests skip cleanly. As of 2026-07 the arm64 container
+runs 50 tests: 40 pass, 10 skip, 0 fail. Unit tests run first via
+`check-quetz-unit`, and the script ends with the `quetz-run` packaging
+smoke.
+
+To run a subset while iterating (much faster than the full suite):
+
+```bash
+docker run --rm -v "$(pwd)/sst-elements:/src/sst-elements" raptor-quetz-test \
+  bash -c 'export PATH=/opt/sst/bin:$PATH LD_LIBRARY_PATH=/opt/sst/lib SST_HOME=/opt/sst; \
+           cd /src/sst-elements/src/sst/elements/quetz/tests && \
+           sst-test-elements -p testsuite_default_quetz.py \
+             -e test_quetz_coldfire_irq test_quetz_coldfire_accel_sink'
+```
 
 ---
 
@@ -148,7 +165,7 @@ A failing usermode test with a fast exit (~0.2 s), guest `Hello World` in the lo
 
    This temporarily sets `updateFiles = True` in `tests/testsuite_default_quetz.py`, runs the suite, copies each test’s stdout into the reference `sst.stdout.gold`, then restores `updateFiles = False`.
 
-3. **Review and commit** the updated files under `tests/usermode/small/` (and `tests/sysmode/` if any sysmode gold was refreshed). Re-run without `UPDATE_GOLD` and confirm `== TESTING PASSED ==` (11 tests).
+3. **Review and commit** the updated files under `tests/usermode/small/` (and `tests/sysmode/small/` if any sysmode gold was refreshed). Re-run without `UPDATE_GOLD` and confirm `== TESTING PASSED ==`.
 
 Gold updates are **not** required for every refactor; only when the filtered stat lines above legitimately change. Skip this step during exploratory work until you are ready to lock in new reference output.
 
@@ -169,16 +186,35 @@ Individual tests are Python files that build an SST graph and compare output to 
 
 ### System-mode firmware (checked in)
 
-Sysmode tests load guest kernels from `tests/sysmode/firmware/` (`riscv_virt_hello`, `riscv_virt_uart_echo`, `riscv_virt_mmio_poke`, …). These ELF binaries are **committed** so CI and `sst-test-elements` do not need a cross-compiler at test time.
+Sysmode tests load guest kernels from `tests/sysmode/firmware/` — RISC-V
+virt (`riscv_virt_*`), **ColdFire mcf5208evb** (`coldfire_*`: hello,
+monitor, the full system demo, device-computed kernels, the accel→sink
+loop, the IRQ demo, `bsp_torture`), ARM M7, and x86. These ELF binaries
+are **committed** so CI and `sst-test-elements` do not need a
+cross-compiler at test time; each test skips when its binary is missing.
 
-If you change a `*.c` / `*.S` source file, rebuild and commit the matching binary:
+If you change a `*.c` / `*.S` / `*.h` / `*.ld` source, rebuild and commit
+the matching binary:
 
 ```bash
 cd src/sst/elements/quetz/tests/sysmode/firmware
-# Default: /opt/riscv/bin/riscv64-unknown-linux-musl-gcc (Docker image)
-# macOS Homebrew: RV64_CC=$(command -v riscv64-elf-gcc) ./build.sh
+# Docker image toolchains: riscv64-linux-gnu-gcc, m68k-linux-gnu-gcc,
+# arm-none-eabi-gcc, x86_64-linux-gnu-gcc.
+# macOS Homebrew RISC-V: RV64_CC=$(command -v riscv64-elf-gcc) ./build.sh
 ./build.sh
-git add riscv_virt_hello riscv_virt_uart_echo riscv_virt_mmio_poke   # plus arm/x86 outputs if changed
+git add <changed binaries>
+```
+
+ColdFire firmware shares `coldfire_startup.S` + `link_m68k.ld` (the
+`.vectors` section at 0x40000000 exists for interrupt-taking firmware and
+is layout-neutral otherwise) plus the `coldfire_uart.h` / `coldfire_intc.h`
+/ `coldfire_balar.h` helper headers. Only an m68k cross-compiler is needed
+(`M68K_CC=m68k-linux-gnu-gcc`), available in the test image:
+
+```bash
+docker run --rm -v "$(pwd)/sst-elements/src/sst/elements/quetz/tests/sysmode/firmware:/fw" \
+  -w /fw raptor-quetz-test bash -c \
+  'M68K_CC=m68k-linux-gnu-gcc ./build.sh'   # or a single gcc line from build.sh
 ```
 
 `test_quetz_sysmode_mmio_basic` skips when `riscv_virt_mmio_poke` is missing.
@@ -244,6 +280,15 @@ Integration tests skip microbenchmark cases if the ELF is missing.
 | `test_quetz_wide_split` | Cache-line split stats not incremented |
 | `test_quetz_sysmode_filtered_only` | `filtered` region still forwards to memHierarchy |
 | `test_quetz_sysmode_uart_capture` | UART THR bytes not captured in stdout |
+| `test_quetz_coldfire_bsp_torture` | QEMU stops being RAZ/WI over unmodeled mcf5208 SoC space (the BSP-honesty contract) |
+
+The ColdFire embedded-system tests are functional end-to-end gates rather
+than single invariants: `test_quetz_coldfire_system` (+`_paced`) covers the
+UART/GPS/sensor/accelerator demo, `test_quetz_coldfire_accel_scale` and the
+FFT pair cover device-computed kernels, `test_quetz_coldfire_accel_sink`
+diffs the sink capture byte-exactly against a host-computed expectation,
+and `test_quetz_coldfire_irq` covers SST-device IRQ injection end to end
+(INTC programming, stop/wake, device ack).
 
 ---
 
@@ -311,6 +356,7 @@ Quetz `configure` must find `qemu-plugin.h` and a plugin-capable QEMU. The Docke
 
 ## Related docs
 
-- [README.md](README.md) — component usage, parameters, QEMU version table
+- [README.md](README.md) — full component reference: parameters, devices, system mode, IRQ injection, env vars
+- [SIMULATING-YOUR-SYSTEM.md](SIMULATING-YOUR-SYSTEM.md) — the embedded-system tutorial (limits and supported parts up front)
 - [QUETZ_OUTLINE.md](QUETZ_OUTLINE.md) — architecture and source map
-- [`quetz-docker/README.md`](https://github.com/nab880/quetz-docker/blob/main/README.md) — Docker image details (quetz-docker repo)
+- [`quetz-docker/README.md`](https://github.com/nab880/quetz-docker/blob/main/README.md) — Docker image details, pinned QEMU overlay inventory (quetz-docker repo)
