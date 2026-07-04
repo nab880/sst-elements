@@ -149,11 +149,13 @@ extern "C" DIRECT_FN  int sumi_eq_open(struct fid_fabric *fabric, struct fi_eq_a
     break;
   }
   case FI_WAIT_UNSPEC: {
+    // eq->fabric and eq->attr are not populated until after this switch, so use
+    // the fabric parameter and the caller-supplied attr directly.
     struct fi_wait_attr requested = {
-      .wait_obj = eq->attr.wait_obj,
+      .wait_obj = attr->wait_obj,
       .flags = 0
     };
-    sumi_wait_open(&eq->fabric->fab_fid, &requested, &eq->wait);
+    sumi_wait_open(fabric, &requested, &eq->wait);
     sstmaci_add_wait(eq->wait, &eq->eq_fid.fid);
     break;
   }
@@ -197,25 +199,6 @@ EXTERN_C DIRECT_FN STATIC  int sumi_eq_close(struct fid *fid)
     free(eq);
   }
   return FI_SUCCESS;
-#if 0
-	struct sumi_fid_eq *eq;
-	int references_held;
-
-	SUMI_TRACE(FI_LOG_EQ, "\n");
-
-	if (!fid)
-		return -FI_EINVAL;
-
-	eq = container_of(fid, struct sumi_fid_eq, eq_fid);
-
-	references_held = _sumi_ref_put(eq);
-	if (references_held) {
-		SUMI_INFO(FI_LOG_EQ, "failed to fully close eq due "
-				"to lingering references. references=%i eq=%p\n",
-				references_held, eq);
-	}
-#endif
-	return FI_SUCCESS;
 }
 
 

@@ -60,6 +60,7 @@
 
 #include <algorithm>
 #include <map>
+#include <set>
 #include <utility>
 #include <vector>
 
@@ -201,6 +202,7 @@ struct PendingColl {
   void* context;         // user op_context echoed back
   uint64_t byte_length;  // bytes reported in the completion entry
   int qos;
+  Communicator* comm;    // sub-communicator this runs on (nullptr = world); holds an in-flight ref
 };
 
 // Per-transport (== per-rank) collective state, keyed by the transport pointer
@@ -213,6 +215,28 @@ struct CollState {
 };
 
 std::map<FabricTransport*,CollState> g_coll_state;
+
+// Deferred-close bookkeeping for fi_join_collective sub-communicators. A running
+// collective's engine holds the Communicator* (encoded in the mc's fi_addr), so
+// fi_close(mc) must not free it while work is in flight. g_comm_inflight counts
+// the outstanding collectives per Communicator; if mc_close is called while that
+// count is > 0 the Communicator is parked in g_comm_close_pending and the last
+// completion (releaseCommRef) performs the delete. The world communicator
+// (nullptr) is never an mc and is never tracked here.
+std::map<Communicator*,int> g_comm_inflight;
+std::set<Communicator*> g_comm_close_pending;
+
+// Drop one in-flight reference to `comm`; if it was closed while busy and this
+// was the final reference, complete the deferred delete now.
+void releaseCommRef(Communicator* comm)
+{
+  auto it = g_comm_inflight.find(comm);
+  if (it == g_comm_inflight.end()) return;
+  if (--it->second > 0) return;
+  g_comm_inflight.erase(it);
+  if (g_comm_close_pending.erase(comm))
+    delete comm;
+}
 
 // Deliver one OFI completion by looping a short message back to ourselves,
 // delivered to the send CQ (remote_cq = send_cq_id). We deliberately do NOT
@@ -238,7 +262,9 @@ void completePending(FabricTransport* tport, CollState& st, int tag)
   auto it = st.pending.find(tag);
   if (it == st.pending.end()) return;   // e.g. internal/system-tag collective
   postCompletion(tport, it->second);
+  Communicator* comm = it->second.comm;
   st.pending.erase(it);
+  if (comm) releaseCommRef(comm);   // may complete a deferred mc_close
 }
 
 // True if any outstanding collective targets `cq_id`.
@@ -268,13 +294,20 @@ int collectiveCqId(FabricTransport* tport)
 // fires later from sumi_progress_collectives. Always returns FI_SUCCESS.
 template <class Issue>
 ssize_t issueCollective(sumi_fid_ep* ep, int tag, uint64_t byte_length,
-                        void* context, Issue&& issue)
+                        Communicator* comm, void* context, Issue&& issue)
 {
   FabricTransport* tport = (FabricTransport*) ep->domain->fabric->tport;
   int cq = collectiveCqId(tport);
   CollState& st = g_coll_state[tport];
-  st.pending[tag] = PendingColl{ ep->send_cq ? ep->send_cq->id : -1,
-                                 context, byte_length, ep->qos };
+  // The completion is posted to, and progress is driven from, the CQ the app
+  // reads. Prefer the send CQ (collective completions are FI_SEND); fall back to
+  // the recv CQ so an endpoint bound with only a recv CQ can still make and
+  // observe collective progress. Keying -1 (no CQ at all) would never match a
+  // real CQ id in sumi_progress_collectives, stranding the collective.
+  struct sumi_fid_cq* ccq = ep->send_cq ? ep->send_cq : ep->recv_cq;
+  st.pending[tag] = PendingColl{ ccq ? ccq->id : -1,
+                                 context, byte_length, ep->qos, comm };
+  if (comm) ++g_comm_inflight[comm];   // keep the sub-communicator alive past mc_close
   CollectiveDoneMessage* dmsg = issue(tport->engine(), cq);
   if (dmsg){
     completePending(tport, st, tag);
@@ -310,15 +343,19 @@ void sumi_progress_collectives(FabricTransport* tport, int cq_id,
   }
 }
 
+// The engine + registry live behind ep->domain->fabric->tport; every op grabs
+// them the same way, then issues non-blocking via issueCollective (see above).
+#define COLL_PROLOGUE(EPV)                                          \
+  sumi_fid_ep* ep = (sumi_fid_ep*) (EPV);                           \
+  FabricTransport* tport = (FabricTransport*) ep->domain->fabric->tport; \
+  if (!tport->engine()) return -FI_EOPNOTSUPP;
+
 static ssize_t sumi_ep_allreduce(struct fid_ep *ep_, const void *buf, size_t count,
                                  void * /*desc*/, void *result, void * /*result_desc*/,
                                  fi_addr_t coll_addr, enum fi_datatype datatype,
                                  enum fi_op op, uint64_t /*flags*/, void *context)
 {
-  sumi_fid_ep* ep = (sumi_fid_ep*) ep_;
-  FabricTransport* tport = (FabricTransport*) ep->domain->fabric->tport;
-  if (!tport->engine()) return -FI_EOPNOTSUPP;
-
+  COLL_PROLOGUE(ep_);
   int type_size = datatypeSize(datatype);
   reduce_fxn fxn = selectFxn(op, datatype);
   if (!type_size || !fxn) return -FI_EOPNOTSUPP;
@@ -331,7 +368,7 @@ static ssize_t sumi_ep_allreduce(struct fid_ep *ep_, const void *buf, size_t cou
   // comm == nullptr -> engine global domain (the world communicator).
   // The registry override inside CollectiveEngine::allreduce picks the actual
   // algorithm from allreduce_alg / SUMI_ALLREDUCE_ALG.
-  return issueCollective(ep, tag, (uint64_t) count * type_size, context,
+  return issueCollective(ep, tag, (uint64_t) count * type_size, comm, context,
     [&](CollectiveEngine* engine, int cq){
       return engine->allreduce(result, const_cast<void*>(buf), (int) count,
                                type_size, tag, fxn, cq, comm);
@@ -340,27 +377,17 @@ static ssize_t sumi_ep_allreduce(struct fid_ep *ep_, const void *buf, size_t cou
 
 static ssize_t sumi_ep_barrier(struct fid_ep *ep_, fi_addr_t coll_addr, void *context)
 {
-  sumi_fid_ep* ep = (sumi_fid_ep*) ep_;
-  FabricTransport* tport = (FabricTransport*) ep->domain->fabric->tport;
-  if (!tport->engine()) return -FI_EOPNOTSUPP;
-
+  COLL_PROLOGUE(ep_);
   int tag = ep->coll_tag++;
   Communicator* comm = collComm(coll_addr);
-  return issueCollective(ep, tag, /*byte_length*/ 0, context,
+  return issueCollective(ep, tag, /*byte_length*/ 0, comm, context,
     [&](CollectiveEngine* engine, int cq){
       return engine->barrier(tag, cq, comm);
     });
 }
 
-// The engine + registry live behind ep->domain->fabric->tport; every op grabs
-// them the same way, then issues non-blocking via issueCollective (see above).
 // `root_addr` is interpreted as a raw rank index: without fi_join_collective
 // there is no AV mapping, so the client passes the root's rank directly (spike).
-#define COLL_PROLOGUE(EPV)                                          \
-  sumi_fid_ep* ep = (sumi_fid_ep*) (EPV);                           \
-  FabricTransport* tport = (FabricTransport*) ep->domain->fabric->tport; \
-  if (!tport->engine()) return -FI_EOPNOTSUPP;
-
 static ssize_t sumi_ep_broadcast(struct fid_ep *ep_, void *buf, size_t count,
                                  void * /*desc*/, fi_addr_t coll_addr,
                                  fi_addr_t root_addr, enum fi_datatype datatype,
@@ -371,7 +398,7 @@ static ssize_t sumi_ep_broadcast(struct fid_ep *ep_, void *buf, size_t count,
   if (!type_size) return -FI_EOPNOTSUPP;
   int tag = ep->coll_tag++;
   Communicator* comm = collComm(coll_addr);
-  return issueCollective(ep, tag, (uint64_t) count * type_size, context,
+  return issueCollective(ep, tag, (uint64_t) count * type_size, comm, context,
     [&](CollectiveEngine* engine, int cq){
       return engine->bcast((int) root_addr, buf, (int) count, type_size, tag, cq, comm);
     });
@@ -389,7 +416,7 @@ static ssize_t sumi_ep_reduce(struct fid_ep *ep_, const void *buf, size_t count,
   if (!type_size || !fxn) return -FI_EOPNOTSUPP;
   int tag = ep->coll_tag++;
   Communicator* comm = collComm(coll_addr);
-  return issueCollective(ep, tag, (uint64_t) count * type_size, context,
+  return issueCollective(ep, tag, (uint64_t) count * type_size, comm, context,
     [&](CollectiveEngine* engine, int cq){
       return engine->reduce((int) root_addr, result, const_cast<void*>(buf),
                             (int) count, type_size, tag, fxn, cq, comm);
@@ -406,7 +433,7 @@ static ssize_t sumi_ep_allgather(struct fid_ep *ep_, const void *buf, size_t cou
   if (!type_size) return -FI_EOPNOTSUPP;
   int tag = ep->coll_tag++;
   Communicator* comm = collComm(coll_addr);
-  return issueCollective(ep, tag, (uint64_t) count * type_size, context,
+  return issueCollective(ep, tag, (uint64_t) count * type_size, comm, context,
     [&](CollectiveEngine* engine, int cq){
       return engine->allgather(result, const_cast<void*>(buf), (int) count,
                                type_size, tag, cq, comm);
@@ -425,7 +452,7 @@ static ssize_t sumi_ep_alltoall(struct fid_ep *ep_, const void *buf, size_t coun
   Communicator* comm = collComm(coll_addr);
   // count is the per-peer element count (each rank sends `count` elems to every
   // rank); the engine's Bruck/Direct all-to-all actor selects the algorithm.
-  return issueCollective(ep, tag, (uint64_t) count * type_size, context,
+  return issueCollective(ep, tag, (uint64_t) count * type_size, comm, context,
     [&](CollectiveEngine* engine, int cq){
       return engine->alltoall(result, const_cast<void*>(buf), (int) count,
                               type_size, tag, cq, comm);
@@ -443,7 +470,7 @@ static ssize_t sumi_ep_gather(struct fid_ep *ep_, const void *buf, size_t count,
   if (!type_size) return -FI_EOPNOTSUPP;
   int tag = ep->coll_tag++;
   Communicator* comm = collComm(coll_addr);
-  return issueCollective(ep, tag, (uint64_t) count * type_size, context,
+  return issueCollective(ep, tag, (uint64_t) count * type_size, comm, context,
     [&](CollectiveEngine* engine, int cq){
       return engine->gather((int) root_addr, result, const_cast<void*>(buf),
                             (int) count, type_size, tag, cq, comm);
@@ -461,7 +488,7 @@ static ssize_t sumi_ep_scatter(struct fid_ep *ep_, const void *buf, size_t count
   if (!type_size) return -FI_EOPNOTSUPP;
   int tag = ep->coll_tag++;
   Communicator* comm = collComm(coll_addr);
-  return issueCollective(ep, tag, (uint64_t) count * type_size, context,
+  return issueCollective(ep, tag, (uint64_t) count * type_size, comm, context,
     [&](CollectiveEngine* engine, int cq){
       return engine->scatter((int) root_addr, result, const_cast<void*>(buf),
                              (int) count, type_size, tag, cq, comm);
@@ -479,7 +506,7 @@ static ssize_t sumi_ep_reduce_scatter(struct fid_ep *ep_, const void *buf, size_
   if (!type_size || !fxn) return -FI_EOPNOTSUPP;
   int tag = ep->coll_tag++;
   Communicator* comm = collComm(coll_addr);
-  return issueCollective(ep, tag, (uint64_t) count * type_size, context,
+  return issueCollective(ep, tag, (uint64_t) count * type_size, comm, context,
     [&](CollectiveEngine* engine, int cq){
       return engine->reduceScatter(result, const_cast<void*>(buf), (int) count,
                                    type_size, tag, fxn, cq, comm);
@@ -564,11 +591,14 @@ int avset_diff(struct fid_av_set* d, const struct fid_av_set* s) {
 }
 
 int avset_addr(struct fid_av_set*, fi_addr_t* coll_addr) {
-  // Membership travels in the set object; join() consumes it directly. Hand
-  // back a non-UNSPEC placeholder so a caller passing this as the base
-  // coll_addr does not read it as "world".
-  if (coll_addr) *coll_addr = 0;
-  return FI_SUCCESS;
+  // This provider cannot synthesize a usable coll_addr from an av_set: the
+  // sub-communicator only exists after fi_join_collective, whose mc encodes the
+  // group (fi_mc_addr(mc) is the coll_addr to use). There is no fi_addr value we
+  // could return here that collComm() would decode as "this subgroup" -- any
+  // in-range value casts to a Communicator* and 0/FI_ADDR_UNSPEC both decode as
+  // the world communicator. So fail loudly rather than silently route to world.
+  if (coll_addr) *coll_addr = FI_ADDR_NOTAVAIL;
+  return -FI_ENOSYS;
 }
 
 int avset_close(struct fid* fid) { delete (SumiAvSet*) fid; return FI_SUCCESS; }
@@ -593,7 +623,15 @@ struct fi_ops sumi_av_set_fi_ops = {
 
 int mc_close(struct fid* fid) {
   struct fid_mc* m = (struct fid_mc*) fid;
-  delete reinterpret_cast<Communicator*>((uintptr_t) m->fi_addr);
+  Communicator* comm = reinterpret_cast<Communicator*>((uintptr_t) m->fi_addr);
+  // If collectives are still in flight on this sub-communicator, the engine
+  // holds `comm`; deleting now would be a use-after-free. Park it and let the
+  // final completion (releaseCommRef) delete it. Otherwise delete immediately.
+  auto it = g_comm_inflight.find(comm);
+  if (comm && it != g_comm_inflight.end() && it->second > 0)
+    g_comm_close_pending.insert(comm);
+  else
+    delete comm;
   free(m);
   return FI_SUCCESS;
 }
