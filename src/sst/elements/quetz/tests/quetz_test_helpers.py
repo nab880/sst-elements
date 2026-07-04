@@ -144,6 +144,30 @@ def enable_mmio_payload_delivery():
     os.environ["QUETZ_MMIO_PAYLOAD"] = "1"
 
 
+def assert_sink_equals(path, expected_bytes, context=""):
+    """Byte-exact comparison of a QuetzSinkDevice capture file.
+
+    Raises AssertionError with the first differing offset (and a short hex
+    excerpt of both sides) so a capture mismatch is diagnosable from CI logs.
+    """
+    with open(path, "rb") as f:
+        got = f.read()
+    if got == expected_bytes:
+        return
+    prefix = "sink capture {} ".format(context).rstrip() + ": "
+    if len(got) != len(expected_bytes):
+        raise AssertionError(
+            prefix + "length {} != expected {} ({})".format(
+                len(got), len(expected_bytes), path))
+    for i, (g, e) in enumerate(zip(got, expected_bytes)):
+        if g != e:
+            lo, hi = max(0, i - 4), i + 4
+            raise AssertionError(
+                prefix + "first mismatch at offset {}: got {} expected {} "
+                "({})".format(i, got[lo:hi].hex(), expected_bytes[lo:hi].hex(),
+                              path))
+
+
 def make_usermode_env(sst_prefix, sst_libexec, qemu_bin, exe_abs,
                       with_l1=False, isa="", detailed=True):
     """Populate os.environ for basic_quetz.py usermode runs."""

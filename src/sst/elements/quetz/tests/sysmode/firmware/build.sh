@@ -105,6 +105,10 @@ echo "=== ColdFire mcf5208evb accel scale/offset (device-computed, m68k) ==="
 $M68K_CC $M68K_FLAGS coldfire_startup.S coldfire_accel_scale.c -o coldfire_accel_scale
 echo "  -> coldfire_accel_scale"
 
+echo "=== ColdFire mcf5208evb accel->sink full loop (stream in, device compute, capture out) ==="
+$M68K_CC $M68K_FLAGS coldfire_startup.S coldfire_accel_sink.c -o coldfire_accel_sink
+echo "  -> coldfire_accel_sink"
+
 echo "=== ColdFire mcf5208evb IRQ demo (ISR-driven accel + sensor stream) ==="
 $M68K_CC $M68K_FLAGS coldfire_startup.S coldfire_irq_demo.c -o coldfire_irq_demo
 echo "  -> coldfire_irq_demo"

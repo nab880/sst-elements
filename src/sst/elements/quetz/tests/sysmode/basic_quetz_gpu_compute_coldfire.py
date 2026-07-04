@@ -23,6 +23,13 @@ no byte swapping — see coldfire_gpu_fft_offload.c.
 
 Env: QUETZ_EXE, QUETZ_QEMU(=qemu-system-m68k), QUETZ_QEMU_ARGS, QUETZ_LOADER,
 QUETZ_MMIO_START/END, QUETZ_SST_WIN_START/END, QUETZ_FFT_LATENCY_COEFF.
+
+Optional stimulus/response devices for the full-loop demo (coldfire_accel_sink):
+QUETZ_SENSOR_FILE adds a quetz.QuetzStreamDevice at QUETZ_SENSOR_BASE
+(default 0x70010000) and QUETZ_SINK_FILE a quetz.QuetzSinkDevice at
+QUETZ_SINK_BASE (default 0x70020000), both as additional MMIO targets on the
+NoC — set QUETZ_MMIO_END=0x7002FFFF so the bridge window reaches them (the
+GPU register block then stays 0x400 bytes instead of owning the window).
 """
 
 import os
@@ -66,6 +73,10 @@ win_end    = _parse_addr(os.environ.get("QUETZ_SST_WIN_END", "0x7100FFFF"))
 win_size   = win_end - win_start + 1
 uart_addr  = _parse_addr(os.environ.get("QUETZ_UART_ADDR", "0xfc060000"))
 sentinel_addr = _parse_addr(os.environ.get("QUETZ_SENTINEL_ADDR", "0x80000000"))
+sensor_file = os.environ.get("QUETZ_SENSOR_FILE", "")
+sensor_base = _parse_addr(os.environ.get("QUETZ_SENSOR_BASE", "0x70010000"))
+sink_file   = os.environ.get("QUETZ_SINK_FILE", "")
+sink_base   = _parse_addr(os.environ.get("QUETZ_SINK_BASE", "0x70020000"))
 
 if not exe:
     raise RuntimeError("QUETZ_EXE is not set")
@@ -130,10 +141,13 @@ cpu_mmio_nic = cpu_mmio_if.setSubComponent("lowlink", "memHierarchy.MemNIC")
 cpu_mmio_nic.addParams({"group": CORE_GROUP, "destinations": CORE_DST, "network_bw": NETWORK_BW})
 
 # GPU device: MMIO target (iface) + memory initiator (mem_iface) for kernel DMA.
+# Alone it owns the whole bridge window; with stream/sink devices sharing the
+# window it keeps just its 0x400-byte register block.
 gpu = sst.Component("gpu", "quetz.QuetzGpuDevice")
 gpu.addParams({
     "base_addr": mmio_start,
-    "mmio_size": (mmio_end - mmio_start + 1),
+    "mmio_size": 0x400 if (sensor_file or sink_file)
+                 else (mmio_end - mmio_start + 1),
     "clock": "1GHz",
     "doorbell_blocking": 1,   # required when a kernel is loaded
 })
@@ -153,12 +167,43 @@ gpu_mem_if  = gpu.setSubComponent("mem_iface", "memHierarchy.standardInterface")
 gpu_mem_nic = gpu_mem_if.setSubComponent("lowlink", "memHierarchy.MemNIC")
 gpu_mem_nic.addParams({"group": CORE_GROUP, "destinations": CORE_DST, "network_bw": NETWORK_BW})
 
+# Optional stimulus/response devices: extra MMIO targets on the NoC, routed
+# by their address regions like the GPU register block.
+sensors = None
+if sensor_file:
+    sensors = sst.Component("sensors", "quetz.QuetzStreamDevice")
+    sensors.addParams({
+        "base_addr": sensor_base,
+        "mmio_size": 0x100,
+        "stream_file": sensor_file,
+    })
+    sensors.enableAllStatistics()
+    sensors_if = sensors.setSubComponent("iface", "memHierarchy.standardInterface")
+    sensors_nic = sensors_if.setSubComponent("lowlink", "memHierarchy.MemNIC")
+    sensors_nic.addParams({"group": MMIO_GROUP, "sources": MMIO_SRC,
+                           "destinations": MMIO_DST, "network_bw": NETWORK_BW})
+
+sink = None
+if sink_file:
+    sink = sst.Component("sink", "quetz.QuetzSinkDevice")
+    sink.addParams({
+        "base_addr": sink_base,
+        "mmio_size": 0x100,
+        "sink_file": sink_file,
+    })
+    sink.enableAllStatistics()
+    sink_if = sink.setSubComponent("iface", "memHierarchy.standardInterface")
+    sink_nic = sink_if.setSubComponent("lowlink", "memHierarchy.MemNIC")
+    sink_nic.addParams({"group": MMIO_GROUP, "sources": MMIO_SRC,
+                        "destinations": MMIO_DST, "network_bw": NETWORK_BW})
+
+num_ports = 5 + (1 if sensors is not None else 0) + (1 if sink is not None else 0)
 chiprtr = sst.Component("quetz_gpu_chiprtr", "merlin.hr_router")
 chiprtr.addParams({
     "xbar_bw": NOC_BW,
     "id": "0",
     "input_buf_size": "1KB",
-    "num_ports": "5",
+    "num_ports": str(num_ports),
     "flit_size": "72B",
     "output_buf_size": "1KB",
     "link_bw": NOC_BW,
@@ -196,6 +241,15 @@ sst.Link("cpu_mmio_rtr").connect((cpu_mmio_nic, "port", "1ns"), (chiprtr, "port1
 sst.Link("gpu_mmio_rtr").connect((gpu_mmio_nic, "port", "1ns"), (chiprtr, "port2", "1ns"))
 sst.Link("gpu_mem_rtr").connect((gpu_mem_nic, "port", "1ns"), (chiprtr, "port3", "1ns"))
 sst.Link("dir_rtr").connect((dir_nic, "port", "1ns"), (chiprtr, "port4", "1ns"))
+_next_port = 5
+if sensors is not None:
+    sst.Link("sensors_rtr").connect(
+        (sensors_nic, "port", "1ns"), (chiprtr, "port%d" % _next_port, "1ns"))
+    _next_port += 1
+if sink is not None:
+    sst.Link("sink_rtr").connect(
+        (sink_nic, "port", "1ns"), (chiprtr, "port%d" % _next_port, "1ns"))
+    _next_port += 1
 sst.Link("mem_bus").connect((mem_hi, "port", "1ns"), (directory, "lowlink", "1ns"))
 
 sst.setProgramOption("timebase", "1ps")

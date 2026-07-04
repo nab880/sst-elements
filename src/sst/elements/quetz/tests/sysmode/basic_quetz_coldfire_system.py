@@ -28,6 +28,10 @@ QUETZ_GPU_IRQ_LINE / QUETZ_SENSOR_IRQ_LINE name mcf5208 INTC sources (the
 coldfire_irq_demo firmware expects 30 / 31); setting either wires the
 device's 'irq' port to a cpu irq_link_%d port and exports QUETZ_IRQ_LINES so
 the launcher enables the QEMU bridge's IRQ poll timer.
+
+Optional write-side sink (QUETZ_SINK_FILE): quetz.QuetzSinkDevice at
+QUETZ_SINK_BASE (default 0x70020000) captures guest-pushed bytes to that
+file — set QUETZ_MMIO_END=0x7002FFFF so the bridge window covers it.
 """
 
 import os
@@ -70,6 +74,8 @@ mmio_start = _parse_addr(os.environ.get("QUETZ_MMIO_START", "0x70000000"))
 mmio_end   = _parse_addr(os.environ.get("QUETZ_MMIO_END", "0x7001FFFF"))
 gpu_base    = _parse_addr(os.environ.get("QUETZ_GPU_BASE", "0x70000000"))
 sensor_base = _parse_addr(os.environ.get("QUETZ_SENSOR_BASE", "0x70010000"))
+sink_file   = os.environ.get("QUETZ_SINK_FILE", "")
+sink_base   = _parse_addr(os.environ.get("QUETZ_SINK_BASE", "0x70020000"))
 # Device IRQ injection: INTC source numbers ("" = polled completion, no IRQs).
 gpu_irq_line    = os.environ.get("QUETZ_GPU_IRQ_LINE", "")
 sensor_irq_line = os.environ.get("QUETZ_SENSOR_IRQ_LINE", "")
@@ -168,6 +174,19 @@ sensors.addParams(sensor_params)
 sensors.enableAllStatistics()
 sensors_if = sensors.setSubComponent("iface", "memHierarchy.standardInterface")
 
+# Write-side sink (optional): captures guest-pushed bytes to QUETZ_SINK_FILE
+# for host-side assertion — the response side of the stimulus/response loop.
+sink = None
+if sink_file:
+    sink = sst.Component("sink", "quetz.QuetzSinkDevice")
+    sink.addParams({
+        "base_addr": sink_base,
+        "mmio_size": 0x100,
+        "sink_file": sink_file,
+    })
+    sink.enableAllStatistics()
+    sink_if = sink.setSubComponent("iface", "memHierarchy.standardInterface")
+
 # One mmio_link, two devices: a bus routes by each device's MMIO range.
 mmio_bus = sst.Component("mmio_bus", "memHierarchy.Bus")
 mmio_bus.addParams({"bus_frequency": "1GHz"})
@@ -187,6 +206,11 @@ sst.Link("bus_to_gpu").connect(
 sst.Link("bus_to_sensors").connect(
     (mmio_bus, "lowlink1",  "1ns"),
     (sensors_if, "lowlink", "1ns"))
+
+if sink is not None:
+    sst.Link("bus_to_sink").connect(
+        (mmio_bus, "lowlink2", "1ns"),
+        (sink_if,  "lowlink",  "1ns"))
 
 # Device IRQ links (cpu irq_link indices are contiguous from 0).
 _next_irq_link = 0

@@ -25,6 +25,7 @@ import subprocess
 
 from quetz_test_helpers import (
     assert_class_balance,
+    assert_sink_equals,
     apply_usermode_region_handlers,
     compare_gold,
     should_compare_gold,
@@ -2268,6 +2269,106 @@ class testcase_quetz_sysmode(SSTTestCase):
             "the batch is ONE kernel op")
         self.assertGreaterEqual(busy_cycles, 4 * 64,
             "gpu.busy_cycles should reflect the kernel's coeff*N latency opinion")
+
+    # -------------------------------------------------------------------------
+    def test_quetz_coldfire_accel_sink(self):
+        """ColdFire (m68k) full stimulus->compute->response loop with the
+        write-side sink device.
+
+        The guest drains the recorded sensor stream (QuetzStreamDevice),
+        transforms the samples ON THE DEVICE (quetz.ScaleOffsetKernel), and
+        pushes the result into quetz.QuetzSinkDevice; the test then diffs the
+        captured file byte-for-byte against a host-computed expectation —
+        the whole use case (recorded input, guest+accelerator compute,
+        captured output, host assertion) in one run."""
+        test_path = self.get_testsuite_dir()
+        sst_prefix, sst_bindir, sst_libexec = sst_paths()
+
+        qemu_target = "qemu-system-m68k"
+        exe_rel     = "sysmode/firmware/coldfire_accel_sink"
+        import shutil
+        qemu_bin = os.path.join(sst_bindir, qemu_target)
+        if not os.path.exists(qemu_bin):
+            found = shutil.which(qemu_target)
+            if found:
+                qemu_bin = found
+        exe_abs = os.path.normpath(os.path.join(test_path, exe_rel))
+        sensor_file = os.path.normpath(os.path.join(
+            test_path, "sysmode/data/sensor_stream.bin"))
+
+        if not os.path.exists(qemu_bin):
+            self.skipTest("{} not found; rebuild QEMU with m68k-softmmu".format(qemu_target))
+        if not os.path.exists(exe_abs):
+            self.skipTest("coldfire_accel_sink not found at {}; "
+                          "run M68K_CC=m68k-linux-gnu-gcc ./build.sh".format(exe_abs))
+        if not os.path.exists(sensor_file):
+            self.skipTest("sensor fixture missing under sysmode/data/")
+
+        outdir = os.path.join(self.get_test_output_run_dir(),
+                              "quetz_sysmode_tests", "accel_sink_coldfire")
+        os.makedirs(outdir, exist_ok=True)
+        sink_capture = os.path.join(outdir, "sink_capture.bin")
+
+        sdlfile     = os.path.join(test_path, "sysmode",
+                                   "basic_quetz_gpu_compute_coldfire.py")
+        sst_outfile = os.path.join(outdir, "accel_sink_coldfire.out")
+        sst_errfile = os.path.join(outdir, "accel_sink_coldfire.err")
+        mpifiles    = os.path.join(outdir, "accel_sink_coldfire.testfile")
+
+        make_sysmode_env(sst_prefix, sst_libexec, qemu_bin, exe_abs,
+                         "-machine mcf5208evb -display none -serial stdio -m 128M",
+                         "-kernel", 0x40000000, 0x47FFFFFF, [])
+        os.environ["QUETZ_MMIO_START"] = "0x70000000"
+        os.environ["QUETZ_MMIO_END"]   = "0x7002FFFF"
+        os.environ["QUETZ_SST_WIN_START"] = "0x71000000"
+        os.environ["QUETZ_SST_WIN_END"]   = "0x7100FFFF"
+        os.environ["QUETZ_KERNEL"] = "quetz.ScaleOffsetKernel"
+        os.environ["QUETZ_SENSOR_FILE"] = sensor_file
+        os.environ["QUETZ_SINK_FILE"] = sink_capture
+        os.environ.pop("QUETZ_PLATFORM", None)
+        enable_mmio_payload_delivery()
+
+        try:
+            self.run_sst(sdlfile, sst_outfile, sst_errfile,
+                         mpi_out_files=mpifiles, set_cwd=outdir, timeout_sec=180)
+        finally:
+            os.environ.pop("QUETZ_SST_WIN_START", None)
+            os.environ.pop("QUETZ_SST_WIN_END", None)
+            os.environ.pop("QUETZ_KERNEL", None)
+            os.environ.pop("QUETZ_SENSOR_FILE", None)
+            os.environ.pop("QUETZ_SINK_FILE", None)
+
+        raw = ""
+        if os.path.exists(sst_outfile):
+            with open(sst_outfile, "r") as f:
+                raw = f.read()
+        self.assertNotIn("FATAL", raw)
+
+        self.assertIn("stream: words=64 trailer=ok", raw,
+            "sensor fixture drain/verify failed before the accelerator ran")
+        self.assertIn("accel: correct_samples=126/126", raw,
+            "device-computed transform mismatched the guest's CPU cross-check")
+        self.assertIn("SINK LOOP PASS", raw)
+        self.assertIn("TESTFINISH[0]", raw,
+            "TestFinisher sentinel not triggered; sim may have hung")
+
+        # Host-side expectation: the fixture's 126 LE s16 samples through
+        # sat16(s * 3 + 500), packed LE — must match the capture byte-exactly.
+        import struct
+        with open(sensor_file, "rb") as f:
+            payload = f.read()[:252]
+        samples = struct.unpack("<126h", payload)
+        expected = b"".join(
+            struct.pack("<h", max(-32768, min(32767, s * 3 + 500)))
+            for s in samples)
+        assert_sink_equals(sink_capture, expected, context="accel_sink")
+
+        self.assertEqual(stat_sum(raw, "sink.bytes_accepted", 0), 252,
+            "sink did not accept exactly the transformed payload")
+        self.assertGreaterEqual(stat_sum(raw, "sink.flushes", 0), 1,
+            "guest CTRL flush did not reach the sink")
+        self.assertEqual(stat_sum(raw, "gpu.kernels_launched", 0), 1,
+            "the transform is ONE kernel op")
 
     # -------------------------------------------------------------------------
     def test_quetz_coldfire_system(self):

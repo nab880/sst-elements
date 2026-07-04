@@ -102,6 +102,28 @@ SDL parameters, and plain C++ behind a tiny component API. The demo uses two:
   }
   ```
 
+- `quetz.QuetzSinkDevice` — the **actuator/telemetry sink**, the write-side
+  mirror of the stream device: whatever your code *emits* (actuator commands,
+  processed samples, telemetry frames) is captured byte-exactly to a host
+  file (`sink_file` param) for CI assertion — the response half of the
+  stimulus → compute → captured-response loop:
+
+  | offset | reg    | dir | behavior |
+  |-------:|--------|-----|----------|
+  | 0x00   | STATUS | R   | bytes accepted so far (== SEQ, kept for symmetry) |
+  | 0x08   | DATA   | W   | push exactly write-size bytes (8/16/32-bit store → 1/2/4), value unpacked low-byte-first |
+  | 0x10   | SEQ    | R   | bytes accepted so far |
+  | 0x18   | CTRL   | W   | 1 = flush capture to file now; 2 = truncate/restart |
+
+  The file is also written unconditionally at simulation end, so a flush is
+  only needed if you want the bytes visible mid-run. `max_bytes` caps the
+  capture (drops + counts beyond it) to protect CI disks. Host-side, diff the
+  file against a golden or computed expectation (`assert_sink_equals` in
+  `quetz_test_helpers.py`); the full-loop demo is
+  `firmware/coldfire_accel_sink.c` + `test_quetz_coldfire_accel_sink`:
+  recorded stream in → `ScaleOffsetKernel` on the device → sink capture →
+  byte-exact host diff.
+
 - **Dedicated serial ports**: the mcf5208evb has three UARTs on `-serial`
   slots. Feed a recording into UART1 at device-realistic line rates with
   `tools/serial_feeder.py` + a `pipe:` chardev (tests: `make_serial_feed`
@@ -193,13 +215,14 @@ unit-tested on the host without SST — see `quetz_fft.h` /
 
 ## Adding your own device
 
-Copy `quetz_stream_device.{h,cc}` (~150 lines of logic): a Component holding a
-`memHierarchy.standardInterface` subcomponent, `setMemoryMappedAddressRegion`
-for its window slice, and a `RequestHandler` with `handle(Read*)`/
-`handle(Write*)` implementing the register map. Register it in `Makefile.am`,
-give it a disjoint `base_addr`, add a bus `lowlink`, done. Reads must respond
-with `read->size` bytes; keep register values ≤32 bits if 32-bit guests will
-read them.
+Copy `quetz_stream_device.{h,cc}` (read-side template) or
+`quetz_sink_device.{h,cc}` (write-side template, ~150 lines of logic): a
+Component holding a `memHierarchy.standardInterface` subcomponent,
+`setMemoryMappedAddressRegion` for its window slice, and a `RequestHandler`
+with `handle(Read*)`/`handle(Write*)` implementing the register map. Register
+it in `Makefile.am`, give it a disjoint `base_addr`, add a bus `lowlink`,
+done. Reads must respond with `read->size` bytes; keep register values ≤32
+bits if 32-bit guests will read them.
 
 Fidelity knobs, if you later want *some* timing realism: per-op latency on the
 accelerator (`REG_LATENCY_OVERRIDE` / `kernel_latency`), the trace-driven

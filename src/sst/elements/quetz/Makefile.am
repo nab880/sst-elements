@@ -54,6 +54,8 @@ libquetz_la_SOURCES = \
     quetz_scale_offset_kernel.h \
     quetz_stream_device.cc \
     quetz_stream_device.h \
+    quetz_sink_device.cc \
+    quetz_sink_device.h \
     quetz_irq_event.h \
     quetz_mem_access.cc \
     quetz_mem_access.h \
@@ -214,6 +216,8 @@ EXTRA_DIST =	QUETZ_OUTLINE.md \
 	tests/sysmode/firmware/build.sh \
 	tests/sysmode/firmware/coldfire_accel_scale \
 	tests/sysmode/firmware/coldfire_accel_scale.c \
+	tests/sysmode/firmware/coldfire_accel_sink \
+	tests/sysmode/firmware/coldfire_accel_sink.c \
 	tests/sysmode/firmware/coldfire_balar.h \
 	tests/sysmode/firmware/coldfire_gpu_async.c \
 	tests/sysmode/firmware/coldfire_gpu_fft \
