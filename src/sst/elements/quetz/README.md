@@ -58,8 +58,10 @@ Full detail in [SIMULATING-YOUR-SYSTEM.md](SIMULATING-YOUR-SYSTEM.md)
   application and its drivers onto the shipped startup scaffold instead.
 - **One ColdFire machine.** `mcf5208evb` is the reference vehicle;
   other family parts map onto it via linker script + deck env (memory
-  map, UART base, INTC lines). V4e-core parts are unassessed on QEMU;
-  a different SoC means a new QEMU machine — ask first.
+  map, UART base, INTC lines). V4-core targets (the named part,
+  CFV4SPPC1) are assessed and CI-gated — run with `-cpu cfv4e`
+  (`test_quetz_coldfire_v4_fpu`, `test_quetz_coldfire_irq_cfv4e`). A
+  different SoC means a new QEMU machine — ask first.
 - **Interrupts:** QEMU-native device IRQs (UART/timer/FEC) and SST-device
   IRQ injection both work; IRQ *latency* is functional, not modeled.
 

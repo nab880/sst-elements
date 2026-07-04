@@ -47,7 +47,7 @@ usermode/sysmode tests, the invariant checks, and the ColdFire
 embedded-system tests: full system demo, paced variant, device-computed
 kernels, sink loop, IRQ demo, BSP-survival probe). Balar-dependent and
 missing-toolchain tests skip cleanly. As of 2026-07 the arm64 container
-runs 50 tests: 40 pass, 10 skip, 0 fail. Unit tests run first via
+runs 52 tests: 42 pass, 10 skip, 0 fail. Unit tests run first via
 `check-quetz-unit`, and the script ends with the `quetz-run` packaging
 smoke.
 

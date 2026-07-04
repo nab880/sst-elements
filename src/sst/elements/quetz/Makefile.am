@@ -235,6 +235,8 @@ EXTRA_DIST =	QUETZ_OUTLINE.md \
 	tests/sysmode/firmware/coldfire_system.c \
 	tests/sysmode/firmware/coldfire_system_gps1 \
 	tests/sysmode/firmware/coldfire_uart.h \
+	tests/sysmode/firmware/coldfire_v4_fpu \
+	tests/sysmode/firmware/coldfire_v4_fpu.c \
 	tests/sysmode/firmware/cuda_runtime_types_firmware.h \
 	tests/sysmode/firmware/fft_firmware_data_256.h \
 	tests/sysmode/firmware/fft_synth_compute.h \

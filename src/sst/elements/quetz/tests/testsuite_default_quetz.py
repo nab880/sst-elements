@@ -2553,6 +2553,18 @@ class testcase_quetz_sysmode(SSTTestCase):
         patched QEMU bridge polls (plan-irq-injection.md). Functional
         assertions only — cross-process IRQ latency is nondeterministic by
         design, so no timing is asserted."""
+        self._coldfire_irq_template("coldfire_irq", "")
+
+    def test_quetz_coldfire_irq_cfv4e(self):
+        """The IRQ demo on QEMU's ColdFire V4e CPU model (`-cpu cfv4e`).
+
+        Part of the CFV4SPPC1 supported-parts gate: the target part is a V4
+        core, and interrupt delivery (INTC vectoring, `stop` wake, exception
+        frames) is the CPU-model-sensitive corner its ISR-driven code
+        depends on. Same functional assertions as the V2 run."""
+        self._coldfire_irq_template("coldfire_irq_cfv4e", "-cpu cfv4e")
+
+    def _coldfire_irq_template(self, testname, cpu_flag):
         test_path = self.get_testsuite_dir()
         sst_prefix, sst_bindir, sst_libexec = sst_paths()
 
@@ -2576,7 +2588,7 @@ class testcase_quetz_sysmode(SSTTestCase):
             self.skipTest("sensor fixture missing under sysmode/data/")
 
         outdir = os.path.join(self.get_test_output_run_dir(),
-                              "quetz_sysmode_tests", "coldfire_irq")
+                              "quetz_sysmode_tests", testname)
         os.makedirs(outdir, exist_ok=True)
 
         # No GPS leg: stdin is /dev/null; sensors are paced so data-ready
@@ -2585,8 +2597,12 @@ class testcase_quetz_sysmode(SSTTestCase):
         # SST time a sync-MMIO roundtrip consumes, or the refills can keep up
         # with the drain and the guest never has to stop-wait: 5 ms per
         # 128-byte refill makes the two sleeps deterministic in practice.
+        qemu_args = "-machine mcf5208evb"
+        if cpu_flag:
+            qemu_args += " " + cpu_flag
+        qemu_args += " -display none -serial stdio -m 128M"
         make_sysmode_env(sst_prefix, sst_libexec, qemu_bin, exe_abs,
-                         "-machine mcf5208evb -display none -serial stdio -m 128M",
+                         qemu_args,
                          "-kernel", 0x40000000, 0x47FFFFFF, [],
                          stdin_file="/dev/null")
         os.environ["QUETZ_MMIO_START"] = "0x70000000"
@@ -2600,9 +2616,9 @@ class testcase_quetz_sysmode(SSTTestCase):
 
         sdlfile     = os.path.join(test_path, "sysmode",
                                    "basic_quetz_coldfire_system.py")
-        sst_outfile = os.path.join(outdir, "coldfire_irq.out")
-        sst_errfile = os.path.join(outdir, "coldfire_irq.err")
-        mpifiles    = os.path.join(outdir, "coldfire_irq.testfile")
+        sst_outfile = os.path.join(outdir, testname + ".out")
+        sst_errfile = os.path.join(outdir, testname + ".err")
+        mpifiles    = os.path.join(outdir, testname + ".testfile")
 
         try:
             self.run_sst(sdlfile, sst_outfile, sst_errfile,
@@ -2649,6 +2665,71 @@ class testcase_quetz_sysmode(SSTTestCase):
         # 256-byte fixture at 128 bytes/refill.
         self.assertGreaterEqual(stat_sum(raw, "sensors.paced_refills", 0), 2,
             "paced_refills below the pacing math")
+
+    # -------------------------------------------------------------------------
+    def test_quetz_coldfire_v4_fpu(self):
+        """ColdFire V4 codegen smoke on QEMU's cfv4e CPU model.
+
+        The other half of the CFV4SPPC1 supported-parts gate: firmware
+        compiled -mcpu=5475 (hard-float V4e) so the compiler emits real
+        ColdFire FPU instructions (double mul/add/div, int<->double moves),
+        ISA_B integer forms (mvz/mvs), and one hand-written EMAC
+        multiply-accumulate — all exact-value checks, executed under
+        `-cpu cfv4e` on the mcf5208evb reference vehicle. Pins QEMU's V4
+        TCG support; if a QEMU bump regresses FPU/EMAC emulation, this
+        catches it before a user's V4 build does."""
+        test_path = self.get_testsuite_dir()
+        sst_prefix, sst_bindir, sst_libexec = sst_paths()
+
+        import shutil
+        qemu_bin = os.path.join(sst_bindir, "qemu-system-m68k")
+        if not os.path.exists(qemu_bin):
+            found = shutil.which("qemu-system-m68k")
+            if found:
+                qemu_bin = found
+        if not os.path.exists(qemu_bin):
+            self.skipTest("qemu-system-m68k not found; rebuild QEMU with m68k-softmmu")
+
+        exe_abs = os.path.normpath(os.path.join(
+            test_path, "sysmode/firmware/coldfire_v4_fpu"))
+        if not os.path.exists(exe_abs):
+            self.skipTest("coldfire_v4_fpu not found at {}; "
+                          "run M68K_CC=m68k-linux-gnu-gcc ./build.sh".format(exe_abs))
+
+        outdir = os.path.join(self.get_test_output_run_dir(),
+                              "quetz_sysmode_tests", "coldfire_v4_fpu")
+        os.makedirs(outdir, exist_ok=True)
+
+        make_sysmode_env(sst_prefix, sst_libexec, qemu_bin, exe_abs,
+                         "-machine mcf5208evb -cpu cfv4e -display none "
+                         "-serial stdio -m 128M",
+                         "-kernel", 0x40000000, 0x47FFFFFF,
+                         [("uart0",  0xFC060000, 0xFC0600FF, "uart",
+                             {"tx_offset": 12}),
+                          ("finish", 0x80000000, 0x80000003, "testfinish"),
+                          ("rest",   0x00000000, 0xFFFFFFFF, "filtered")])
+
+        sdlfile     = os.path.join(test_path, "sysmode", "basic_quetz_sysmode.py")
+        sst_outfile = os.path.join(outdir, "coldfire_v4_fpu.out")
+        sst_errfile = os.path.join(outdir, "coldfire_v4_fpu.err")
+        mpifiles    = os.path.join(outdir, "coldfire_v4_fpu.testfile")
+
+        self.run_sst(sdlfile, sst_outfile, sst_errfile,
+                     mpi_out_files=mpifiles, set_cwd=outdir, timeout_sec=180)
+
+        raw = ""
+        if os.path.exists(sst_outfile):
+            with open(sst_outfile, "r") as f:
+                raw = f.read()
+        self.assertNotIn("FATAL", raw)
+
+        self.assertIn("fpu: double=ok conv=ok", raw,
+            "ColdFire FPU arithmetic/conversion wrong under -cpu cfv4e")
+        self.assertIn("isa_b: ext=ok emac: mac32(3,5)=15", raw,
+            "ISA_B extension forms or EMAC accumulate wrong under -cpu cfv4e")
+        self.assertIn("V4 SMOKE PASS", raw)
+        self.assertIn("TESTFINISH[0]", raw,
+            "TestFinisher sentinel not triggered; sim may have hung")
 
     # -------------------------------------------------------------------------
     def test_quetz_coldfire_gpu_async(self):
