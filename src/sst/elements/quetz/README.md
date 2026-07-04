@@ -42,6 +42,29 @@ QEMU blocks (spins) whenever SST falls behind.
 
 ---
 
+## Scope and limits (read before planning a port)
+
+Full detail in [SIMULATING-YOUR-SYSTEM.md](SIMULATING-YOUR-SYSTEM.md)
+§ *What works today* / § *Supported parts*; the one-screen version:
+
+- **Functional fidelity, not cycle accuracy.** The guest executes real
+  instructions and devices return real data; all timing (memory path,
+  device latency, IRQ delivery) is approximate. Assert function, never
+  timing.
+- **Freestanding firmware or ported app + drivers — not board BSPs.**
+  QEMU's `mcf5208evb` reads unmodeled SoC space (PLL, SCM, WDT, GPIO, …)
+  as zero and ignores writes, so unmodified BSP init **hangs on status
+  polls and silently loses config writes** (it does not crash). Port the
+  application and its drivers onto the shipped startup scaffold instead.
+- **One ColdFire machine.** `mcf5208evb` is the reference vehicle;
+  other family parts map onto it via linker script + deck env (memory
+  map, UART base, INTC lines). V4e-core parts are unassessed on QEMU;
+  a different SoC means a new QEMU machine — ask first.
+- **Interrupts:** QEMU-native device IRQs (UART/timer/FEC) and SST-device
+  IRQ injection both work; IRQ *latency* is functional, not modeled.
+
+---
+
 ## Prerequisites
 
 | Tool | Version | Notes |

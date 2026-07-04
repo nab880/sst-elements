@@ -14,6 +14,60 @@ The worked example throughout is the shipped **`coldfire_system`** demo:
 - fixtures: `tests/sysmode/data/gps_nmea.txt`, `tests/sysmode/data/sensor_stream.bin`
 - test: `test_quetz_coldfire_system` in `tests/testsuite_default_quetz.py`
 
+## What works today — and what doesn't (read this first)
+
+**Works:**
+
+- **Freestanding firmware** (the demo's shape), or your application + drivers
+  ported onto the shipped startup scaffold (`coldfire_startup.S` +
+  `link_m68k.ld`). This is the supported path.
+- **QEMU-native peripherals** — the mcf5208evb's three UARTs, two PIT
+  timers, and FEC ethernet — including **interrupt-driven** use: their IRQs
+  vector normally through the INTC.
+- **SST-side MMIO devices** (accelerator, stream, sink, your own), both
+  **polled** and **interrupt-driven** — SST devices can raise real INTC
+  lines (§ Interrupt-driven devices).
+- Recorded-data replay in (stdin/UART, stream device, paced feeds) and
+  byte-exact capture out (sink device, UART transcript).
+
+**Does not work yet:**
+
+- **Unmodified board BSPs.** QEMU's `mcf5208evb` reads all *unmodeled* SoC
+  space (PLL, SCM, WDT, GPIO, chip selects, I2C, …) as zero and ignores
+  writes — measured across every BSP-init range by the committed
+  `bsp_torture` probe catalogue. So real board-support init does **not
+  crash**: it **hangs on status polls** (e.g. the PLL lock bit never sets)
+  or **silently loses configuration writes** (GPIO readback returns 0).
+  Port your app + drivers instead of the BSP: find the status-poll loops
+  and read-back checks in the init path and shim those; every other init
+  write is harmless RAZ/WI. Narrow stub registers with scriptable values
+  can be added behind the MMIO window when a real BSP names them.
+- **Cycle accuracy.** Timing is approximate everywhere (trace-driven memory
+  path, functional device latency, wall-clock-coupled IRQ delivery). Never
+  assert timing; assert function.
+
+## Supported parts
+
+QEMU models exactly **one** ColdFire machine — `mcf5208evb` (MCF5208: V2
+core, ISA_A+, no FPU/MMU, 3 UARTs, 2 PITs, FEC, one INTC pair) — and that
+machine is the **reference vehicle** for the whole ColdFire family. Other
+parts are supported by *relocation*, not by new machine models:
+
+| your part differs in | you change | cost |
+|---|---|---|
+| RAM / peripheral bases | `link_m68k.ld` + deck env (`QUETZ_RAM_START/END`, `QUETZ_UART_ADDR`, device `base_addr`s) | trivial |
+| UART programming model | usually nothing — the MCF UART block is common across the family | none |
+| INTC source numbering | `QUETZ_*_IRQ_LINE` env + `coldfire_intc.h` line constants | trivial |
+| core ISA (V2 vs V4e, MAC/EMAC, FPU) | compiler flags; **V4e on QEMU is unassessed** — ask before relying on it | small–unknown |
+| on-chip peripherals we don't model | stream/sink/stub devices in the MMIO window (§ Where peripherals come from) | small |
+| a genuinely different SoC | a new QEMU machine model | expensive — scoped separately |
+
+Firmware is built with `-mcpu=5208`; anything ISA_A+-compatible runs as-is.
+If you have a specific target part, send the part number, board name, or a
+firmware ELF (`m68k-linux-gnu-readelf -A` shows the arch) — mapping it onto
+the reference vehicle is a short assessment, and this section gets updated
+with the result.
+
 ## Quickstart (three commands)
 
 From a clean checkout of the workspace (with docker):
