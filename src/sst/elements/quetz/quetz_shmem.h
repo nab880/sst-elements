@@ -54,8 +54,10 @@ public:
         if (isMaster()) {
             sync_.initMaster(getNumBuffers());
             statistics_.initMaster();
-            for (size_t i = 0; i < QUETZ_MAX_MMIO_VCORES; i++)
+            for (size_t i = 0; i < QUETZ_MAX_MMIO_VCORES; i++) {
                 mmio_sync_.clearSlot((uint32_t)i);
+                mmio_sync_.clearIrqSlots((uint32_t)i);
+            }
         } else {
             sync_.announceAttach();
         }

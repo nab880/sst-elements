@@ -2441,6 +2441,115 @@ class testcase_quetz_sysmode(SSTTestCase):
             "paced_refills stat below the pacing math")
 
     # -------------------------------------------------------------------------
+    def test_quetz_coldfire_irq(self):
+        """ColdFire (m68k) device-IRQ injection: ISR-driven completion for
+        SST-window devices instead of polling.
+
+        coldfire_irq_demo programs the MCF5208 INTC (VBR + vector table +
+        ICR/CIMR via coldfire_intc.h) and `stop`s; QuetzGpuDevice raises INTC
+        line 30 when each op retires and the paced QuetzStreamDevice raises
+        line 31 on data-ready, through the reverse shared-memory mailbox the
+        patched QEMU bridge polls (plan-irq-injection.md). Functional
+        assertions only — cross-process IRQ latency is nondeterministic by
+        design, so no timing is asserted."""
+        test_path = self.get_testsuite_dir()
+        sst_prefix, sst_bindir, sst_libexec = sst_paths()
+
+        import shutil
+        qemu_bin = os.path.join(sst_bindir, "qemu-system-m68k")
+        if not os.path.exists(qemu_bin):
+            found = shutil.which("qemu-system-m68k")
+            if found:
+                qemu_bin = found
+        if not os.path.exists(qemu_bin):
+            self.skipTest("qemu-system-m68k not found; rebuild QEMU with m68k-softmmu")
+
+        exe_abs = os.path.normpath(os.path.join(
+            test_path, "sysmode/firmware/coldfire_irq_demo"))
+        sensor_file = os.path.normpath(os.path.join(
+            test_path, "sysmode/data/sensor_stream.bin"))
+        if not os.path.exists(exe_abs):
+            self.skipTest("coldfire_irq_demo not found at {}; "
+                          "run M68K_CC=m68k-linux-gnu-gcc ./build.sh".format(exe_abs))
+        if not os.path.exists(sensor_file):
+            self.skipTest("sensor fixture missing under sysmode/data/")
+
+        outdir = os.path.join(self.get_test_output_run_dir(),
+                              "quetz_sysmode_tests", "coldfire_irq")
+        os.makedirs(outdir, exist_ok=True)
+
+        # No GPS leg: stdin is /dev/null; sensors are paced so data-ready
+        # IRQs actually fire between refills. Lines must match the firmware.
+        # The pace period must dwarf the (wall-clock-coupled, nondeterministic)
+        # SST time a sync-MMIO roundtrip consumes, or the refills can keep up
+        # with the drain and the guest never has to stop-wait: 5 ms per
+        # 128-byte refill makes the two sleeps deterministic in practice.
+        make_sysmode_env(sst_prefix, sst_libexec, qemu_bin, exe_abs,
+                         "-machine mcf5208evb -display none -serial stdio -m 128M",
+                         "-kernel", 0x40000000, 0x47FFFFFF, [],
+                         stdin_file="/dev/null")
+        os.environ["QUETZ_MMIO_START"] = "0x70000000"
+        os.environ["QUETZ_MMIO_END"]   = "0x7001FFFF"
+        os.environ["QUETZ_SENSOR_FILE"] = sensor_file
+        os.environ["QUETZ_GPU_IRQ_LINE"] = "30"
+        os.environ["QUETZ_SENSOR_IRQ_LINE"] = "31"
+        os.environ["QUETZ_SENSOR_PACE_BYTES"]  = "128"
+        os.environ["QUETZ_SENSOR_PACE_PERIOD"] = "5ms"
+        enable_mmio_payload_delivery()
+
+        sdlfile     = os.path.join(test_path, "sysmode",
+                                   "basic_quetz_coldfire_system.py")
+        sst_outfile = os.path.join(outdir, "coldfire_irq.out")
+        sst_errfile = os.path.join(outdir, "coldfire_irq.err")
+        mpifiles    = os.path.join(outdir, "coldfire_irq.testfile")
+
+        try:
+            self.run_sst(sdlfile, sst_outfile, sst_errfile,
+                         mpi_out_files=mpifiles, set_cwd=outdir,
+                         timeout_sec=60 * 10)
+        finally:
+            os.environ.pop("QUETZ_GPU_IRQ_LINE", None)
+            os.environ.pop("QUETZ_SENSOR_IRQ_LINE", None)
+            os.environ.pop("QUETZ_IRQ_LINES", None)
+            os.environ.pop("QUETZ_SENSOR_FILE", None)
+            os.environ.pop("QUETZ_SENSOR_PACE_BYTES", None)
+            os.environ.pop("QUETZ_SENSOR_PACE_PERIOD", None)
+
+        raw = ""
+        if os.path.exists(sst_outfile):
+            with open(sst_outfile, "r") as f:
+                raw += f.read()
+        if os.path.exists(sst_errfile):
+            with open(sst_errfile, "r") as f:
+                raw += "\n" + f.read()
+        self.assertNotIn("FATAL", raw)
+
+        self.assertIn("accel: irqs=2 kernels=2", raw,
+            "accelerator completion IRQs did not both arrive (or KERNEL_ID "
+            "disagrees with the ISR count)")
+        self.assertIn("sensors: stream=ok", raw,
+            "IRQ-driven sensor drain failed the sum32 verification")
+        self.assertIn("IRQ DEMO PASS", raw,
+            "firmware did not reach overall PASS (check sleeps>0: the guest "
+            "must actually have stop-waited)")
+        self.assertIn("TESTFINISH[0]", raw,
+            "TestFinisher sentinel not triggered; sim may have hung")
+
+        import re
+        m = re.search(r"accel: irqs=2 kernels=2 sleeps=(\d+)", raw)
+        self.assertIsNotNone(m, "accel sleeps count missing from transcript")
+        self.assertGreater(int(m.group(1)), 0,
+            "guest never stop-waited for the accelerator IRQ")
+
+        self.assertEqual(stat_sum(raw, "gpu.irqs_raised", 0), 2,
+            "device did not raise exactly one completion IRQ per op")
+        self.assertGreaterEqual(stat_sum(raw, "sensors.irqs_raised", 0), 1,
+            "paced stream never raised a data-ready IRQ")
+        # 256-byte fixture at 128 bytes/refill.
+        self.assertGreaterEqual(stat_sum(raw, "sensors.paced_refills", 0), 2,
+            "paced_refills below the pacing math")
+
+    # -------------------------------------------------------------------------
     def test_quetz_coldfire_gpu_async(self):
         """ColdFire (m68k) P4 async offload: vectorAdd with a posted
         cudaThreadSynchronize through Quetz->balar.

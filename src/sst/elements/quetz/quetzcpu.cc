@@ -14,6 +14,7 @@
 
 #include "quetz_config_manager.h"
 #include "quetz_core_backend.h"
+#include "quetz_irq_event.h"
 
 #include <inttypes.h>
 
@@ -134,12 +135,50 @@ QuetzCPU::QuetzCPU(ComponentId_t id, Params& params)
     }
 
     loadAcceleratorPorts();
+    configureIrqLinks();
 
     registerAsPrimaryComponent();
     primaryComponentDoNotEndSim();
 
     output_->verbose(CALL_INFO, 1, 0,
         "QuetzComponent initialization complete.\n");
+}
+
+// IRQ-injection links from SST MMIO devices: each connected irq_link_%d
+// delivers QuetzIrqEvent level changes that are forwarded to the guest
+// machine's interrupt controller via the shared-memory IRQ mailbox the QEMU
+// bridge polls (quetz_ipc_types.h). Indices must be contiguous from 0.
+void QuetzCPU::configureIrqLinks()
+{
+    for (uint32_t i = 0;; i++) {
+        char link_buf[64];
+        snprintf(link_buf, sizeof(link_buf), "irq_link_%" PRIu32, i);
+        if (!isPortConnected(link_buf))
+            break;
+        SST::Link* link = configureLink(link_buf,
+            new Event::Handler<QuetzCPU, &QuetzCPU::handleIrqEvent>(this));
+        if (!link) {
+            output_->fatal(CALL_INFO, -1,
+                "Failed to configure %s.\n", link_buf);
+        }
+        irq_links_.push_back(link);
+        output_->verbose(CALL_INFO, 1, 0,
+            "%s connected (device IRQ injection).\n", link_buf);
+    }
+}
+
+void QuetzCPU::handleIrqEvent(SST::Event* ev)
+{
+    QuetzIrqEvent* irq = dynamic_cast<QuetzIrqEvent*>(ev);
+    if (!irq) {
+        output_->fatal(CALL_INFO, -1,
+            "Non-QuetzIrqEvent received on an irq_link port.\n");
+    }
+    output_->verbose(CALL_INFO, 2, 0,
+        "IRQ event: vcpu=%" PRIu32 " line=%" PRIu32 " level=%" PRIu32 "\n",
+        irq->vcpu, irq->line, irq->level);
+    frontend_->tunnel()->mmioSync().postIrq(irq->vcpu, irq->line, irq->level);
+    delete ev;
 }
 
 void QuetzCPU::loadRegionHandlers() {

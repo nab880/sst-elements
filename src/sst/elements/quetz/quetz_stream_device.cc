@@ -12,6 +12,10 @@
 #include <sst_config.h>
 #include "quetz_stream_device.h"
 
+#include "quetz_irq_event.h"
+
+#include <sst/core/link.h>
+
 #include <fstream>
 #include <inttypes.h>
 
@@ -59,6 +63,28 @@ QuetzStreamDevice::QuetzStreamDevice(ComponentId_t id, Params& params)
             new Clock::Handler<QuetzStreamDevice, &QuetzStreamDevice::tickPace>(this));
     }
 
+    // Data-ready IRQ: raise when a paced refill makes STATUS go 0 -> nonzero,
+    // lower on REG_IRQ_ACK. Send-only link (device -> CPU).
+    irq_line_    = params.find<int64_t>("irq_line", -1);
+    irq_vcpu_    = params.find<uint32_t>("irq_vcpu", 0);
+    irq_pending_ = false;
+    irq_link_    = nullptr;
+    if (irq_line_ >= 0) {
+        if (!pace_bytes_) {
+            out.fatal(CALL_INFO, -1,
+                "%s: irq_line requires pacing (pace_bytes > 0) — an unpaced "
+                "stream is fully available at t=0 and never raises.\n",
+                getName().c_str());
+        }
+        irq_link_ = configureLink("irq");
+        if (!irq_link_) {
+            out.fatal(CALL_INFO, -1,
+                "%s: irq_line=%" PRId64 " requires the 'irq' port to be "
+                "linked to a QuetzCPU irq_link_%%d port.\n",
+                getName().c_str(), irq_line_);
+        }
+    }
+
     std::string clockfreq = params.find<std::string>("clock", "1GHz");
     TimeConverter tc = getTimeConverter(clockfreq);
 
@@ -81,6 +107,7 @@ QuetzStreamDevice::QuetzStreamDevice(ComponentId_t id, Params& params)
     stat_not_ready_reads_  = registerStatistic<uint64_t>("not_ready_reads");
     stat_paced_refills_    = registerStatistic<uint64_t>("paced_refills");
     stat_rewinds_          = registerStatistic<uint64_t>("rewinds");
+    stat_irqs_raised_      = registerStatistic<uint64_t>("irqs_raised");
     stat_wrong_direction_accesses_ =
         registerStatistic<uint64_t>("wrong_direction_accesses");
     stat_bad_offset_accesses_ = registerStatistic<uint64_t>("bad_offset_accesses");
@@ -94,13 +121,39 @@ QuetzStreamDevice::QuetzStreamDevice(ComponentId_t id, Params& params)
 void QuetzStreamDevice::init(unsigned int phase) { iface_->init(phase); }
 void QuetzStreamDevice::setup() { iface_->setup(); }
 
+// Raise the data-ready IRQ line (level semantics: it stays raised until the
+// guest writes REG_IRQ_ACK). Refills while already raised do not re-send.
+void QuetzStreamDevice::raiseDataReadyIrq() {
+    if (irq_line_ < 0 || irq_pending_)
+        return;
+    irq_pending_ = true;
+    stat_irqs_raised_->addData(1);
+    irq_link_->send(new QuetzIrqEvent(irq_vcpu_, (uint32_t)irq_line_, 1));
+    out.verbose(CALL_INFO, 2, 0,
+        "%s: data-ready IRQ line %" PRId64 " raised (avail=%" PRIu64 ")\n",
+        getName().c_str(), irq_line_, avail_);
+}
+
+void QuetzStreamDevice::ackIrq() {
+    if (irq_line_ < 0 || !irq_pending_)
+        return;
+    irq_pending_ = false;
+    irq_link_->send(new QuetzIrqEvent(irq_vcpu_, (uint32_t)irq_line_, 0));
+    out.verbose(CALL_INFO, 2, 0,
+        "%s: data-ready IRQ line %" PRId64 " acked/lowered\n",
+        getName().c_str(), irq_line_);
+}
+
 bool QuetzStreamDevice::tickPace(SST::Cycle_t) {
     if (budget_given_ < stream_.size()) {
         uint64_t take = stream_.size() - budget_given_;
         if (take > pace_bytes_) take = pace_bytes_;
+        bool was_empty = (avail_ == 0);
         budget_given_ += take;
         avail_        += take;
         stat_paced_refills_->addData(1);
+        if (was_empty && take > 0)
+            raiseDataReadyIrq();
     }
     return false;
 }
@@ -143,6 +196,8 @@ void QuetzStreamDevice::mmioHandlers::handle(StandardMem::Read* read) {
         value = dev->pos_;
     } else if (offset == REG_EOS) {
         value = (dev->pos_ >= dev->stream_.size()) ? 1 : 0;
+    } else if (offset == REG_IRQ_ACK) {
+        value = dev->irq_pending_ ? 1 : 0;
     } else if (offset == REG_CTRL) {
         dev->stat_wrong_direction_accesses_->addData(1);
     } else {
@@ -179,6 +234,15 @@ void QuetzStreamDevice::mmioHandlers::handle(StandardMem::Write* write) {
             out->verbose(CALL_INFO, 2, 0, "%s: stream rewound\n",
                 dev->getName().c_str());
         }
+    } else if (offset == REG_IRQ_ACK) {
+        // W1C-style ack: any nonzero value lowers the data-ready IRQ line.
+        uint64_t value = 0;
+        for (int i = (int)write->data.size() - 1; i >= 0; i--) {
+            value <<= 8;
+            value |= write->data[(size_t)i];
+        }
+        if (value != 0)
+            dev->ackIrq();
     } else if (offset == REG_STATUS || offset == REG_DATA || offset == REG_SEQ ||
                offset == REG_EOS) {
         dev->stat_wrong_direction_accesses_->addData(1);

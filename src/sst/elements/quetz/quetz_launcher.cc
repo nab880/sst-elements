@@ -107,8 +107,27 @@ pid_t QemuLauncher::spawn(const QuetzConfig& cfg,
         snprintf(dev, sizeof(dev),
             "sst-mmio-bridge,shmname=%s,base=0x%" PRIx64 ",size=0x%" PRIx64 ",vcpu_id=0",
             shmem_region_name.c_str(), mmio_base, mmio_size);
+        std::string dev_arg(dev);
+        // SST-device IRQ injection (QUETZ_IRQ_LINES = lines to poll, 0/unset =
+        // off): only the MMIO bridge polls the reverse mailbox — the optional
+        // SST-window aperture below shares the shmem and must not double-poll.
+        const char* irq_lines_env = getenv("QUETZ_IRQ_LINES");
+        if (irq_lines_env && strtoul(irq_lines_env, nullptr, 0) > 0) {
+            dev_arg += ",irq-count=";
+            dev_arg += irq_lines_env;
+            const char* irq_poll_env = getenv("QUETZ_IRQ_POLL_NS");
+            if (irq_poll_env && irq_poll_env[0]) {
+                dev_arg += ",irq-poll-ns=";
+                dev_arg += irq_poll_env;
+            }
+            const char* intc_env = getenv("QUETZ_IRQ_INTC_TYPE");
+            if (intc_env && intc_env[0]) {
+                dev_arg += ",intc-type=";
+                dev_arg += intc_env;
+            }
+        }
         argv_strs.push_back("-device");
-        argv_strs.push_back(dev);
+        argv_strs.push_back(dev_arg);
     } else if (mmio_size != 0 && !cfg.system_mode) {
         char range[256];
         snprintf(range, sizeof(range),

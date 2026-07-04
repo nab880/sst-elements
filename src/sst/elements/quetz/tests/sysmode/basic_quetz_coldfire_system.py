@@ -22,6 +22,12 @@ TestFinisher sentinel; the UART transcript is the gold-compared output.
 Env overrides: QUETZ_EXE, QUETZ_QEMU(=qemu-system-m68k), QUETZ_QEMU_ARGS,
 QUETZ_STDIN_FILE (GPS NMEA log), QUETZ_SENSOR_FILE (sensor stream),
 QUETZ_GPU_LATENCY, QUETZ_UART_ADDR, QUETZ_SENTINEL_ADDR.
+
+Optional device IRQ injection (ISR-driven completion instead of polling):
+QUETZ_GPU_IRQ_LINE / QUETZ_SENSOR_IRQ_LINE name mcf5208 INTC sources (the
+coldfire_irq_demo firmware expects 30 / 31); setting either wires the
+device's 'irq' port to a cpu irq_link_%d port and exports QUETZ_IRQ_LINES so
+the launcher enables the QEMU bridge's IRQ poll timer.
 """
 
 import os
@@ -64,6 +70,13 @@ mmio_start = _parse_addr(os.environ.get("QUETZ_MMIO_START", "0x70000000"))
 mmio_end   = _parse_addr(os.environ.get("QUETZ_MMIO_END", "0x7001FFFF"))
 gpu_base    = _parse_addr(os.environ.get("QUETZ_GPU_BASE", "0x70000000"))
 sensor_base = _parse_addr(os.environ.get("QUETZ_SENSOR_BASE", "0x70010000"))
+# Device IRQ injection: INTC source numbers ("" = polled completion, no IRQs).
+gpu_irq_line    = os.environ.get("QUETZ_GPU_IRQ_LINE", "")
+sensor_irq_line = os.environ.get("QUETZ_SENSOR_IRQ_LINE", "")
+if gpu_irq_line or sensor_irq_line:
+    # The launcher reads this at QEMU spawn time (same process): enable the
+    # bridge's reverse-mailbox poll for all 64 mcf_intc inputs.
+    os.environ.setdefault("QUETZ_IRQ_LINES", "64")
 ram_start  = _parse_addr(os.environ.get("QUETZ_RAM_START", "0x40000000"))
 ram_end    = _parse_addr(os.environ.get("QUETZ_RAM_END", "0x47FFFFFF"))
 uart_addr  = _parse_addr(os.environ.get("QUETZ_UART_ADDR", "0xfc060000"))
@@ -108,6 +121,11 @@ uart_rh = cpu.setSubComponent("region_handler", "quetz.UartRegionHandler", 1)
 uart_rh.addParams({"start": uart_addr, "end": uart_addr + 0x8FFF, "tx_offset": 0x0C})
 fin_rh = cpu.setSubComponent("region_handler", "quetz.TestFinisherRegionHandler", 2)
 fin_rh.addParams({"start": sentinel_addr, "end": sentinel_addr + 3})
+# The rest of the on-chip peripheral space (INTC, SCM, timers, ...) is
+# QEMU-serviced; filter it so e.g. the IRQ demo's INTC programming is not
+# forwarded to the RAM-only MemController. Must come after the UART slot.
+soc_rh = cpu.setSubComponent("region_handler", "quetz.FilteredRegionHandler", 3)
+soc_rh.addParams({"start": 0xFC000000, "end": 0xFCFFFFFF})
 cpu.enableAllStatistics()
 
 memctrl = sst.Component("memory", "memHierarchy.MemController")
@@ -120,27 +138,33 @@ mem_be = memctrl.setSubComponent("backend", "memHierarchy.simpleMem")
 mem_be.addParams({"access_time": "100ns", "mem_size": str(ram_end - ram_start + 1) + "B"})
 
 # Accelerator (synthetic doorbell latency model).
-gpu = sst.Component("gpu", "quetz.QuetzGpuDevice")
-gpu.addParams({
+gpu_params = {
     "base_addr": gpu_base,
     "mmio_size": 0x400,
     "kernel_latency": int(os.environ.get("QUETZ_GPU_LATENCY", "5000")),
     "clock": "1GHz",
     "doorbell_blocking": 0,
-})
+}
+if gpu_irq_line:
+    gpu_params["irq_line"] = int(gpu_irq_line)
+gpu = sst.Component("gpu", "quetz.QuetzGpuDevice")
+gpu.addParams(gpu_params)
 gpu.enableAllStatistics()
 gpu_if = gpu.setSubComponent("iface", "memHierarchy.standardInterface")
 
 # Sensor stream (file-backed data feed). QUETZ_SENSOR_PACE_BYTES paces the
 # replay (bytes per QUETZ_SENSOR_PACE_PERIOD); 0 = all available at t=0.
-sensors = sst.Component("sensors", "quetz.QuetzStreamDevice")
-sensors.addParams({
+sensor_params = {
     "base_addr": sensor_base,
     "mmio_size": 0x100,
     "stream_file": sensor_file,
     "pace_bytes": int(os.environ.get("QUETZ_SENSOR_PACE_BYTES", "0")),
     "pace_period": os.environ.get("QUETZ_SENSOR_PACE_PERIOD", "100us"),
-})
+}
+if sensor_irq_line:
+    sensor_params["irq_line"] = int(sensor_irq_line)
+sensors = sst.Component("sensors", "quetz.QuetzStreamDevice")
+sensors.addParams(sensor_params)
 sensors.enableAllStatistics()
 sensors_if = sensors.setSubComponent("iface", "memHierarchy.standardInterface")
 
@@ -163,6 +187,19 @@ sst.Link("bus_to_gpu").connect(
 sst.Link("bus_to_sensors").connect(
     (mmio_bus, "lowlink1",  "1ns"),
     (sensors_if, "lowlink", "1ns"))
+
+# Device IRQ links (cpu irq_link indices are contiguous from 0).
+_next_irq_link = 0
+if gpu_irq_line:
+    sst.Link("gpu_irq").connect(
+        (gpu, "irq", "1ns"),
+        (cpu, "irq_link_%d" % _next_irq_link, "1ns"))
+    _next_irq_link += 1
+if sensor_irq_line:
+    sst.Link("sensors_irq").connect(
+        (sensors, "irq", "1ns"),
+        (cpu, "irq_link_%d" % _next_irq_link, "1ns"))
+    _next_irq_link += 1
 
 sst.setProgramOption("timebase", "1ps")
 sst.setStatisticLoadLevel(4)

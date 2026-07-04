@@ -12,6 +12,10 @@
 #include <sst_config.h>
 #include "quetz_gpu_device.h"
 
+#include "quetz_irq_event.h"
+
+#include <sst/core/link.h>
+
 #include <cstring>
 #include <inttypes.h>
 
@@ -34,6 +38,10 @@ QuetzGpuDevice::QuetzGpuDevice(ComponentId_t id, Params& params)
       deferred_doorbell_resp_(nullptr),
       handlers(nullptr),
       iface(nullptr),
+      irq_line_(params.find<int64_t>("irq_line", -1)),
+      irq_vcpu_(params.find<uint32_t>("irq_vcpu", 0)),
+      irq_pending_(false),
+      irq_link_(nullptr),
       kernel_(nullptr),
       mem_iface_(nullptr),
       arg_regs_{0, 0, 0, 0},
@@ -48,6 +56,7 @@ QuetzGpuDevice::QuetzGpuDevice(ComponentId_t id, Params& params)
       stat_status_polls_(nullptr),
       stat_latency_overrides_(nullptr),
       stat_doorbell_while_busy_(nullptr),
+      stat_irqs_raised_(nullptr),
       stat_wrong_direction_accesses_(nullptr),
       stat_bad_offset_accesses_(nullptr)
 {
@@ -109,6 +118,18 @@ QuetzGpuDevice::QuetzGpuDevice(ComponentId_t id, Params& params)
         }
     }
 
+    // Completion IRQ: raise irq_line on op retire, lower on REG_IRQ_ACK.
+    // The link is send-only (device -> CPU), so no receive handler.
+    if (irq_line_ >= 0) {
+        irq_link_ = configureLink("irq");
+        if (!irq_link_) {
+            out.fatal(CALL_INFO, -1,
+                "%s: irq_line=%" PRId64 " requires the 'irq' port to be "
+                "linked to a QuetzCPU irq_link_%%d port.\n",
+                getName().c_str(), irq_line_);
+        }
+    }
+
     registerClock(tc_, new Clock::Handler<QuetzGpuDevice, &QuetzGpuDevice::tickBusy>(this));
 
     registerAsPrimaryComponent();
@@ -121,6 +142,7 @@ QuetzGpuDevice::QuetzGpuDevice(ComponentId_t id, Params& params)
     stat_status_polls_        = registerStatistic<uint64_t>("status_polls");
     stat_latency_overrides_   = registerStatistic<uint64_t>("latency_overrides");
     stat_doorbell_while_busy_ = registerStatistic<uint64_t>("doorbell_while_busy");
+    stat_irqs_raised_         = registerStatistic<uint64_t>("irqs_raised");
     stat_wrong_direction_accesses_ =
         registerStatistic<uint64_t>("wrong_direction_accesses");
     stat_bad_offset_accesses_ = registerStatistic<uint64_t>("bad_offset_accesses");
@@ -180,6 +202,29 @@ void QuetzGpuDevice::updatePrimaryHold(bool allow_ok_to_end) {
     }
 }
 
+// Raise the completion IRQ line (level semantics: it stays raised until the
+// guest writes REG_IRQ_ACK). Retires while already raised do not re-send —
+// the ISR reads REG_KERNEL_ID to see how many ops completed.
+void QuetzGpuDevice::raiseIrqOnRetire() {
+    if (irq_line_ < 0 || irq_pending_)
+        return;
+    irq_pending_ = true;
+    stat_irqs_raised_->addData(1);
+    irq_link_->send(new QuetzIrqEvent(irq_vcpu_, (uint32_t)irq_line_, 1));
+    out.verbose(CALL_INFO, 2, 0,
+        "%s: IRQ line %" PRId64 " raised (kernel_id=%" PRIu64 ")\n",
+        getName().c_str(), irq_line_, kernel_id_);
+}
+
+void QuetzGpuDevice::ackIrq() {
+    if (irq_line_ < 0 || !irq_pending_)
+        return;
+    irq_pending_ = false;
+    irq_link_->send(new QuetzIrqEvent(irq_vcpu_, (uint32_t)irq_line_, 0));
+    out.verbose(CALL_INFO, 2, 0,
+        "%s: IRQ line %" PRId64 " acked/lowered\n", getName().c_str(), irq_line_);
+}
+
 void QuetzGpuDevice::retireIfReady(uint64_t now_clk) {
     if (busy_until_clk_ == 0 || now_clk <= busy_until_clk_)
         return;
@@ -205,6 +250,8 @@ void QuetzGpuDevice::retireIfReady(uint64_t now_clk) {
         iface->send(deferred_doorbell_resp_);
         deferred_doorbell_resp_ = nullptr;
     }
+
+    raiseIrqOnRetire();
 
     if (!pending_latencies_.empty()) {
         uint64_t latency = pending_latencies_.front();
@@ -316,6 +363,10 @@ void QuetzGpuDevice::mmioHandlers::handle(StandardMem::Write* write) {
         gpu->arg_regs_[2] = dataToU64(&write->data);
     } else if (offset == REG_ARG3) {
         gpu->arg_regs_[3] = dataToU64(&write->data);
+    } else if (offset == REG_IRQ_ACK) {
+        // W1C-style ack: any nonzero value lowers the completion IRQ line.
+        if (dataToU64(&write->data) != 0)
+            gpu->ackIrq();
     } else if (offset == REG_STATUS || offset == REG_KERNEL_ID ||
                offset == REG_TICKET || offset == REG_RESULT) {
         gpu->stat_wrong_direction_accesses_->addData(1);
@@ -368,6 +419,8 @@ void QuetzGpuDevice::mmioHandlers::handle(StandardMem::Read* read) {
         // balar-free async/completion tests that only check it advances.
         gpu->retireIfReady(now_clk);
         value = gpu->kernel_id_;
+    } else if (offset == REG_IRQ_ACK) {
+        value = gpu->irq_pending_ ? 1 : 0;
     } else if (offset == REG_DOORBELL || offset == REG_LATENCY_OVERRIDE) {
         gpu->stat_wrong_direction_accesses_->addData(1);
         value = 0;
@@ -499,6 +552,7 @@ void QuetzGpuDevice::opFinish() {
         iface->send(op_doorbell_resp_);    // release the guest's blocking doorbell
         op_doorbell_resp_ = nullptr;
     }
+    raiseIrqOnRetire();
     updatePrimaryHold(true);
 }
 

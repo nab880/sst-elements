@@ -52,8 +52,22 @@ public:
           "engine's COMPLETED counter track real kernel completion. Default 0 "
           "(respond immediately; guest polls REG_STATUS). Required when the "
           "'kernel' slot is populated.", "0" },
+        { "irq_line",
+          "(int) Machine interrupt-controller input raised when an op "
+          "retires and lowered on a REG_IRQ_ACK write. Requires the 'irq' "
+          "port to be linked to a QuetzCPU irq_link_%d port. -1 = disabled "
+          "(poll REG_STATUS/REG_KERNEL_ID instead).", "-1" },
+        { "irq_vcpu",
+          "(uint32) IRQ-mailbox row the raise is posted to (single-core "
+          "guests: 0).", "0" },
         { "dma_bytes_per_kernel",
           "(uint64) Synthetic DMA bytes per kernel (P2.b only; must be 0)", "0" })
+
+    SST_ELI_DOCUMENT_PORTS(
+        { "irq",
+          "Optional IRQ-injection link to a QuetzCPU irq_link_%d port "
+          "(quetz.QuetzIrqEvent); used when irq_line >= 0.",
+          { "quetz.QuetzIrqEvent" } })
 
     SST_ELI_DOCUMENT_SUBCOMPONENT_SLOTS(
         { "iface", "MMIO target interface (doorbell/status registers)",
@@ -75,6 +89,9 @@ public:
         { "latency_overrides", "Writes to the latency-override register", "requests", 1 },
         { "doorbell_while_busy",
           "Doorbell writes while BUSY (queued or dropped if queue full)", "requests", 1 },
+        { "irqs_raised",
+          "Completion IRQs raised (0->1 line transitions; irq_line >= 0 only)",
+          "interrupts", 1 },
         { "wrong_direction_accesses",
           "Reads/writes to mapped registers with the wrong direction", "requests", 1 },
         { "bad_offset_accesses",
@@ -119,6 +136,8 @@ protected:
     bool hasOutstandingWork() const;
     void startKernel(uint64_t now_clk, uint64_t latency);
     void updatePrimaryHold(bool allow_ok_to_end);
+    void raiseIrqOnRetire();
+    void ackIrq();
 
     // --- kernel-slot op: DMA state machine around the plugged compute ---------
     void opStartDma();            // on doorbell: begin DMA-read of the input
@@ -146,6 +165,12 @@ protected:
     std::deque<uint64_t> pending_latencies_;
     mmioHandlers* handlers;
     Interfaces::StandardMem* iface;
+
+    // --- completion IRQ (irq_line_ >= 0) ---------------------------------------
+    int64_t   irq_line_;
+    uint32_t  irq_vcpu_;
+    bool      irq_pending_;      // line raised, not yet guest-acked
+    SST::Link* irq_link_;
 
     // --- kernel-slot state -----------------------------------------------------
     QuetzKernel* kernel_;                  // nullptr = pure latency model
@@ -176,6 +201,7 @@ protected:
     Statistic<uint64_t>* stat_status_polls_;
     Statistic<uint64_t>* stat_latency_overrides_;
     Statistic<uint64_t>* stat_doorbell_while_busy_;
+    Statistic<uint64_t>* stat_irqs_raised_;
     Statistic<uint64_t>* stat_wrong_direction_accesses_;
     Statistic<uint64_t>* stat_bad_offset_accesses_;
 
@@ -195,6 +221,9 @@ protected:
     static constexpr uint64_t REG_ARG1             = 0x38;  // W: output buffer addr
     static constexpr uint64_t REG_ARG2             = 0x40;  // W: kernel-defined (FFT: N)
     static constexpr uint64_t REG_ARG3             = 0x48;  // W: kernel-defined
+    // Completion IRQ (irq_line >= 0): R = 1 while the line is raised;
+    // W nonzero = ack (lowers the line). See SIMULATING-YOUR-SYSTEM.md.
+    static constexpr uint64_t REG_IRQ_ACK          = 0x50;
 };
 
 } // namespace Quetz

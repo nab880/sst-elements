@@ -105,6 +105,10 @@ echo "=== ColdFire mcf5208evb accel scale/offset (device-computed, m68k) ==="
 $M68K_CC $M68K_FLAGS coldfire_startup.S coldfire_accel_scale.c -o coldfire_accel_scale
 echo "  -> coldfire_accel_scale"
 
+echo "=== ColdFire mcf5208evb IRQ demo (ISR-driven accel + sensor stream) ==="
+$M68K_CC $M68K_FLAGS coldfire_startup.S coldfire_irq_demo.c -o coldfire_irq_demo
+echo "  -> coldfire_irq_demo"
+
 echo "=== ColdFire mcf5208evb BSP-survival probe catalogue (m68k) ==="
 $M68K_CC $M68K_FLAGS coldfire_startup.S bsp_torture.c -o bsp_torture
 echo "  -> bsp_torture"

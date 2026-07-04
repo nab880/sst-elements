@@ -54,6 +54,7 @@ libquetz_la_SOURCES = \
     quetz_scale_offset_kernel.h \
     quetz_stream_device.cc \
     quetz_stream_device.h \
+    quetz_irq_event.h \
     quetz_mem_access.cc \
     quetz_mem_access.h \
     quetz_mem_issue.cc \
@@ -221,6 +222,9 @@ EXTRA_DIST =	QUETZ_OUTLINE.md \
 	tests/sysmode/firmware/coldfire_gpu_fft.c \
 	tests/sysmode/firmware/coldfire_gpu.c \
 	tests/sysmode/firmware/coldfire_hello.c \
+	tests/sysmode/firmware/coldfire_intc.h \
+	tests/sysmode/firmware/coldfire_irq_demo \
+	tests/sysmode/firmware/coldfire_irq_demo.c \
 	tests/sysmode/firmware/coldfire_monitor.c \
 	tests/sysmode/firmware/coldfire_startup.S \
 	tests/sysmode/firmware/coldfire_system \

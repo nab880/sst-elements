@@ -217,7 +217,14 @@ public:
         { "cache_link_%(vcpu_count)d",
           "Per-vCPU link to the first-level cache or memory hierarchy.", {} },
         { "mmio_link_%(vcpu_count)d",
-          "Per-vCPU link for MMIO (MmioForwardRegionHandler); optional.", {} }
+          "Per-vCPU link for MMIO (MmioForwardRegionHandler); optional.", {} },
+        { "irq_link_%(num)d",
+          "IRQ-injection links from SST MMIO devices (one per device, indices "
+          "0..N-1 with no gaps): a quetz.QuetzIrqEvent raise/lower is forwarded "
+          "to the guest machine's interrupt controller through the QEMU "
+          "bridge's shared-memory IRQ mailbox. Requires QUETZ_IRQ_LINES in the "
+          "environment so the launcher enables bridge-side polling.",
+          { "quetz.QuetzIrqEvent" } }
     )
 
     SST_ELI_DOCUMENT_STATISTICS(
@@ -403,6 +410,8 @@ public:
 private:
     void loadRegionHandlers();
     void loadAcceleratorPorts();
+    void configureIrqLinks();
+    void handleIrqEvent(SST::Event* ev);
     void pollMmioSyncMailbox();
     bool handleMmioSyncCommand(uint32_t vcpu, const QuetzCommand& cmd);
     AcceleratorPort* portForAddr(uint64_t addr) const;
@@ -430,6 +439,7 @@ private:
     std::vector<SST::Interfaces::StandardMem*> mem_ifaces_;
     std::vector<SST::Interfaces::StandardMem*> mmio_ifaces_;
     std::vector<AcceleratorPort*>              accel_ports_;
+    std::vector<SST::Link*>                    irq_links_;
 };
 
 } // namespace Quetz

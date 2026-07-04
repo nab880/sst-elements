@@ -30,6 +30,28 @@ public:
         shared_->mmio_slot[vcpu].value = 0;
     }
 
+    void clearIrqSlots(uint32_t vcpu) {
+        if (vcpu >= QUETZ_MAX_MMIO_VCORES || !shared_)
+            return;
+        for (unsigned l = 0; l < QUETZ_MAX_IRQ_LINES; l++) {
+            shared_->irq_slot[vcpu][l].seq   = 0;
+            shared_->irq_slot[vcpu][l].level = 0;
+        }
+    }
+
+    // Publish an IRQ level change for the QEMU bridge's poll timer. Seqlock
+    // with SST as the only writer (QuetzCPU handles irq_link events serially):
+    // store the level, then release-store the bumped seq so the bridge's
+    // acquire-load of seq guarantees it sees this level or a newer one.
+    void postIrq(uint32_t vcpu, uint32_t line, uint32_t level) {
+        if (vcpu >= QUETZ_MAX_MMIO_VCORES || line >= QUETZ_MAX_IRQ_LINES ||
+            !shared_)
+            return;
+        QuetzIrqSlot& slot = shared_->irq_slot[vcpu][line];
+        slot.level = level;
+        __atomic_store_n(&slot.seq, slot.seq + 1, __ATOMIC_RELEASE);
+    }
+
     // `ready` is the publication flag for `value`: release-store on the producer
     // and acquire-load on the consumer so the pairing is correct on weak-memory
     // (e.g. ARM) hosts, not just x86-TSO.

@@ -51,7 +51,21 @@ public:
           "reports bytes ready NOW and firmware must poll (STATUS==0 && "
           "REG_EOS==0 means 'not ready yet').", "0" },
         { "pace_period",
-          "(UnitAlgebra/string) Refill interval for pace_bytes", "100us" })
+          "(UnitAlgebra/string) Refill interval for pace_bytes", "100us" },
+        { "irq_line",
+          "(int) Machine interrupt-controller input raised when a paced "
+          "refill makes STATUS go 0 -> nonzero (data ready) and lowered on a "
+          "REG_IRQ_ACK write. Requires pacing (pace_bytes > 0) and the 'irq' "
+          "port linked to a QuetzCPU irq_link_%d port. -1 = disabled.", "-1" },
+        { "irq_vcpu",
+          "(uint32) IRQ-mailbox row the raise is posted to (single-core "
+          "guests: 0).", "0" })
+
+    SST_ELI_DOCUMENT_PORTS(
+        { "irq",
+          "Optional IRQ-injection link to a QuetzCPU irq_link_%d port "
+          "(quetz.QuetzIrqEvent); used when irq_line >= 0.",
+          { "quetz.QuetzIrqEvent" } })
 
     SST_ELI_DOCUMENT_SUBCOMPONENT_SLOTS(
         { "iface", "MMIO target interface (stream registers)",
@@ -66,6 +80,9 @@ public:
           "DATA reads before the paced refill made the bytes available", "requests", 1 },
         { "paced_refills", "Pacing ticks that made new bytes available", "ticks", 1 },
         { "rewinds", "CTRL rewind commands", "requests", 1 },
+        { "irqs_raised",
+          "Data-ready IRQs raised (0->1 line transitions; irq_line >= 0 only)",
+          "interrupts", 1 },
         { "wrong_direction_accesses",
           "Reads/writes to mapped registers with the wrong direction", "requests", 1 },
         { "bad_offset_accesses",
@@ -88,6 +105,9 @@ public:
     static constexpr uint64_t REG_SEQ    = 0x10;  // R: bytes consumed so far
     static constexpr uint64_t REG_CTRL   = 0x18;  // W: 1 = rewind to start
     static constexpr uint64_t REG_EOS    = 0x20;  // R: 1 = stream fully consumed
+    // Data-ready IRQ (irq_line >= 0): R = 1 while the line is raised;
+    // W nonzero = ack (lowers the line).
+    static constexpr uint64_t REG_IRQ_ACK = 0x28;
 
 protected:
     ~QuetzStreamDevice() {}
@@ -112,6 +132,8 @@ protected:
     void emergencyShutdown() override {}
 
     bool tickPace(SST::Cycle_t cycle);
+    void raiseDataReadyIrq();
+    void ackIrq();
 
     Output out;
 
@@ -126,6 +148,12 @@ protected:
     uint64_t budget_given_;   // cumulative bytes made available
     uint64_t avail_;          // bytes available and not yet popped
 
+    // Data-ready IRQ (irq_line_ >= 0, paced only).
+    int64_t    irq_line_;
+    uint32_t   irq_vcpu_;
+    bool       irq_pending_;
+    SST::Link* irq_link_;
+
     mmioHandlers* handlers_;
     Interfaces::StandardMem* iface_;
 
@@ -136,6 +164,7 @@ protected:
     Statistic<uint64_t>* stat_not_ready_reads_;
     Statistic<uint64_t>* stat_paced_refills_;
     Statistic<uint64_t>* stat_rewinds_;
+    Statistic<uint64_t>* stat_irqs_raised_;
     Statistic<uint64_t>* stat_wrong_direction_accesses_;
     Statistic<uint64_t>* stat_bad_offset_accesses_;
 };

@@ -205,3 +205,57 @@ Fidelity knobs, if you later want *some* timing realism: per-op latency on the
 accelerator (`REG_LATENCY_OVERRIDE` / `kernel_latency`), the trace-driven
 memory path (per-class latencies on the CPU), and statistics everywhere —
 start functional, tighten selectively.
+
+## Interrupt-driven devices (IRQ injection)
+
+Two cases, and the first needs nothing from quetz:
+
+**QEMU-native device IRQs already work.** The machine's own devices vector
+normally — mcf5208 UART RX interrupts, PIT timer ticks, FEC — so ISR-driven
+code against QEMU peripherals runs unmodified. If your driver takes UART or
+timer interrupts, just program the INTC as on hardware (scaffold below).
+
+**SST-window devices can raise guest IRQs too.** The bridge's MMIO path is
+synchronous (guest-initiated), so completion used to be poll-only; devices
+now drive real interrupt-controller lines through a reverse shared-memory
+mailbox the patched QEMU bridge polls (~10 µs of virtual time, functional
+latency — never assert timing against it). Level semantics: the device
+raises its line on the event of interest and holds it until your ISR writes
+the device's `REG_IRQ_ACK`.
+
+- `quetz.QuetzGpuDevice`: `irq_line=N` raises line N when an op retires
+  (both latency-only and kernel-compute flows); ack at `REG_IRQ_ACK`
+  (0x50, R: raised / W nonzero: ack). Retires while already raised don't
+  re-raise — read `REG_KERNEL_ID` in the ISR if you batch.
+- `quetz.QuetzStreamDevice`: `irq_line=N` raises when a **paced** refill
+  makes STATUS go 0 → nonzero (data ready); ack at `REG_IRQ_ACK` (0x28).
+  Requires `pace_bytes > 0`.
+
+Wiring (see `basic_quetz_coldfire_system.py` with `QUETZ_GPU_IRQ_LINE` /
+`QUETZ_SENSOR_IRQ_LINE` for a worked example):
+
+1. device param `irq_line` = the machine INTC source number (mcf5208evb free
+   sources: 29–35; UARTs own 26–28, PITs 4–5, FEC 36+);
+2. an SST Link from the device's `irq` port to a CPU `irq_link_%d` port
+   (indices contiguous from 0);
+3. `QUETZ_IRQ_LINES=64` in the environment — the launcher passes it to the
+   bridge (`irq-count`), which resolves the machine's `mcf-intc` and starts
+   the poll timer (other machines: `QUETZ_IRQ_INTC_TYPE` names any
+   controller QOM type that exposes qdev GPIO inputs).
+
+Your own device raises lines the same way: send a
+`quetz.QuetzIrqEvent{vcpu, line, level}` on an `irq` port (raise on your
+event, lower when the guest acks a register you define) — see the ~30 lines
+around `raiseIrqOnRetire()` in `quetz_gpu_device.cc`.
+
+**Guest-side scaffold (m68k/ColdFire):** `firmware/coldfire_intc.h` is
+everything needed to take interrupts on a freestanding guest — a `.vectors`
+table the linker script places at the (1 MB-aligned) VBR base, `cf_vbr_init`,
+`cf_irq_install(line, isr)` (vector = 64 + line), `cf_intc_enable(line,
+level)` (ICR + CIMR), and the lost-wakeup-free `cf_wait_until(cond)` pattern
+built on `stop #0x2000`. Declare ISRs `__attribute__((interrupt_handler))`;
+ack the device first, then spin on `cf_intc_pending(line)` until the lower
+propagates (one bridge poll tick) so RTE doesn't re-enter on the stale
+level. `firmware/coldfire_irq_demo.c` (+ `test_quetz_coldfire_irq`) is the
+complete worked example: ISR-driven accelerator completion and data-ready
+sensor drain with zero busy-wait polls.

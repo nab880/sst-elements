@@ -39,3 +39,18 @@ TEST_CASE("QuetzSharedData layout") {
     CHECK(QuetzShmemCmd::QUETZ_CMD_MMIO_READ_REQ == 4);
     CHECK(QuetzShmemCmd::QUETZ_CMD_MMIO_WRITE_REQ == 5);
 }
+
+// The IRQ mailbox layout is shared with the QEMU overlay's C mirror
+// (quetz-docker/qemu-overlay/include/quetz/quetz_ipc_types.h) — these pins
+// catch a drift between the two copies.
+TEST_CASE("QuetzIrqSlot layout") {
+    using SST::Quetz::QuetzIrqSlot;
+    using SST::Quetz::QUETZ_MAX_IRQ_LINES;
+    CHECK(sizeof(QuetzIrqSlot) == 8);
+    CHECK(offsetof(QuetzIrqSlot, seq) == 0);
+    CHECK(offsetof(QuetzIrqSlot, level) == 4);
+    CHECK(QUETZ_MAX_IRQ_LINES == 64);
+    CHECK(offsetof(QuetzSharedData, irq_slot) ==
+          offsetof(QuetzSharedData, mmio_req) +
+          sizeof(QuetzSharedData::mmio_req));
+}
