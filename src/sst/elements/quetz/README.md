@@ -236,13 +236,19 @@ reaches the cache — useful for modelling functional-unit pipeline depth.
 
 Use `setSubComponent("region_handler", ...)` instead of flat `memmap*` params.
 First matching handler wins; put specific regions (UART) before broad filters.
+Region handlers act on the **trace** stream (what reaches memHierarchy);
+addresses matching no handler are forwarded, so cover QEMU-serviced device
+space (e.g. the ColdFire SoC registers) with a `FilteredRegionHandler` or
+the forwarded traffic will miss every MemController range.
 
 | SubComponent | Purpose |
 |---|---|
 | `quetz.ForwardRegionHandler` | Forward traffic to memHierarchy (optional explicit range) |
 | `quetz.FilteredRegionHandler` | Count `filtered_reads` / `filtered_writes`; drop |
-| `quetz.UartRegionHandler` | Capture TX bytes at `tx_offset`; drop |
-| `quetz.MmioForwardRegionHandler` | Forward MMIO range (optional `mmio_link` port) |
+| `quetz.UartRegionHandler` | Capture TX bytes at `tx_offset` into stdout + stats; drop |
+| `quetz.MmioForwardRegionHandler` | Forward the range on `mmio_link_%d` instead of `cache_link_%d` |
+| `quetz.GpuTraceRegionHandler` | Count doorbell/status/other accesses in a GPU-shaped range (`doorbell_offset`, `status_offset`); trace-only |
+| `quetz.TestFinisherRegionHandler` | End the simulation when the guest stores a sentinel (`0x5555` PASS / `0x3333` FAIL) at `start` |
 
 Example (RISC-V virt UART + filtered RAM):
 
@@ -271,10 +277,13 @@ Override a stage per vCPU index, e.g. `cpu.setSubComponent("pipeline_output", "q
 | Port | Description |
 |---|---|
 | `cache_link_0` … `cache_link_N` | Per-vCPU connection to the memory hierarchy. `N = vcpu_count - 1` |
+| `mmio_link_0` … `mmio_link_N` | Per-vCPU MMIO path (optional): traffic matched by an `MmioForwardRegionHandler` and synchronous-MMIO requests go here instead of `cache_link` |
+| `irq_link_0`, `irq_link_1`, … | IRQ-injection links from SST MMIO devices (one per device, contiguous from 0); see § IRQ injection |
 
-Each port should be connected to an L1 cache or directly to a MemController.
-The component also supports subcomponent slots: `memory` (per-vCPU StandardMem),
-`region_handler`, and the four `pipeline_*` stages (see above).
+Each `cache_link` should be connected to an L1 cache or directly to a
+MemController.  The component also supports subcomponent slots: `memory` /
+`mmio` (per-vCPU StandardMem), `region_handler`, `accelerator`, and the four
+`pipeline_*` stages (see above).
 
 ---
 
@@ -300,10 +309,18 @@ All statistics are per-vCPU and labelled with a vCPU index suffix (e.g.
 | `filtered_reads` | requests | Reads to filtered regions (dropped) |
 | `filtered_writes` | requests | Writes to filtered regions (dropped) |
 | `stall_cycles` | cycles | Stall cycles from the execution latency model |
+| `compute_stall_cycles` | cycles | Stall cycles from the compute latency model |
 | `int_compute` | instructions | Non-memory integer ALU instructions (0 unless `detailed_instruction_tracking=1`) |
 | `fp_compute` | instructions | Non-memory scalar FP arithmetic instructions (0 unless enabled) |
 | `vec_compute` | instructions | Non-memory vector/SIMD arithmetic instructions (0 unless enabled) |
 | `branch` | instructions | Branch, jump, call, and return instructions (0 unless enabled) |
+| `mmio_read_requests` / `mmio_write_requests` | requests | Traffic forwarded on `mmio_link` instead of `cache_link` |
+| `mmio_read_latency` / `mmio_write_latency` | cycles | Round-trip latency of `mmio_link` traffic |
+| `mmio_truncated_writes` / `cached_truncated_writes` | requests | Store payloads wider than the IPC data cap (trailing bytes not carried) |
+| `mmio_doorbell_flushes` / `mmio_doorbell_flush_cycles` | requests / cycles | Coherence flushes issued before accelerator doorbells (§ Accelerator ports) |
+| `async_submits` / `async_completions` | requests | Posted offloads submitted / retired via the async aperture |
+| `async_overlap_cycles` | cycles | Cycles a vCPU advanced while its posted offload was in flight |
+| `gpu_doorbell_writes` / `gpu_status_polls` / `gpu_other_reads` / `gpu_other_writes` | requests | `GpuTraceRegionHandler` observation counters |
 
 ---
 
@@ -357,6 +374,36 @@ for i in range(2):
 
 sst.Link("bus_mem").connect((bus, "lowlink0", "1ns"), (mem, "highlink", "1ns"))
 ```
+
+---
+
+## System mode and synchronous MMIO
+
+In **system mode** (`system_mode=1`) QuetzCPU runs `qemu-system-<arch>` with
+your machine flags in `qemu_args` and the firmware ELF as `-kernel` (or
+`-bios` via `system_mode_loader`).  Guest RAM lives in QEMU; SST sees the
+instruction/memory *trace* through the plugin, routed by the region
+handlers.  Two additional mechanisms make guest⇄SST interaction real rather
+than trace-only:
+
+**Synchronous MMIO window (`sst-mmio-bridge`).**  When the environment has
+`QUETZ_MMIO_PAYLOAD=1` and `QUETZ_MMIO_START`/`QUETZ_MMIO_END`, the launcher
+adds a bridge device to the QEMU command line covering that range.  A guest
+load/store in the window *blocks the vCPU* until SST answers: the request
+crosses a shared-memory mailbox, QuetzCPU forwards it as a
+`StandardMem::Read`/`Write` on `mmio_link_%d`, and the response value is
+what the guest register sees.  This is how the MMIO device components below
+are reached.  In **user mode** the same env vars reserve the aperture
+PROT_NONE and route the resulting SIGSEGV to the same mailbox — decks and
+firmware are identical either way.
+
+**SST-backed memory window.**  `QUETZ_SST_WIN_START`/`QUETZ_SST_WIN_END`
+map a second bridge aperture whose contents live in the SST memory
+hierarchy (directory + MemController), not QEMU RAM.  Use it when a device
+DMA and the guest must see the same bytes — e.g. kernel-compute buffers
+(ARG0/ARG1 point into the window).  Because the mailbox carries *values*
+and SST serializes them little-endian, big-endian guests read/write the
+window with plain word accesses and no byte swapping.
 
 ---
 
@@ -477,6 +524,83 @@ patterns:
 To write your own device, copy `quetz_stream_device.{h,cc}` (read-side) or
 `quetz_sink_device.{h,cc}` (write-side); the recipe is in
 SIMULATING-YOUR-SYSTEM.md § Adding your own device.
+
+---
+
+## IRQ injection (SST devices → guest interrupts)
+
+QEMU-native device IRQs (UART, timers, FEC) vector normally with no quetz
+involvement.  SST-side devices raise guest interrupts through a reverse
+shared-memory mailbox (`quetz_ipc_types.h`: one seqlock slot per vCPU row ×
+machine line) that the patched QEMU bridge polls on a virtual-time timer
+and applies to the machine's interrupt controller.  Level semantics: a
+device raises its line on the event of interest and holds it until the
+guest writes the device's `IRQ_ACK` register.  Latency is functional
+(~`QUETZ_IRQ_POLL_NS`, default 10 µs of virtual time) — never assert
+timing against it.
+
+Wiring (worked example: `tests/sysmode/basic_quetz_coldfire_system.py` with
+`QUETZ_GPU_IRQ_LINE`/`QUETZ_SENSOR_IRQ_LINE`; guest side:
+`tests/sysmode/firmware/coldfire_intc.h` + `coldfire_irq_demo.c`):
+
+1. device param `irq_line` = interrupt-controller input number
+   (mcf5208evb: 29–35 are free; UARTs own 26–28, PITs 4–5, FEC 36+);
+2. an SST Link from the device's `irq` port to a CPU `irq_link_%d` port
+   (a `quetz.QuetzIrqEvent{vcpu, line, level}` per level change);
+3. `QUETZ_IRQ_LINES=<n>` in the environment so the launcher enables the
+   bridge's poll (`intc-type` defaults to `mcf-intc`; override with
+   `QUETZ_IRQ_INTC_TYPE` for another controller exposing qdev GPIO inputs).
+
+---
+
+## Accelerator ports (balar and other doorbell accelerators)
+
+The `accelerator` subcomponent slot holds host-side ports that own a
+doorbell aperture inside the synchronous-MMIO window and implement the
+policy a real accelerator needs beyond a plain register file.
+`quetz.BalarAcceleratorPort` (the shipped implementation, driving balar →
+GPGPU-Sim) provides:
+
+- **Coherence flush before doorbell** (`flush_mode=range_from_value`):
+  a doorbell write carries the staged-packet address; the port
+  `FlushAddr(inv)`s `packet_flush_bytes` from it on the cache link before
+  forwarding the doorbell on the mmio link, so the accelerator reads what
+  the CPU wrote.
+- **Posted/async offload** (`async_offload=1`): a separate aperture
+  (`async_doorbell_addr`, registers SUBMIT/TICKET/COMPLETED/STATUS/RESULT)
+  returns a ticket immediately and completes in the background,
+  up to `async_completion_depth` in flight per vCPU — the guest overlaps
+  CPU work with the accelerator and polls the completion counter.
+
+Back-compat: setting the CPU-level `balar_doorbell_addr`/`async_*` params
+with an empty `accelerator` slot auto-creates a default port with those
+values.  The synthetic `QuetzGpuDevice` needs no port — its registers are
+plain synchronous MMIO; use a port when the accelerator sits behind
+staged-packet coherence or posted completion.
+
+---
+
+## Environment variables
+
+The component contract is its SST params; these env vars configure the
+*launcher* (read at QEMU spawn time, same process as the deck):
+
+| Variable | Effect |
+|---|---|
+| `QUETZ_MMIO_PAYLOAD=1` | Enable the synchronous-MMIO aperture (bridge device / user-mode trap) |
+| `QUETZ_MMIO_START` / `QUETZ_MMIO_END` | Guest-physical range of the MMIO window |
+| `QUETZ_SST_WIN_START` / `QUETZ_SST_WIN_END` | Optional SST-backed memory window (system mode only) |
+| `QUETZ_IRQ_LINES` | >0 enables bridge IRQ polling for lines [0, n) |
+| `QUETZ_IRQ_POLL_NS` | Bridge IRQ poll period in virtual-time ns (default 10000) |
+| `QUETZ_IRQ_INTC_TYPE` | QOM type of the interrupt controller (default `mcf-intc`) |
+
+Everything else `QUETZ_*` (e.g. `QUETZ_EXE`, `QUETZ_QEMU`,
+`QUETZ_SENSOR_FILE`, `QUETZ_SINK_FILE`, `QUETZ_GPU_IRQ_LINE`,
+`QUETZ_SENSOR_PACE_BYTES`, `QUETZ_STATS_OUT`, …) is a **deck convention**,
+not a component contract: the shipped decks read them to build the SST
+graph, and each deck's docstring lists the ones it honors.  The test
+helpers (`make_sysmode_env`, `enable_mmio_payload_delivery`) manage them
+for the testsuite.
 
 ---
 
