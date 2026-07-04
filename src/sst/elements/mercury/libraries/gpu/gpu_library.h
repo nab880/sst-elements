@@ -1,0 +1,148 @@
+// Copyright 2009-2026 NTESS. Under the terms
+// of Contract DE-NA0003525 with NTESS, the U.S.
+// Government retains certain rights in this software.
+//
+// Copyright (c) 2009-2026, NTESS
+// All rights reserved.
+//
+// Portions are copyright of other developers:
+// See the file CONTRIBUTORS.TXT in the top level directory
+// of the distribution for more information.
+//
+// This file is part of the SST software package. For license
+// information, see the LICENSE file in the top level directory of the
+// distribution.
+
+#pragma once
+
+#include <mercury/operating_system/libraries/library.h>
+#include <mercury/common/timestamp.h>
+#include <mercury/libraries/gpu/gpu_api.h>
+#include <cstdint>
+#include <map>
+#include <set>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace SST {
+namespace Hg {
+
+/**
+ * Roofline sst_hg_cuda model: kernels and memcpys charge modeled time; streams
+ * are independent busy-until timelines (default stream is a legacy barrier).
+ */
+class GpuLibrary : public GpuComputeAPI, public Library
+{
+ public:
+  SST_ELI_REGISTER_DERIVED(
+    Library,
+    GpuLibrary,
+    "gpulibrary",
+    "GpuLibrary",
+    SST_ELI_ELEMENT_VERSION(1,0,0),
+    "models GPU kernel and transfer time with a roofline model")
+
+  GpuLibrary(SST::Params& params, App* parent);
+
+  ~GpuLibrary() override;
+
+  void* malloc(uint64_t bytes) override;
+  void free(void* dptr) override;
+  int isDevicePtr(const void* p) override;
+  void memcpy(void* dst, const void* src, uint64_t bytes,
+              int kind, void* stream) override;
+  void launch(const char* kernelName,
+              uint32_t gx, uint32_t gy, uint32_t gz,
+              uint32_t bx, uint32_t by, uint32_t bz,
+              uint64_t shmemBytes, void* stream,
+              uint64_t flops, uint64_t intops,
+              uint64_t bytesRead, uint64_t bytesWritten) override;
+  void* streamCreate() override;
+  void streamDestroy(void* s) override;
+  void streamSync(void* s) override;
+  void* eventCreate() override;
+  void eventRecord(void* evt, void* stream) override;
+  void eventSync(void* evt) override;
+  float eventElapsedMs(void* start, void* stop) override;
+  void deviceSync() override;
+  int getDeviceCount() override;
+  void setDevice(int dev) override;
+
+ private:
+  // Charge `seconds` of GPU work on `stream`. The default (NULL) stream keeps
+  // legacy ordering (serializes with every other stream) but only advances the
+  // device timeline; it blocks the host thread only when `blocking` is set
+  // (synchronous cudaMemcpy) so kernel launches overlap host work.
+  void enqueue(void* stream, double seconds, bool blocking);
+  // Block the host thread until simulated time reaches `t` (no-op if past).
+  void blockUntil(Timestamp t);
+  // The latest cursor over the default and all explicit streams.
+  Timestamp maxCursor() const;
+  // The busy-until cursor for a stream handle (default stream for 0).
+  Timestamp& cursorFor(void* stream);
+
+  // Roofline kernel time plus wave-quantization penalty (WS1-1b).
+  double kernelTime(double computePeak, uint64_t blocks,
+                    uint64_t threadsPerBlock, uint64_t flopsPerThread,
+                    uint64_t intopsPerThread, uint64_t bytesReadPerThread,
+                    uint64_t bytesWrittenPerThread) const;
+
+  // Occupancy cap: thread budget per SM, capped by max_blocks_per_sm.
+  uint64_t blocksPerSm(uint64_t threadsPerBlock) const;
+
+  // Optional gpu_kernel_times JSON; log-log interpolation, roofline fallback.
+  void loadCalibration(const std::string& path);
+  double kernelTimeFromTable(const std::string& name, uint64_t totalThreads,
+                             bool& found) const;
+  void warnTableMiss(const std::string& name);
+
+  // Transfer time: D2D uses HBM bandwidth; other kinds use PCIe latency + bandwidth.
+  double transferTime(uint64_t bytes, int kind) const;
+
+  // Roofline params (SI base units: flop/s, byte/s, seconds), read from params.
+  double peak_flops_;
+  double tensor_peak_flops_;            // op-class peak for tensor-core kernels
+  std::set<std::string> tensor_kernels_; // mangled names charged at tensor peak
+  double mem_bandwidth_;
+  double pcie_latency_;
+  double pcie_bandwidth_;
+  double launch_overhead_;
+
+  // Wave-quantization params (WS1-1b). sm_count_ == 0 disables the penalty.
+  uint64_t sm_count_;
+  uint64_t max_threads_per_sm_;
+  uint64_t max_blocks_per_sm_;
+
+  // Capacity model. gpu_mem_capacity_ == 0 disables enforcement (report only).
+  double gpu_mem_capacity_;
+  bool mem_fatal_;
+
+  // Calibration table: mangled kernel name -> samples sorted by thread count.
+  // Empty (and table_loaded_ false) unless gpu_kernel_times names a file.
+  std::map<std::string, std::vector<std::pair<double, double>>> table_;
+  bool table_loaded_;
+  std::set<std::string> warned_; // kernels already warned as table-missing
+
+  // Cumulative modeled GPU busy time (sums across streams, not wall time).
+  double total_gpu_time_;
+
+  // Per-stream busy-until cursors; events capture a stream tail at record time.
+  Timestamp default_until_;
+  std::map<void*, Timestamp> streams_;
+  std::map<void*, Timestamp> events_;
+
+  // Device-pointer cookie bump-allocator in a reserved high address range.
+  uint64_t cookie_next_;
+  uint64_t cookie_end_;
+
+  // Shared handle id space for streams and events (distinct, never dereferenced).
+  uint64_t next_handle_;
+
+  // Accounting (reported in the destructor; see the .cc).
+  uint64_t launch_count_;
+  uint64_t memcpy_count_;
+};
+
+} // end namespace Hg
+} // end namespace SST
