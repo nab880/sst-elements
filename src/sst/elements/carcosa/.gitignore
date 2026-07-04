@@ -1,4 +1,5 @@
 tests/pingpong
+tests/fourstate
 
 tests/*.log
 tests/stdout-*
