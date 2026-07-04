@@ -165,10 +165,12 @@ static ssize_t sstmaci_cq_read(bool blocking,
     }
     // Drive any outstanding non-blocking FI_COLLECTIVE targeting this CQ, on the
     // application thread, so its completion lands in rq->progress below. No-op
-    // unless a collective targets this CQ (see sumi_coll.cc).
-    if (rq->progress.items.empty()) {
-      sumi_progress_collectives(tport, cq_impl->id, blocking, timeout_s);
-    }
+    // unless a collective targets this CQ (see sumi_coll.cc). Always pump so a
+    // steady stream of unrelated completions can't starve a pending collective;
+    // only block on the progress CQ when there is nothing already available to
+    // return, so a non-empty queue still returns promptly.
+    bool have_items = !rq->progress.items.empty();
+    sumi_progress_collectives(tport, cq_impl->id, blocking && !have_items, timeout_s);
     SST::Iris::sumi::Message* msg = rq->progress.front(blocking, timeout_s);
     if (!msg){
       if (!blocking) {
