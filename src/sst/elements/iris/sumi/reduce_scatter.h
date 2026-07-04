@@ -102,7 +102,7 @@ class HalvingReduceScatter :
   }
 
   std::string toString() const override {
-    return "sumi allreduce";
+    return "sumi reduce_scatter";
   }
 
   DagCollectiveActor* newActor() const override {
