@@ -360,6 +360,126 @@ sst.Link("bus_mem").connect((bus, "lowlink0", "1ns"), (mem, "highlink", "1ns"))
 
 ---
 
+## MMIO device components
+
+Three shipped SST-side devices implement guest-visible register files.  In
+system mode they sit behind the synchronous-MMIO window (see § System mode);
+the guest reads/writes their registers like any memory-mapped peripheral and
+the SST component's answer is what the guest sees.  All three follow the
+same conventions: 8-byte register stride, values ≤32 bits so 32-bit guests
+read them whole, and *numeric* byte packing (`b0 | b1<<8 | b2<<16 | b3<<24`)
+so identical firmware is correct on big-endian (ColdFire) and little-endian
+(RISC-V) guests.  Each register map below is authoritative in the named
+header.
+
+### `quetz.QuetzGpuDevice` — generic accelerator
+
+A doorbell/status accelerator.  With the `kernel` slot **empty** it is a
+pure latency model: a doorbell write starts a BUSY window
+(`kernel_latency` cycles, or the value last written to
+`REG_LATENCY_OVERRIDE`), STATUS shows busy/idle, KERNEL_ID counts
+completions.  With a `kernel` subcomponent loaded the device really
+computes: DMA-read the input from `REG_ARG0`, run the kernel, hold BUSY for
+the kernel's modeled latency, DMA-write the result to `REG_ARG1`, and only
+then release the (blocking) doorbell.
+
+Register map (`quetz_gpu_device.h`):
+
+| offset | reg | dir | behavior |
+|-------:|-----|-----|----------|
+| 0x00 | DOORBELL | W | submit an op (blocking when `doorbell_blocking=1`) |
+| 0x08 | STATUS | R | 1 = busy (kernel ops: busy for the whole doorbell-to-writeback lifetime) |
+| 0x10 | KERNEL_ID | R | completed-op counter |
+| 0x18 | LATENCY_OVERRIDE | W | cycles for the *next* op (0 = use default/kernel opinion) |
+| 0x20 | TICKET | R | last submit ticket (async poll contract) |
+| 0x28 | RESULT | R | completed-op latch (mirrors KERNEL_ID on the synthetic device) |
+| 0x30–0x48 | ARG0–ARG3 | W | kernel operands: ARG0 = input addr, ARG1 = output addr, ARG2/ARG3 kernel-defined |
+| 0x50 | IRQ_ACK | R/W | R: completion line raised; W nonzero: ack (lower the line) |
+
+Key parameters: `base_addr`, `mmio_size`, `kernel_latency`,
+`doorbell_blocking` (required =1 when a kernel is loaded), `irq_line` /
+`irq_vcpu` (completion IRQ, −1 = disabled).  Slots: `iface` (MMIO target,
+`memHierarchy.standardInterface`), `mem_iface` (memory initiator for kernel
+DMA), `kernel` (`SST::Quetz::QuetzKernel`).  Port: `irq` (see § IRQ
+injection).  Stats: `kernels_launched`, `busy_cycles`, `doorbell_writes`,
+`status_polls`, `latency_overrides`, `doorbell_while_busy`, `irqs_raised`,
+`wrong_direction_accesses`, `bad_offset_accesses`.
+
+Shipped kernels for the `kernel` slot (write your own by subclassing
+`QuetzKernel` — two methods, `quetz_kernel_api.h`; tutorial in
+SIMULATING-YOUR-SYSTEM.md § Adding your own kernel):
+
+| kernel | data | ARG2 | ARG3 | latency param |
+|---|---|---|---|---|
+| `quetz.FFTKernel` | LE float32 cfloat[N], radix-2 | N | — | `fft_latency_coeff` (default 20) × N·log₂N |
+| `quetz.ScaleOffsetKernel` | LE s16[N], sat16(s·scale+offset) | N | scale \| offset<<16 | `latency_coeff` (default 4) × N |
+
+### `quetz.QuetzStreamDevice` — recorded-data feed (stimulus in)
+
+Replays a binary fixture file (`stream_file`) through a FIFO register
+interface — sensors, telemetry, CAN logs, any recorded byte stream.
+Optionally paced: with `pace_bytes`/`pace_period` set, STATUS fills over
+simulated time and firmware polling/timeout logic gets exercised; a paced
+refill that makes STATUS go 0 → nonzero can raise a data-ready IRQ
+(`irq_line`).
+
+Register map (`quetz_stream_device.h`):
+
+| offset | reg | dir | behavior |
+|-------:|-----|-----|----------|
+| 0x00 | STATUS | R | bytes ready now (unpaced: all remaining) |
+| 0x08 | DATA | R | pop up to 4 bytes, numerically packed |
+| 0x10 | SEQ | R | bytes consumed so far |
+| 0x18 | CTRL | W | 1 = rewind (paced: restarts the refill budget) |
+| 0x20 | EOS | R | 1 = stream fully consumed |
+| 0x28 | IRQ_ACK | R/W | R: data-ready line raised; W nonzero: ack |
+
+Stats: `data_reads`, `bytes_delivered`, `status_polls`, `underruns`,
+`not_ready_reads`, `paced_refills`, `rewinds`, `irqs_raised`,
+`wrong_direction_accesses`, `bad_offset_accesses`.
+
+### `quetz.QuetzSinkDevice` — capture file (response out)
+
+The write-side mirror of the stream device: the guest pushes bytes and SST
+captures them to `sink_file` for host-side assertion (byte-exact diff
+against a golden or computed expectation — `assert_sink_equals` in
+`tests/quetz_test_helpers.py`).  A DATA write pushes exactly the store's
+width (8/16/32-bit store → 1/2/4 bytes, value unpacked low-byte-first), so
+trailing partial words need no extra register.  The file is written on CTRL
+flush and unconditionally at simulation end; `max_bytes` caps runaway
+captures (excess dropped + counted).
+
+Register map (`quetz_sink_device.h`):
+
+| offset | reg | dir | behavior |
+|-------:|-----|-----|----------|
+| 0x00 | STATUS | R | bytes accepted so far (== SEQ) |
+| 0x08 | DATA | W | push write-size bytes |
+| 0x10 | SEQ | R | bytes accepted so far |
+| 0x18 | CTRL | W | 1 = flush to file now; 2 = truncate/restart capture |
+
+Stats: `bytes_accepted`, `flushes`, `truncates`, `dropped_bytes`,
+`wrong_direction_accesses`, `bad_offset_accesses`.
+
+### Wiring devices into one window
+
+Multiple devices share one bridge window, routed by address.  Two shipped
+patterns:
+
+- **Bus** (simple, the system demo): CPU `mmio_link_0` → `memHierarchy.Bus`
+  `highlink0`; each device's `iface` on a `lowlink%d` with a disjoint
+  `base_addr` inside the window — `tests/sysmode/basic_quetz_coldfire_system.py`.
+- **NoC** (when a device also initiates memory traffic, e.g. kernel DMA):
+  every interface gets a `memHierarchy.MemNIC` on a `merlin.hr_router`;
+  MMIO targets advertise their address region, initiators route by range —
+  `tests/sysmode/basic_quetz_gpu_compute_coldfire.py`.
+
+To write your own device, copy `quetz_stream_device.{h,cc}` (read-side) or
+`quetz_sink_device.{h,cc}` (write-side); the recipe is in
+SIMULATING-YOUR-SYSTEM.md § Adding your own device.
+
+---
+
 ## RVV (RISC-V Vector Extension)
 
 QEMU user-mode supports RVV out of the box for any binary compiled with
