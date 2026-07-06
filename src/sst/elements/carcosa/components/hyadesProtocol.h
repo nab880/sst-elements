@@ -40,6 +40,7 @@ namespace HyadesAbi {
     static constexpr uint64_t kRegionSize     = 0xC0;  // W: staged region size
     static constexpr uint64_t kRegionCommit   = 0x100; // W: commit staged region into slot N
     static constexpr uint64_t kActionChecksum = 0x140; // W: per-frame action checksum
+    static constexpr uint64_t kActionToken    = 0x180; // W: per-frame decoded-action token
 
     static constexpr int      kExitSentinel   = -1;   // command value meaning "end run"
 }

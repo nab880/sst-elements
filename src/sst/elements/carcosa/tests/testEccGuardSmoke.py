@@ -1,4 +1,13 @@
-"""Fast smoke test for Carcosa.EccGuard: miranda STREAM -> L1 -> EccGuard -> memCtrl."""
+"""Fast smoke test for carcosa.EccGuard: CarcosaCPU -> Hali -> L1 -> EccGuard -> memCtrl.
+
+Knobs come from the environment (ECC_SCHEME, ECC_BER, ECC_*_LATENCY_PS,
+ECC_KERNEL_POLICY) so the same config doubles as a quick spot-check driver.
+Pass = sst exits 0 and the EccGuard outcome tables print.
+
+Traffic comes from carcosa.CarcosaCPU rather than miranda: the local
+build-sst-carcosa.sh tree compiles only the VLA subset of sst-elements
+(carcosa, memHierarchy, vanadis, merlin, mmu), so miranda is not available.
+"""
 import os
 import sst
 
@@ -11,19 +20,11 @@ ecc_kernel_policy  = os.getenv("ECC_KERNEL_POLICY", "")
 
 sst.setStatisticLoadLevel(6)
 
-cpu = sst.Component("cpu", "miranda.BaseCPU")
-cpu.addParams({
-    "verbose": 0,
-    "clock": "2.4GHz",
-    "printStats": 1,
-})
-gen = cpu.setSubComponent("generator", "miranda.STREAMBenchGenerator")
-gen.addParams({
-    "verbose": 0,
-    "n": 1000,
-    "operandwidth": 16,
-})
-
+# Force memHierarchy library load BEFORE any Carcosa component is constructed.
+# On macOS dyld uses a flat-namespace lookup for SimpleMemBackendConvertor's
+# RTTI symbol, which is exported by libmemHierarchy.so. If libCarcosa.so loads
+# first that lookup fails. Instantiating any memHierarchy component first
+# brings memHierarchy.so into dyld's namespace and unblocks the lookup.
 l1 = sst.Component("l1cache", "memHierarchy.Cache")
 l1.addParams({
     "access_latency_cycles": "2",
@@ -36,15 +37,37 @@ l1.addParams({
     "cache_size": "32KB",
 })
 
+cpu = sst.Component("cpu", "carcosa.CarcosaCPU")
+cpu.addParams({
+    "clock":          "2.4GHz",
+    "memFreq":        "2",
+    "rngseed":        "29",
+    "memSize":        "1MiB",
+    "verbose":        0,
+    "maxOutstanding": 8,
+    "opCount":        1000,
+    "reqsPerIssue":   1,
+    "write_freq":     30,
+    "read_freq":      70,
+})
+iface = cpu.setSubComponent("memory", "memHierarchy.standardInterface")
+
+hali = sst.Component("hali", "carcosa.Hali")
+hali.addParams({
+    "intercept_ranges": "0xBEEF0000,4096",
+    "verbose":          "false",
+})
+
 memctrl = sst.Component("memory", "memHierarchy.MemController")
 memctrl.addParams({
     "clock": "1GHz",
-    "addr_range_end": 4096 * 1024 * 1024 - 1,
+    "addr_range_end": 1 * 1024 * 1024 - 1,
+    "backing": "malloc",
 })
 backend = memctrl.setSubComponent("backend", "memHierarchy.simpleMem")
 backend.addParams({
     "access_time": "100 ns",
-    "mem_size": "4096MiB",
+    "mem_size": "1MiB",
 })
 
 ecc = sst.Component("ecc_guard", "carcosa.EccGuard")
@@ -62,11 +85,12 @@ ecc.addParams({
 })
 ecc.enableAllStatistics()
 
-link_cpu_l1 = sst.Link("link_cpu_l1")
-link_cpu_l1.connect((cpu, "cache_link", "1000ps"), (l1, "highlink", "1000ps"))
+sst.Link("cpu_hali_ctrl").connect((cpu, "haliToCPU", "1ns"), (hali, "cpu", "1ns"))
+sst.Link("iface_hali").connect((iface, "lowlink", "1ns"), (hali, "highlink", "1ns"))
+sst.Link("hali_l1").connect((hali, "lowlink", "1ns"), (l1, "highlink", "1ns"))
+sst.Link("l1_ecc").connect((l1, "lowlink", "50ps"), (ecc, "highlink", "50ps"))
+sst.Link("ecc_mem").connect((ecc, "lowlink", "50ps"), (memctrl, "highlink", "50ps"))
 
-link_l1_ecc = sst.Link("link_l1_ecc")
-link_l1_ecc.connect((l1, "lowlink", "50ps"), (ecc, "highlink", "50ps"))
-
-link_ecc_mem = sst.Link("link_ecc_mem")
-link_ecc_mem.connect((ecc, "lowlink", "50ps"), (memctrl, "highlink", "50ps"))
+# No stop-at: the CPU votes to end the sim once opCount drains, so a stalled
+# run hangs visibly (CI timeout) instead of hitting a deadline that still
+# prints plausible-looking outcome tables and exits 0.

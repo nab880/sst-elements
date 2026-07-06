@@ -35,7 +35,17 @@
 // publication-grade CSVs with unsafe_action_rate identically zero
 // regardless of BER.
 //
-// "safety_violated" is true if the frame was dropped or argmax_changed.
+// "action_changed" is the decoded-action metric: it compares
+// FrameRecord::actionToken (the workload's quantized-action fingerprint
+// published via HYADES_ACTION_TOKEN) against the golden token. The raw
+// checksum trips on ANY byte divergence -- a mantissa-LSB flip that a real
+// actuator would never feel -- so when tokens are available they drive the
+// headline divergence signal (unsafe_action_rate, O3 vs O4) and the
+// checksum is kept as a debug oracle. Frames or goldens without tokens
+// fall back to the checksum comparison, preserving legacy behavior.
+//
+// "safety_violated" is true if the frame was dropped, diverged (decoded
+// metric when available, else checksum), or carried an escape.
 //
 // This is intentionally lightweight: a real VLA deployment would replace
 // the checksum with its own action-vector hash and the golden log with a
@@ -66,7 +76,7 @@ public:
 
     SST_ELI_DOCUMENT_PARAMS(
         {"state_key",          "Required. PipelineStateRegistry<PipelineStateBase> key whose ::frames vector this scorer ingests at finish().", ""},
-        {"golden_log",         "Optional path to a CSV (pipeline_cycle,kernel_at_close,action_checksum) whose checksums are treated as fault-free truth. Each line provides the golden checksum for the matching cycle. If empty, every frame's argmax_changed is reported as 0 (used by the BER=0 emit-golden pass).", ""},
+        {"golden_log",         "Optional path to a CSV (pipeline_cycle,kernel_at_close,action_checksum[,action_token]) whose checksums/tokens are treated as fault-free truth. Each line provides the golden values for the matching cycle. If empty, every frame's argmax_changed/action_changed is reported as 0 (used by the BER=0 emit-golden pass).", ""},
         {"golden_required",    "If true (default) and golden_log is set but cannot be opened or contains no entries, fatal at setup() instead of silently scoring every frame as not-argmax-changed. Set to false only for self-replay sanity checks.", "true"},
         {"emit_golden",        "If true and golden_log is empty, dump the observed (cycle,kernel,checksum) trace to STDOUT under a '=== Action Scorer Golden Emit ===' block so a baseline run can produce the file the comparison runs need.", "false"},
         {"verbose",            "Enable verbose output.", "false"})
@@ -74,7 +84,8 @@ public:
     SST_ELI_DOCUMENT_STATISTICS(
         {"frames_total",        "Frames recorded in PipelineStateBase::frames.", "count", 1},
         {"frames_dropped",      "Frames flagged dropped (DUE-on-frame).",        "count", 1},
-        {"frames_argmax_diff",  "Frames whose action_checksum differs from golden.", "count", 1},
+        {"frames_argmax_diff",  "Frames whose action_checksum differs from golden (debug oracle).", "count", 1},
+        {"frames_action_diff",  "Frames whose decoded-action token differs from golden (headline divergence metric; falls back to checksum when tokens are unavailable).", "count", 1},
         {"frames_safety_violated", "Frames flagged unsafe (dropped OR argmax_diff).", "count", 1},
         {"frames_outcome_O1", "Frames classified O1 (clean).", "count", 1},
         {"frames_outcome_O2", "Frames classified O2 (late-but-correct).", "count", 1},
@@ -92,6 +103,8 @@ private:
         int      pipelineCycle;
         int      kernelAtClose;
         uint64_t checksum;
+        uint64_t token    = 0;     // decoded-action token; optional 4th column
+        bool     hasToken = false; // false for legacy 3-column goldens
     };
 
     void loadGoldenLog();
@@ -110,6 +123,7 @@ private:
     Statistics::Statistic<uint64_t>* stat_frames_total_       = nullptr;
     Statistics::Statistic<uint64_t>* stat_frames_dropped_     = nullptr;
     Statistics::Statistic<uint64_t>* stat_frames_argmax_diff_ = nullptr;
+    Statistics::Statistic<uint64_t>* stat_frames_action_diff_ = nullptr;
     Statistics::Statistic<uint64_t>* stat_frames_unsafe_      = nullptr;
     Statistics::Statistic<uint64_t>* stat_frames_o1_          = nullptr;
     Statistics::Statistic<uint64_t>* stat_frames_o2_          = nullptr;

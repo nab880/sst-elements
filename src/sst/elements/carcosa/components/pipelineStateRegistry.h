@@ -124,6 +124,12 @@ struct PipelineStateBase {
         std::string attributingKernelName;
         bool        dropped            = false;
         uint64_t    actionChecksum     = 0;
+        // Decoded-action token published via HYADES_ACTION_TOKEN: a
+        // fingerprint of the quantized (tolerance-binned) action the
+        // actuator would execute, insensitive to sub-bin numerical noise.
+        // 0 = workload did not publish one (scorer falls back to the
+        // checksum metric).
+        uint64_t    actionToken        = 0;
         uint64_t    cumulativeEscapes  = 0;
         uint64_t    cumulativeFlips    = 0;
         uint64_t    simTimePs          = 0;

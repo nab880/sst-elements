@@ -37,6 +37,7 @@ ActionScorer::ActionScorer(ComponentId_t id, Params& params)
     stat_frames_total_       = registerStatistic<uint64_t>("frames_total");
     stat_frames_dropped_     = registerStatistic<uint64_t>("frames_dropped");
     stat_frames_argmax_diff_ = registerStatistic<uint64_t>("frames_argmax_diff");
+    stat_frames_action_diff_ = registerStatistic<uint64_t>("frames_action_diff");
     stat_frames_unsafe_      = registerStatistic<uint64_t>("frames_safety_violated");
     stat_frames_o1_          = registerStatistic<uint64_t>("frames_outcome_O1");
     stat_frames_o2_          = registerStatistic<uint64_t>("frames_outcome_O2");
@@ -102,6 +103,12 @@ void ActionScorer::loadGoldenLog() {
             e.pipelineCycle = std::stoi(parts[0]);
             e.kernelAtClose = std::stoi(parts[1]);
             e.checksum      = std::stoull(parts[2]);
+            // Optional 4th column: decoded-action token (goldens emitted
+            // before the token metric existed have 3 columns).
+            if (parts.size() >= 4 && !parts[3].empty()) {
+                e.token    = std::stoull(parts[3]);
+                e.hasToken = true;
+            }
         } catch (...) {
             out_->output("ActionScorer '%s': skipping malformed golden_log line %d: '%s'\n",
                          getName().c_str(), line_no, line.c_str());
@@ -136,18 +143,19 @@ void ActionScorer::finish() {
         return;
     }
 
-    // Index golden by (pipelineCycle, kernelAtClose) -> checksum so the lookup
-    // tolerates frames being scored out of order across multi-cycle runs.
-    std::map<std::pair<int,int>, uint64_t> golden_idx;
+    // Index golden by (pipelineCycle, kernelAtClose) so the lookup tolerates
+    // frames being scored out of order across multi-cycle runs.
+    std::map<std::pair<int,int>, GoldenEntry> golden_idx;
     for (const auto& g : golden_) {
-        golden_idx[{g.pipelineCycle, g.kernelAtClose}] = g.checksum;
+        golden_idx[{g.pipelineCycle, g.kernelAtClose}] = g;
     }
 
     out_->output("\n=== Action Scorer %s Per-Frame Trace ===\n", getName().c_str());
     out_->output("pipeline_cycle,kernel_at_close,kernel_name,"
                  "attributing_kernel_id,attributing_kernel_name,dropped,"
                  "escapes_in_frame,flips_in_frame,action_checksum,"
-                 "golden_checksum,argmax_changed,safety_violated,outcome_class,"
+                 "golden_checksum,argmax_changed,action_token,golden_token,"
+                 "action_changed,safety_violated,outcome_class,"
                  "sim_time_ps\n");
 
     uint64_t prev_escapes = 0;
@@ -155,12 +163,13 @@ void ActionScorer::finish() {
     uint64_t total        = 0;
     uint64_t dropped      = 0;
     uint64_t argmax_diff  = 0;
+    uint64_t action_diff  = 0;
     uint64_t unsafe       = 0;
     uint64_t o1 = 0, o2 = 0, o3 = 0, o4 = 0;
 
     std::ostringstream golden_emit;
     if (emit_golden_) {
-        golden_emit << "pipeline_cycle,kernel_at_close,action_checksum\n";
+        golden_emit << "pipeline_cycle,kernel_at_close,action_checksum,action_token\n";
     }
 
     for (const auto& fr : s->frames) {
@@ -171,27 +180,41 @@ void ActionScorer::finish() {
         prev_escapes = fr.cumulativeEscapes;
         prev_flips   = fr.cumulativeFlips;
 
-        uint64_t golden_cs = 0;
-        bool has_golden = false;
+        uint64_t golden_cs  = 0;
+        uint64_t golden_tok = 0;
+        bool has_golden       = false;
+        bool has_golden_token = false;
         auto it = golden_idx.find({fr.pipelineCycle, fr.kernelAtClose});
         if (it != golden_idx.end()) {
-            golden_cs = it->second;
-            has_golden = true;
+            golden_cs        = it->second.checksum;
+            golden_tok       = it->second.token;
+            has_golden       = true;
+            has_golden_token = it->second.hasToken;
         }
 
         bool argmax_changed = has_golden && (golden_cs != fr.actionChecksum);
+        // Decoded-action divergence: only meaningful when both sides carry a
+        // token (frame token 0 = workload never published one). Falls back
+        // to the checksum oracle otherwise, preserving legacy scoring.
+        bool token_avail    = has_golden_token && fr.actionToken != 0;
+        bool action_changed = token_avail && (golden_tok != fr.actionToken);
+        bool divergence     = token_avail ? action_changed : argmax_changed;
         bool had_escape     = escapes_in > 0;
-        // Outcome taxonomy uses drops/argmax/escape; unsafe_action_rate is
-        // reserved for silent corruption (escape or argmax), not DUE drops.
-        bool safety_violated = fr.dropped || argmax_changed || had_escape;
-        bool unsafe_action   = argmax_changed || had_escape;
+        // Outcome taxonomy uses drops/divergence/escape; unsafe_action_rate
+        // is reserved for silent corruption, not DUE drops. With tokens
+        // available, an escape that changed the checksum but not the decoded
+        // action classifies O4 (silent-benign) and does NOT count as unsafe;
+        // without tokens benign and harmful escapes are indistinguishable, so
+        // the legacy conservative escape-or-checksum rule stands.
+        bool safety_violated = fr.dropped || divergence || had_escape;
+        bool unsafe_action   = divergence || (!token_avail && had_escape);
 
         int outcome_class = 1;
         if (safety_violated) {
-            if (fr.dropped && !argmax_changed) outcome_class = 2;
-            else if (argmax_changed)           outcome_class = 3;
-            else if (had_escape)               outcome_class = 4;
-            else                               outcome_class = 2;
+            if (fr.dropped && !divergence) outcome_class = 2;
+            else if (divergence)           outcome_class = 3;
+            else if (had_escape)           outcome_class = 4;
+            else                           outcome_class = 2;
         }
 
         const char* kname = fr.kernelAtCloseName.empty()
@@ -210,13 +233,16 @@ void ActionScorer::finish() {
         const char* aname = attr_name.empty() ? "UNKNOWN" : attr_name.c_str();
 
         out_->output("%d,%d,%s,%d,%s,%d,%" PRIu64 ",%" PRIu64
-                     ",%" PRIu64 ",%" PRIu64 ",%d,%d,%s,%" PRIu64 "\n",
+                     ",%" PRIu64 ",%" PRIu64 ",%d,%" PRIu64 ",%" PRIu64
+                     ",%d,%d,%s,%" PRIu64 "\n",
                      fr.pipelineCycle, fr.kernelAtClose, kname,
                      attr_id, aname,
                      fr.dropped ? 1 : 0,
                      escapes_in, flips_in,
                      fr.actionChecksum, golden_cs,
                      argmax_changed ? 1 : 0,
+                     fr.actionToken, golden_tok,
+                     action_changed ? 1 : 0,
                      safety_violated ? 1 : 0,
                      outcomeClassLabel(outcome_class),
                      fr.simTimePs);
@@ -224,12 +250,14 @@ void ActionScorer::finish() {
         if (emit_golden_) {
             golden_emit << fr.pipelineCycle << ","
                         << fr.kernelAtClose << ","
-                        << fr.actionChecksum << "\n";
+                        << fr.actionChecksum << ","
+                        << fr.actionToken << "\n";
         }
 
         ++total;
         if (fr.dropped)        ++dropped;
         if (argmax_changed)    ++argmax_diff;
+        if (action_changed)    ++action_diff;
         if (unsafe_action)     ++unsafe;
         switch (outcome_class) {
         case 1: ++o1; break;
@@ -245,6 +273,7 @@ void ActionScorer::finish() {
     if (stat_frames_total_)       stat_frames_total_->addData(total);
     if (stat_frames_dropped_)     stat_frames_dropped_->addData(dropped);
     if (stat_frames_argmax_diff_) stat_frames_argmax_diff_->addData(argmax_diff);
+    if (stat_frames_action_diff_) stat_frames_action_diff_->addData(action_diff);
     if (stat_frames_unsafe_)      stat_frames_unsafe_->addData(unsafe);
     if (stat_frames_o1_)          stat_frames_o1_->addData(o1);
     if (stat_frames_o2_)          stat_frames_o2_->addData(o2);
@@ -252,15 +281,18 @@ void ActionScorer::finish() {
     if (stat_frames_o4_)          stat_frames_o4_->addData(o4);
 
     out_->output("=== Action Scorer %s Summary ===\n", getName().c_str());
-    out_->output("frames_total,frames_dropped,frames_argmax_diff,frames_unsafe,"
+    out_->output("frames_total,frames_dropped,frames_argmax_diff,frames_action_diff,"
+                 "frames_unsafe,"
                  "frames_outcome_O1,frames_outcome_O2,frames_outcome_O3,frames_outcome_O4,"
-                 "drop_rate,argmax_change_rate,unsafe_action_rate\n");
+                 "drop_rate,argmax_change_rate,action_change_rate,unsafe_action_rate\n");
     double dr = total ? static_cast<double>(dropped)     / total : 0.0;
     double ar = total ? static_cast<double>(argmax_diff) / total : 0.0;
+    double tr = total ? static_cast<double>(action_diff) / total : 0.0;
     double ur = total ? static_cast<double>(unsafe)      / total : 0.0;
-    out_->output("%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%"
-                 PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%.6e,%.6e,%.6e\n",
-                 total, dropped, argmax_diff, unsafe, o1, o2, o3, o4, dr, ar, ur);
+    out_->output("%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%"
+                 PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%.6e,%.6e,%.6e,%.6e\n",
+                 total, dropped, argmax_diff, action_diff, unsafe,
+                 o1, o2, o3, o4, dr, ar, tr, ur);
     out_->output("=== End Action Scorer %s Summary ===\n\n", getName().c_str());
 
     if (emit_golden_) {

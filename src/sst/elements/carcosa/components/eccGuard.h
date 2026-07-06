@@ -55,6 +55,7 @@
 #include <sst/core/link.h>
 #include <sst/core/output.h>
 #include <sst/core/rng/mersenne.h>
+#include <array>
 #include <cstdint>
 #include <map>
 #include <random>
@@ -131,8 +132,18 @@ public:
         {"fault_mode_weights",       "JEDEC mixture weights as a CSV 'cell:word:row:column:bank:device'; need not sum to 1 (normalized internally). Defaults to '0.55:0.15:0.10:0.08:0.07:0.05'.", ""},
         {"fault_event_rate",         "When fault_model='jedec_mix', per-access probability that a correlated fault event occurs (overrides BER for the mode draw). 0.0 falls back to BER * payload_bits as the event rate (Poisson approximation).", "0.0"},
         {"payload_dtype",            "Data-type-aware flip target for the silent-escape path: 'bytes' (current behavior), 'bf16', 'fp8', 'int8'. High-blast bits (sign/high exponent) are tracked separately in escape_high_blast vs escape_low_blast.", "bytes"},
-        {"due_action",               "How to model a Detectable-Uncorrectable Error: 'latency_only' (current behavior; add latency, deliver original payload), or 'drop_frame' (set PipelineStateBase::frameAbortRequested so the VLA agents jump to ACTUATE and increment frames_dropped).", "latency_only"},
-        {"fit_per_mbit_per_hour",    "Optional FIT calibration: when >0 and fault_event_rate==0, the guard derives event_rate = (FIT/Mbit/h) * dram_capacity_mb * (sim_time_per_event_ns/3.6e15). Reported in setup() so reviewers see a single FIT number.", "0.0"},
+        {"due_action",               "How to model a Detectable-Uncorrectable Error: 'latency_only' (add latency and forward the poisoned payload -- the DUE words' drawn error bits are flipped into the data, since an uncorrectable error cannot yield the correct data), or 'drop_frame' (set PipelineStateBase::frameAbortRequested so the VLA agents jump to ACTUATE and increment frames_dropped; payload is not consumed).", "latency_only"},
+        {"resident_addr_start",      "Resident model: base of the address window the fault map covers. Falls back to inject_addr_start/inject_addr_len when resident_addr_len==0. fault_model='resident' requires a non-empty window (bounded fault-map memory).", "0"},
+        {"resident_addr_len",        "Resident model: byte length of the fault-map window (see resident_addr_start).", "0"},
+        {"resident_faults_at_start", "Resident model: number of faults materialized at t=0 (deterministic paired-comparison campaigns).", "0"},
+        {"resident_fault_rate_per_ms", "Resident model: Poisson fault-arrival rate in faults per simulated millisecond. When 0, derived from fit_per_mbit_per_hour * dram_capacity_mb * resident_time_acceleration.", "0.0"},
+        {"resident_time_acceleration", "Resident model: multiplier applied to the FIT-derived arrival rate so hour-scale field rates produce events in ms-scale simulations. Report alongside results.", "1.0"},
+        {"resident_scrub_interval_us", "Resident model: patrol-scrub period in simulated microseconds. Each scrub clears transient faults whose words are correctable under the uniform scheme; accumulated (multi-fault) words and permanent faults survive. 0 disables scrub.", "0.0"},
+        {"resident_permanent_fraction", "Resident model: probability a new fault is permanent (survives scrub). Field studies (Sridharan ASPLOS'15) find a large permanent share; sweep this axis.", "0.3"},
+        {"resident_mode",            "Resident model: fault mode for new faults: 'mix' (sample fault_mode_weights) or a fixed mode name ('cell','word','row','column','bank','device').", "mix"},
+        {"resident_row_bytes",       "Resident model: DRAM row size used for row/column/bank fault footprints.", "8192"},
+        {"resident_bank_rows",       "Resident model: number of rows a bank fault spans.", "8"},
+        {"fit_per_mbit_per_hour",    "Optional FIT calibration: when >0 and fault_event_rate==0, the guard derives event_rate = (FIT/Mbit/h) * dram_capacity_mb * (sim_time_per_event_ns/3.6e15). Reported in setup() so reviewers see a single FIT number. For fault_model='resident' the same FIT feeds the time-based arrival rate instead.", "0.0"},
         {"dram_capacity_mb",         "Companion to fit_per_mbit_per_hour. DRAM capacity in MiB used for FIT->event_rate derivation.", "1024"},
         {"sim_time_per_event_ns",    "Companion to fit_per_mbit_per_hour. Wall-clock interval in nanoseconds that one simulated MemEvent represents (e.g. average DRAM access latency).", "100"},
         {"seed",                     "RNG seed (0 = pick a default).", "0"})
@@ -153,7 +164,11 @@ public:
         {"events_correlated_device","JEDEC mix: faults attributable to a single device.", "count", 1},
         {"escape_high_blast",     "Silent escapes whose flipped bit hit a high-blast position (sign / high exponent).", "count", 1},
         {"escape_low_blast",      "Silent escapes whose flipped bit hit a low-blast position (mantissa LSBs).", "count", 1},
-        {"frames_aborted",        "Frames the guard requested be aborted via due_action='drop_frame'.", "count", 1})
+        {"due_poisoned_bits",     "Bits flipped into forwarded payloads by DUE words under due_action='latency_only' (poison forwarding).", "count", 1},
+        {"frames_aborted",        "Frames the guard requested be aborted via due_action='drop_frame'.", "count", 1},
+        {"resident_faults_born",  "Resident model: faults materialized into the fault map.", "count", 1},
+        {"resident_faults_scrubbed", "Resident model: transient faults fully cleared by patrol scrub.", "count", 1},
+        {"resident_scrub_due",    "Resident model: words a scrub pass found uncorrectable (accumulation-before-scrub).", "count", 1})
 
     EccGuard(SST::ComponentId_t id, SST::Params& params);
     ~EccGuard() override;
@@ -163,7 +178,7 @@ public:
     void complete(unsigned phase) override;
     void finish() override;
 
-    enum class FaultModel : uint8_t { Poisson, JedecMix, Campaign };
+    enum class FaultModel : uint8_t { Poisson, JedecMix, Campaign, Resident };
     enum class PayloadDtype : uint8_t { Bytes, Bf16, Fp8, Int8 };
     enum class DueAction   : uint8_t { LatencyOnly, DropFrame };
 
@@ -191,6 +206,11 @@ public:
         // classification. Outer index = word, inner index = chip within word.
         // Only populated when scheme == CHIPKILL_x4.
         std::vector<std::vector<uint8_t>> per_word_chip_errors;
+        // Payload-relative bit positions of the faulty cells, when the fault
+        // source knows them (fault_model='resident'). When non-empty, the
+        // escape/DUE corruption paths flip exactly these bits instead of
+        // sampling random positions inside the word.
+        std::vector<uint32_t> exact_bits;
     };
 
 private:
@@ -199,10 +219,16 @@ private:
     void handleSelf(SST::Event* ev);
 
     uint64_t applyPolicy(SST::MemHierarchy::MemEvent* mev);
-    bool     flipDataTypeAware(SST::MemHierarchy::MemEvent* mev,
-                                bool& wasHighBlast);
-    void     flipRandomBit(SST::MemHierarchy::MemEvent* mev,
-                            bool& wasHighBlast);
+    // Flip `nbits` distinct random bits inside ECC word `word_index` of the
+    // payload (the word's byte span under `scheme`; whole payload when the
+    // scheme has no word concept). Distinct positions mean multiple flips
+    // cannot XOR-cancel. Each flipped bit is classified high/low blast for
+    // payload_dtype_ and accumulated into the out-params. Returns the number
+    // of bits actually flipped (the span clamps at the payload end).
+    unsigned flipBitsInWord(SST::MemHierarchy::MemEvent* mev,
+                            uint32_t word_index, EccScheme scheme,
+                            unsigned nbits,
+                            unsigned& high_flips, unsigned& low_flips);
     FaultDraw drawFaultPoisson(uint32_t payload_bytes, double ber, EccScheme scheme);
     FaultDraw drawFaultJedecMix(uint32_t payload_bytes, double event_rate, EccScheme scheme);
     void      distributeErrorsToChips(std::vector<uint8_t>& chip_counts,
@@ -212,6 +238,45 @@ private:
     // campaign_event_rate_; see eccGuard.h docs.
     FaultDraw drawFaultCampaign(uint32_t payload_bytes, EccScheme scheme,
                                  const std::string& kernel_name);
+
+    // ---- Resident fault map (fault_model='resident') -------------------
+    // Faults live at physical locations, not per-access draws: a fault map
+    // keyed by 64B line address holds flipped cells with a birth time and a
+    // permanent/transient flag. Population is a Poisson process in *sim
+    // time* (capacity x residency, not traffic); a read overlapping faulty
+    // cells sees the same corruption on every access until patrol scrub
+    // clears it. Faults and footprints are drawn from a dedicated RNG stream
+    // (residentRng_) that the access path never consumes, so two runs with
+    // the same seed see identical physical faults regardless of scheme or
+    // memory-traffic perturbations (paired A/B comparisons).
+    struct ResidentFault {
+        FaultMode mode      = FaultMode::SingleCell;
+        bool      permanent = false;
+        // line base address -> bitmask over the line's 512 bits.
+        std::map<uint64_t, std::array<uint8_t, 64>> line_bits;
+    };
+
+    bool resolveResidentWindow(uint64_t& base_out, uint64_t& len_out) const;
+    // Lazily advance the fault-birth / scrub processes to `now_ns`,
+    // processing births and scrub epochs in chronological order.
+    void advanceResidentClock(uint64_t now_ns);
+    void materializeResidentFault();
+    void applyResidentScrub();
+    void rebuildResidentMask();
+    // Add `nbits` distinct faulty bits owned by x4 chip `chip` inside the
+    // line at `line_base` (chip c owns bit-nibbles {c, c+32, c+64, c+96}).
+    void addChipBitsInLine(ResidentFault& f, uint64_t line_base,
+                           unsigned chip, unsigned nbits);
+    void addUniformBitInLine(ResidentFault& f, uint64_t line_base,
+                             unsigned bit_in_line);
+    FaultDraw drawFaultResident(SST::MemHierarchy::MemEvent* mev,
+                                uint32_t payload_bytes, EccScheme scheme);
+    // Flip the subset of draw.exact_bits that falls inside ECC word
+    // `word_index` (payload-relative), classifying blast per bit.
+    unsigned flipExactBitsInWord(SST::MemHierarchy::MemEvent* mev,
+                                 uint32_t word_index, EccScheme scheme,
+                                 const std::vector<uint32_t>& exact_bits,
+                                 unsigned& high_flips, unsigned& low_flips);
 
     // Emit a one-shot warning whenever a policy entry's BER exceeds the
     // documented tight-approximation bound (see kEccBerTightUpperBound in
@@ -281,6 +346,36 @@ private:
     uint64_t    inject_addr_start_ = 0;
     uint64_t    inject_addr_len_   = 0;
 
+    // Resident fault-map state (fault_model='resident').
+    uint64_t resident_addr_start_       = 0;
+    uint64_t resident_addr_len_         = 0;
+    uint64_t resident_faults_at_start_  = 0;
+    double   resident_rate_per_ns_      = 0.0;
+    double   resident_time_accel_       = 1.0;
+    uint64_t resident_scrub_interval_ns_ = 0;
+    double   resident_permanent_fraction_ = 0.3;
+    bool     resident_mode_mix_         = true;
+    FaultMode resident_mode_fixed_      = FaultMode::SingleCell;
+    uint64_t resident_row_bytes_        = 8192;
+    uint64_t resident_bank_rows_        = 8;
+
+    std::vector<ResidentFault> resident_faults_;
+    // Merged (OR of live faults) fault mask, rebuilt on birth/scrub; the
+    // access path reads only this.
+    std::map<uint64_t, std::array<uint8_t, 64>> resident_mask_;
+    uint64_t resident_next_birth_ns_ = 0;
+    uint64_t resident_next_scrub_ns_ = 0;
+    bool     resident_started_       = false;
+    std::mt19937_64 residentRng_;
+
+    uint64_t resident_faults_born_total_     = 0;
+    uint64_t resident_faults_scrubbed_total_ = 0;
+    uint64_t resident_scrub_due_total_       = 0;
+
+    Statistics::Statistic<uint64_t>* stat_resident_born_      = nullptr;
+    Statistics::Statistic<uint64_t>* stat_resident_scrubbed_  = nullptr;
+    Statistics::Statistic<uint64_t>* stat_resident_scrub_due_ = nullptr;
+
     std::string                state_key_;
     const PipelineStateBase*   state_ptr_ = nullptr;
 
@@ -298,6 +393,7 @@ private:
     Statistics::Statistic<uint64_t>* stat_correlated_device_     = nullptr;
     Statistics::Statistic<uint64_t>* stat_escape_high_blast_     = nullptr;
     Statistics::Statistic<uint64_t>* stat_escape_low_blast_      = nullptr;
+    Statistics::Statistic<uint64_t>* stat_due_poisoned_          = nullptr;
     Statistics::Statistic<uint64_t>* stat_frames_aborted_        = nullptr;
 
     struct OutcomeCounters {
@@ -322,6 +418,9 @@ private:
     // Tracked by data-type-aware flipper for the run-end summary.
     uint64_t escape_high_blast_total_ = 0;
     uint64_t escape_low_blast_total_  = 0;
+
+    // Bits flipped into forwarded payloads by latency_only DUE poisoning.
+    uint64_t due_poison_flips_total_  = 0;
 
     uint64_t frames_aborted_total_    = 0;
 

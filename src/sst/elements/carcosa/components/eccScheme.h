@@ -68,7 +68,8 @@ inline bool eccSchemeFromString(const std::string& s, EccScheme& out) {
 // scheme determines the data-bytes-per-word footprint:
 //
 //   SECDED_64    -> 64-bit (8-byte) data words; corrects 1 bit, detects 2.
-//   CHIPKILL_x4  -> 128-bit (16-byte) data words (8 x4 chips per word);
+//   CHIPKILL_x4  -> 128-bit (16-byte) data words (32 x4 chips per word,
+//                   128 data bits / 4 bits per chip; see chipsPerEccWord);
 //                   corrects any single x4 chip; detects up to 2-chip damage.
 //
 // The line-level outcome is the *worst* per-word outcome (lattice max over
@@ -189,23 +190,35 @@ struct EccLineOutcome {
     EccOutcome outcome     = EccOutcome::Clean;
     unsigned   escape_bits = 0;   // bits-on-the-wire from escaping words only
     unsigned   total_errors = 0;  // sum across all words (book-keeping)
+    std::vector<uint32_t> escape_words; // indices of words that escaped
+    std::vector<uint32_t> due_words;    // indices of words that went DUE
 };
 
 // Aggregate per-word error counts into a single line outcome.
 //   - Line outcome = worst per-word outcome.
 //   - escape_bits  = sum of word_errors over words whose outcome is
 //                    SilentEscape (these bits actually reach the consumer).
+//   - escape_words / due_words = indices of the words that escaped / went
+//                    DUE, so EccGuard can corrupt exactly those words.
 // Per-word errors in Correctable words contribute 0 leaked bits (ECC fixes
-// them); DUE words are intercepted before delivery (LatencyOnly path keeps
-// the bits in the wire but they are unreliable -- existing behaviour).
+// them). DUE words are detected but *uncorrectable*: the DropFrame path
+// aborts the frame, and the LatencyOnly path forwards the poisoned bits to
+// the consumer (EccGuard flips the DUE words' drawn error bits into the
+// payload) -- an uncorrectable error can never yield the correct data.
 inline EccLineOutcome aggregateLineOutcome(const std::vector<unsigned>& per_word_errors,
                                            EccScheme scheme) {
     EccLineOutcome r;
-    for (unsigned e : per_word_errors) {
+    for (size_t w = 0; w < per_word_errors.size(); ++w) {
+        unsigned e = per_word_errors[w];
         r.total_errors += e;
         EccOutcome o = classifyEccWord(e, scheme);
         if (static_cast<uint8_t>(o) > static_cast<uint8_t>(r.outcome)) r.outcome = o;
-        if (o == EccOutcome::SilentEscape) r.escape_bits += e;
+        if (o == EccOutcome::SilentEscape) {
+            r.escape_bits += e;
+            r.escape_words.push_back(static_cast<uint32_t>(w));
+        } else if (o == EccOutcome::DetectableUncorrectable) {
+            r.due_words.push_back(static_cast<uint32_t>(w));
+        }
     }
     return r;
 }
@@ -225,7 +238,12 @@ inline EccLineOutcome aggregateLineOutcomeChipAware(
         r.total_errors += per_word_errors[w];
         EccOutcome o = classifyEccWordChipAware(per_word_chip_errors[w], scheme);
         if (static_cast<uint8_t>(o) > static_cast<uint8_t>(r.outcome)) r.outcome = o;
-        if (o == EccOutcome::SilentEscape) r.escape_bits += per_word_errors[w];
+        if (o == EccOutcome::SilentEscape) {
+            r.escape_bits += per_word_errors[w];
+            r.escape_words.push_back(static_cast<uint32_t>(w));
+        } else if (o == EccOutcome::DetectableUncorrectable) {
+            r.due_words.push_back(static_cast<uint32_t>(w));
+        }
     }
     return r;
 }

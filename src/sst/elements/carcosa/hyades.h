@@ -129,6 +129,14 @@
  * so the ActionScorer's argmax_changed test compares against a real,
  * Escape-sensitive fingerprint instead of a synthetic counter hash. */
 #define HYADES_ACTION_CHECKSUM_OFFSET 0x140
+/* Per-frame decoded-action token. Unlike HYADES_ACTION_CHECKSUM (an
+ * any-byte-divergence debug oracle), this is a fingerprint of the *decoded*
+ * action the actuator would execute: the workload quantizes its continuous
+ * action into tolerance bins (plus the argmax token) before hashing, so
+ * corruption that stays inside a bin does not change the value. The agent
+ * stamps it onto FrameRecord::actionToken and the ActionScorer compares it
+ * against the golden trajectory as the headline action_changed metric. */
+#define HYADES_ACTION_TOKEN_OFFSET    0x180
 
 #define HYADES_COMMAND  ((volatile int *)(HYADES_MMIO_BASE + HYADES_COMMAND_OFFSET))
 #define HYADES_STATUS   ((volatile int *)(HYADES_MMIO_BASE + HYADES_STATUS_OFFSET))
@@ -139,6 +147,7 @@
 #define HYADES_REGION_SIZE     ((volatile unsigned int *)(HYADES_MMIO_BASE + HYADES_REGION_SIZE_OFFSET))
 #define HYADES_REGION_COMMIT   ((volatile int          *)(HYADES_MMIO_BASE + HYADES_REGION_COMMIT_OFFSET))
 #define HYADES_ACTION_CHECKSUM ((volatile unsigned int *)(HYADES_MMIO_BASE + HYADES_ACTION_CHECKSUM_OFFSET))
+#define HYADES_ACTION_TOKEN    ((volatile unsigned int *)(HYADES_MMIO_BASE + HYADES_ACTION_TOKEN_OFFSET))
 
 /**
  * Read next command index from Hali. Value < 0 means exit.
@@ -189,6 +198,17 @@ static inline void hyades_register_region(int slot,
  */
 static inline void hyades_action_checksum_write(unsigned int checksum) {
     *HYADES_ACTION_CHECKSUM = checksum;
+}
+
+/*
+ * Publish the per-frame decoded-action token (quantized action fingerprint;
+ * see HYADES_ACTION_TOKEN_OFFSET). Call from the ACTUATE handler before the
+ * checksum write. Workloads that never write here leave
+ * FrameRecord::actionToken at 0 and the scorer falls back to the checksum
+ * metric.
+ */
+static inline void hyades_action_token_write(unsigned int token) {
+    *HYADES_ACTION_TOKEN = token;
 }
 
 /**

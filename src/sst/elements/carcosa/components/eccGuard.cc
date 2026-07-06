@@ -74,6 +74,7 @@ bool parseModeWeightsCsv(const std::string& csv, double out[kModeCount]) {
 EccGuard::FaultModel parseFaultModel(const std::string& s) {
     if (s == "jedec_mix" || s == "jedec" || s == "JEDEC_MIX") return EccGuard::FaultModel::JedecMix;
     if (s == "campaign"  || s == "CAMPAIGN")                  return EccGuard::FaultModel::Campaign;
+    if (s == "resident"  || s == "RESIDENT")                  return EccGuard::FaultModel::Resident;
     return EccGuard::FaultModel::Poisson;
 }
 
@@ -292,6 +293,55 @@ EccGuard::EccGuard(ComponentId_t id, Params& params) : Component(id) {
         }
     }
 
+    // Resident fault-map parameters (fault_model='resident'). Parsed
+    // unconditionally so sst-info documents them; inert unless the model is
+    // selected.
+    {
+        resident_addr_start_      = params.find<uint64_t>("resident_addr_start", 0);
+        resident_addr_len_        = params.find<uint64_t>("resident_addr_len", 0);
+        resident_faults_at_start_ = params.find<uint64_t>("resident_faults_at_start", 0);
+        double rate_per_ms        = params.find<double>("resident_fault_rate_per_ms", 0.0);
+        resident_time_accel_      = params.find<double>("resident_time_acceleration", 1.0);
+        double scrub_us           = params.find<double>("resident_scrub_interval_us", 0.0);
+        resident_scrub_interval_ns_ = static_cast<uint64_t>(scrub_us * 1e3);
+        resident_permanent_fraction_ =
+            params.find<double>("resident_permanent_fraction", 0.3);
+        std::string rmode = params.find<std::string>("resident_mode", "mix");
+        resident_mode_mix_ = (rmode.empty() || rmode == "mix" || rmode == "MIX");
+        if (!resident_mode_mix_) resident_mode_fixed_ = parseCampaignMode(rmode);
+        resident_row_bytes_ = params.find<uint64_t>("resident_row_bytes", 8192);
+        resident_bank_rows_ = params.find<uint64_t>("resident_bank_rows", 8);
+        if (resident_row_bytes_ < 64) resident_row_bytes_ = 64;
+        if (resident_bank_rows_ == 0) resident_bank_rows_ = 1;
+
+        if (rate_per_ms > 0.0) {
+            resident_rate_per_ns_ = rate_per_ms / 1e6;
+        } else if (fit_rate > 0.0) {
+            // Faults arrive per (capacity x time), not per access: FIT/Mbit/h
+            // x capacity gives failures/hour; scale into the simulated-time
+            // domain and accelerate so ms-scale sims see events.
+            double failures_per_hour = fit_rate * 1e-9 * dram_mb;
+            resident_rate_per_ns_ =
+                failures_per_hour / 3.6e12 * resident_time_accel_;
+        }
+
+        if (fault_model_ == FaultModel::Resident) {
+            uint64_t wbase = 0, wlen = 0;
+            if (!resolveResidentWindow(wbase, wlen) || wlen == 0) {
+                out_->fatal(CALL_INFO, -1,
+                    "EccGuard: fault_model='resident' requires a bounded fault-map "
+                    "window: set resident_addr_start/resident_addr_len (or the "
+                    "inject_addr_start/inject_addr_len fallback).\n");
+            }
+            if (resident_rate_per_ns_ <= 0.0 && resident_faults_at_start_ == 0) {
+                out_->output("EccGuard WARNING: fault_model='resident' with no "
+                              "arrival rate (resident_fault_rate_per_ms / FIT) and "
+                              "resident_faults_at_start==0; the fault map stays "
+                              "empty and every access classifies clean.\n");
+            }
+        }
+    }
+
     // Mersenne for the bit-pick (matches RandomFlipFault); std::mt19937 for Poisson.
     uint64_t seed = params.find<uint64_t>("seed", 0);
     if (seed != 0) {
@@ -300,6 +350,11 @@ EccGuard::EccGuard(ComponentId_t id, Params& params) : Component(id) {
     } else {
         stdRng_.seed(0xC0FFEEu);
     }
+    // Dedicated stream for the resident fault map: fault birth times and
+    // footprints must be identical across runs that differ only in scheme or
+    // traffic (paired A/B comparisons), so the access path never draws from
+    // this generator.
+    residentRng_.seed(seed != 0 ? seed * 0x9E3779B97F4A7C15ULL : 0xD1CEB00Cu);
 
     if (isPortConnected("highlink")) {
         highlink_ = configureLink("highlink",
@@ -329,7 +384,11 @@ EccGuard::EccGuard(ComponentId_t id, Params& params) : Component(id) {
     stat_correlated_device_  = registerStatistic<uint64_t>("events_correlated_device");
     stat_escape_high_blast_  = registerStatistic<uint64_t>("escape_high_blast");
     stat_escape_low_blast_   = registerStatistic<uint64_t>("escape_low_blast");
+    stat_due_poisoned_       = registerStatistic<uint64_t>("due_poisoned_bits");
     stat_frames_aborted_     = registerStatistic<uint64_t>("frames_aborted");
+    stat_resident_born_      = registerStatistic<uint64_t>("resident_faults_born");
+    stat_resident_scrubbed_  = registerStatistic<uint64_t>("resident_faults_scrubbed");
+    stat_resident_scrub_due_ = registerStatistic<uint64_t>("resident_scrub_due");
 }
 
 EccGuard::~EccGuard() {
@@ -362,6 +421,33 @@ void EccGuard::setup() {
             warnIfBerExceedsTightBound(e.ber, origin.c_str());
         }
     });
+
+    if (fault_model_ == FaultModel::Resident) {
+        for (uint64_t i = 0; i < resident_faults_at_start_; ++i) {
+            materializeResidentFault();
+        }
+        if (resident_rate_per_ns_ > 0.0) {
+            std::exponential_distribution<double> exp_ns(resident_rate_per_ns_);
+            resident_next_birth_ns_ =
+                std::max<uint64_t>(1, static_cast<uint64_t>(exp_ns(residentRng_)));
+        }
+        if (resident_scrub_interval_ns_ > 0) {
+            resident_next_scrub_ns_ = resident_scrub_interval_ns_;
+        }
+        resident_started_ = true;
+        if (verbose_) {
+            uint64_t wbase = 0, wlen = 0;
+            resolveResidentWindow(wbase, wlen);
+            out_->output("EccGuard '%s': resident fault map over [0x%" PRIx64
+                         ", +%" PRIu64 "): initial_faults=%" PRIu64
+                         " rate=%.3e/ns scrub_ns=%" PRIu64
+                         " permanent_frac=%.2f lines_faulty=%zu\n",
+                         getName().c_str(), wbase, wlen,
+                         resident_faults_at_start_, resident_rate_per_ns_,
+                         resident_scrub_interval_ns_,
+                         resident_permanent_fraction_, resident_mask_.size());
+        }
+    }
 
     if (verbose_) {
         out_->output("EccGuard '%s': setup. uniform scheme=%s ber=%g state_key='%s' state_ptr=%p "
@@ -433,13 +519,34 @@ void EccGuard::finish() {
         out_->output("=== End EccGuard %s Fault-Mode Draws ===\n\n", getName().c_str());
     }
 
-    if (escape_high_blast_total_ + escape_low_blast_total_ > 0 || frames_aborted_total_ > 0) {
+    if (escape_high_blast_total_ + escape_low_blast_total_ > 0
+        || frames_aborted_total_ > 0 || due_poison_flips_total_ > 0) {
         out_->output("\n=== EccGuard %s Escape/Abort Summary ===\n", getName().c_str());
-        out_->output("escape_high_blast,escape_low_blast,frames_aborted,payload_dtype\n");
-        out_->output("%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%s\n",
+        out_->output("escape_high_blast,escape_low_blast,frames_aborted,payload_dtype,due_poisoned_bits\n");
+        out_->output("%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%s,%" PRIu64 "\n",
                      escape_high_blast_total_, escape_low_blast_total_,
-                     frames_aborted_total_, dtypeName(payload_dtype_));
+                     frames_aborted_total_, dtypeName(payload_dtype_),
+                     due_poison_flips_total_);
         out_->output("=== End EccGuard %s Escape/Abort Summary ===\n\n", getName().c_str());
+    }
+
+    if (fault_model_ == FaultModel::Resident) {
+        // Catch the fault-map clock up to the end of simulated time. The
+        // clock otherwise only advances on traffic (applyPolicy), so without
+        // this a sparse-then-idle access pattern would under-report births
+        // and scrubs that were due after the last access -- making the
+        // summary a function of when traffic occurred rather than of the
+        // documented Poisson-in-sim-time process.
+        advanceResidentClock(getCurrentSimTimeNano());
+        uint64_t alive_permanent = 0;
+        for (const auto& f : resident_faults_) if (f.permanent) ++alive_permanent;
+        out_->output("\n=== EccGuard %s Resident Fault Map Summary ===\n", getName().c_str());
+        out_->output("faults_born,faults_alive,faults_permanent,faults_scrubbed,scrub_due_words,lines_faulty\n");
+        out_->output("%" PRIu64 ",%zu,%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%zu\n",
+                     resident_faults_born_total_, resident_faults_.size(),
+                     alive_permanent, resident_faults_scrubbed_total_,
+                     resident_scrub_due_total_, resident_mask_.size());
+        out_->output("=== End EccGuard %s Resident Fault Map Summary ===\n\n", getName().c_str());
     }
 }
 
@@ -931,6 +1038,386 @@ EccGuard::FaultDraw EccGuard::drawFaultCampaign(uint32_t payload_bytes,
     return d;
 }
 
+// ===================== Resident fault map (fault_model='resident') ==========
+// Faults are persistent physical state: born by a Poisson process in sim
+// time (capacity x residency, not traffic), footprinted by mode across
+// lines/chips, read deterministically on every access, and cleared only by
+// patrol scrub. All randomness comes from residentRng_, which the access
+// path never touches, so equal seeds give identical physical faults across
+// schemes (paired A/B runs).
+
+bool EccGuard::resolveResidentWindow(uint64_t& base_out, uint64_t& len_out) const {
+    if (resident_addr_len_ > 0) {
+        base_out = resident_addr_start_;
+        len_out  = resident_addr_len_;
+        return true;
+    }
+    if (inject_addr_len_ > 0) {
+        base_out = inject_addr_start_;
+        len_out  = inject_addr_len_;
+        return true;
+    }
+    base_out = 0;
+    len_out  = 0;
+    return false;
+}
+
+void EccGuard::advanceResidentClock(uint64_t now_ns) {
+    if (!resident_started_) return;
+    while (true) {
+        const bool     have_birth = resident_rate_per_ns_ > 0.0;
+        const bool     have_scrub = resident_scrub_interval_ns_ > 0;
+        const uint64_t tb = have_birth ? resident_next_birth_ns_ : UINT64_MAX;
+        const uint64_t ts = have_scrub ? resident_next_scrub_ns_ : UINT64_MAX;
+        if (std::min(tb, ts) > now_ns) break;
+        if (tb <= ts) {
+            materializeResidentFault();
+            std::exponential_distribution<double> exp_ns(resident_rate_per_ns_);
+            resident_next_birth_ns_ =
+                tb + std::max<uint64_t>(1, static_cast<uint64_t>(exp_ns(residentRng_)));
+        } else {
+            applyResidentScrub();
+            resident_next_scrub_ns_ = ts + resident_scrub_interval_ns_;
+        }
+    }
+}
+
+// Interleaved x4 chip layout, the single source of truth for both the
+// write side (footprint generation) and the read side (chip attribution):
+// line nibble N belongs to chip N % kResidentChipsPerLine, so chip c owns
+// nibbles {c, c+32, c+64, c+96} of a 64B line -- 16 bits, exactly one nibble
+// per 16B chipkill word. Confining a fault's bits to one chip is what lets
+// chipkill absorb it while SECDED sees multi-bit words.
+// residentChipForWordBit inverts residentLineBitForChip for any bit of a
+// line-aligned, kResidentNibbleBits*nchips-bit ECC word; the two must change
+// together or chipkill-vs-SECDED attribution silently rots.
+static constexpr unsigned kResidentNibbleBits   = 4;
+static constexpr unsigned kResidentChipsPerLine = 32;
+
+static inline unsigned residentLineBitForChip(unsigned chip, unsigned nibble_idx,
+                                              unsigned bit_in_nibble) {
+    return kResidentNibbleBits * (chip + kResidentChipsPerLine * nibble_idx)
+           + bit_in_nibble;
+}
+
+static inline unsigned residentChipForWordBit(uint32_t bit_in_word, size_t nchips) {
+    return static_cast<unsigned>((bit_in_word / kResidentNibbleBits) % nchips);
+}
+
+void EccGuard::addUniformBitInLine(ResidentFault& f, uint64_t line_base,
+                                   unsigned bit_in_line) {
+    auto& mask = f.line_bits[line_base]; // value-initialized (zeroed) on first touch
+    mask[bit_in_line / 8] |= static_cast<uint8_t>(1u << (bit_in_line % 8));
+}
+
+void EccGuard::addChipBitsInLine(ResidentFault& f, uint64_t line_base,
+                                 unsigned chip, unsigned nbits) {
+    unsigned positions[16];
+    unsigned n = 0;
+    for (unsigned j = 0; j < 4; ++j)
+        for (unsigned i = 0; i < kResidentNibbleBits; ++i)
+            positions[n++] = residentLineBitForChip(chip, j, i);
+    if (nbits > 16) nbits = 16;
+    // Partial Fisher-Yates: nbits distinct positions.
+    for (unsigned k = 0; k < nbits; ++k) {
+        std::uniform_int_distribution<unsigned> pick(k, 15);
+        std::swap(positions[k], positions[pick(residentRng_)]);
+        addUniformBitInLine(f, line_base, positions[k]);
+    }
+}
+
+void EccGuard::materializeResidentFault() {
+    uint64_t wbase = 0, wlen = 0;
+    if (!resolveResidentWindow(wbase, wlen) || wlen == 0) return;
+    const uint64_t first_line = wbase & ~63ULL;
+    const uint64_t nlines     = (wbase + wlen - first_line + 63) / 64;
+
+    ResidentFault f;
+    if (resident_mode_mix_) {
+        std::uniform_real_distribution<double> u01(0.0, 1.0);
+        double r = u01(residentRng_), acc = 0.0;
+        int chosen = 0;
+        for (int i = 0; i < kModeCount; ++i) {
+            acc += mode_weights_[i];
+            if (r <= acc) { chosen = i; break; }
+        }
+        f.mode = static_cast<FaultMode>(chosen);
+    } else {
+        f.mode = resident_mode_fixed_;
+    }
+    f.permanent =
+        std::bernoulli_distribution(resident_permanent_fraction_)(residentRng_);
+
+    auto lineAt = [&](uint64_t idx) { return first_line + idx * 64; };
+    std::uniform_int_distribution<uint64_t> lpick(0, nlines - 1);
+    std::uniform_int_distribution<unsigned> chip_pick(0, 31);
+    std::uniform_int_distribution<unsigned> k14(1, 4);
+    std::uniform_int_distribution<unsigned> k12(1, 2);
+    std::uniform_int_distribution<unsigned> bpick(0, 511);
+
+    const uint64_t row_lines = std::max<uint64_t>(1, resident_row_bytes_ / 64);
+    const uint64_t nrows     = (nlines + row_lines - 1) / row_lines;
+    // Subsample gigantic windows so a device fault cannot materialize an
+    // unbounded footprint.
+    constexpr uint64_t kMaxFootprintLines = 65536;
+    const uint64_t stride = 1 + (nlines - 1) / kMaxFootprintLines;
+
+    switch (f.mode) {
+    case FaultMode::SingleCell:
+        addUniformBitInLine(f, lineAt(lpick(residentRng_)), bpick(residentRng_));
+        break;
+    case FaultMode::SingleWord: {
+        // Multi-bit fault at one address: 2 distinct bits inside one aligned
+        // 64-bit region of a single line.
+        uint64_t lb = lineAt(lpick(residentRng_));
+        std::uniform_int_distribution<unsigned> rpick(0, 7);
+        std::uniform_int_distribution<unsigned> bit64(0, 63);
+        unsigned region = rpick(residentRng_);
+        unsigned b1 = bit64(residentRng_), b2 = b1;
+        while (b2 == b1) b2 = bit64(residentRng_);
+        addUniformBitInLine(f, lb, region * 64 + b1);
+        addUniformBitInLine(f, lb, region * 64 + b2);
+        break;
+    }
+    case FaultMode::SingleRow: {
+        // One DRAM row on one x4 chip: every line of the row carries 1-4 bad
+        // bits confined to that chip's nibbles.
+        unsigned chip = chip_pick(residentRng_);
+        std::uniform_int_distribution<uint64_t> rowp(0, nrows - 1);
+        uint64_t r0 = rowp(residentRng_) * row_lines;
+        for (uint64_t i = r0; i < std::min(nlines, r0 + row_lines); i += stride)
+            addChipBitsInLine(f, lineAt(i), chip, k14(residentRng_));
+        break;
+    }
+    case FaultMode::SingleColumn: {
+        // Same in-row line offset across every row, one chip.
+        unsigned chip = chip_pick(residentRng_);
+        std::uniform_int_distribution<uint64_t> colp(0, row_lines - 1);
+        uint64_t col = colp(residentRng_);
+        for (uint64_t r = 0; r < nrows; r += stride) {
+            uint64_t idx = r * row_lines + col;
+            if (idx < nlines)
+                addChipBitsInLine(f, lineAt(idx), chip, k12(residentRng_));
+        }
+        break;
+    }
+    case FaultMode::SingleBank: {
+        // A contiguous group of rows in one bank, one chip; the fault
+        // manifests at one scattered line per row.
+        unsigned chip   = chip_pick(residentRng_);
+        uint64_t nbanks = std::max<uint64_t>(1, nrows / resident_bank_rows_);
+        std::uniform_int_distribution<uint64_t> bankp(0, nbanks - 1);
+        std::uniform_int_distribution<uint64_t> colp(0, row_lines - 1);
+        uint64_t r0 = bankp(residentRng_) * resident_bank_rows_;
+        for (uint64_t r = r0; r < std::min(nrows, r0 + resident_bank_rows_); ++r) {
+            uint64_t idx = r * row_lines + colp(residentRng_);
+            if (idx < nlines)
+                addChipBitsInLine(f, lineAt(idx), chip, k14(residentRng_));
+        }
+        break;
+    }
+    case FaultMode::SingleDevice:
+        // Whole x4 chip: every line in the window sees 1-4 bad bits in that
+        // chip's nibbles. The pattern chipkill is built to absorb.
+        for (uint64_t i = 0, chip = chip_pick(residentRng_); i < nlines; i += stride)
+            addChipBitsInLine(f, lineAt(i), static_cast<unsigned>(chip),
+                              k14(residentRng_));
+        break;
+    default:
+        addUniformBitInLine(f, lineAt(lpick(residentRng_)), bpick(residentRng_));
+        break;
+    }
+
+    for (const auto& kv : f.line_bits) {
+        auto& m = resident_mask_[kv.first];
+        for (int i = 0; i < 64; ++i) m[i] |= kv.second[i];
+    }
+    int chosen = static_cast<int>(f.mode);
+    ++per_mode_draws_[chosen];
+    if (chosen == static_cast<int>(FaultMode::SingleRow)    && stat_correlated_row_)    stat_correlated_row_->addData(1);
+    if (chosen == static_cast<int>(FaultMode::SingleBank)   && stat_correlated_bank_)   stat_correlated_bank_->addData(1);
+    if (chosen == static_cast<int>(FaultMode::SingleDevice) && stat_correlated_device_) stat_correlated_device_->addData(1);
+    ++resident_faults_born_total_;
+    if (stat_resident_born_) stat_resident_born_->addData(1);
+    if (verbose_) {
+        out_->output("EccGuard '%s': resident fault born: mode=%s permanent=%d "
+                     "lines=%zu\n",
+                     getName().c_str(), faultModeName(f.mode),
+                     f.permanent ? 1 : 0, f.line_bits.size());
+    }
+    resident_faults_.push_back(std::move(f));
+}
+
+void EccGuard::rebuildResidentMask() {
+    resident_mask_.clear();
+    for (const auto& f : resident_faults_) {
+        for (const auto& kv : f.line_bits) {
+            bool any = false;
+            for (uint8_t b : kv.second) if (b) { any = true; break; }
+            if (!any) continue;
+            auto& m = resident_mask_[kv.first];
+            for (int i = 0; i < 64; ++i) m[i] |= kv.second[i];
+        }
+    }
+}
+
+void EccGuard::applyResidentScrub() {
+    if (resident_mask_.empty()) return;
+    // Patrol scrub reads every word, corrects what the code can correct, and
+    // writes back. Rewriting clears *transient* cells; permanent cells fail
+    // again immediately and stay. A word whose accumulated (multi-fault)
+    // errors exceed correction capability cannot be cleaned -- that is the
+    // accumulation-before-scrub effect that separates chipkill from SECDED.
+    // Scrub decisions use the uniform scheme (per-kernel overrides model the
+    // consumer-side decode, not the scrubber).
+    const EccScheme scheme = policy_.uniform().scheme;
+    const uint32_t  wb     = eccWordBytes(scheme);
+    for (auto& kv : resident_mask_) {
+        const uint64_t lb    = kv.first;
+        const auto&    mask  = kv.second;
+        const uint32_t words = (wb == 0) ? 1 : (64 + wb - 1) / wb;
+        for (uint32_t w = 0; w < words; ++w) {
+            const uint32_t b0 = (wb == 0) ? 0  : w * wb;
+            const uint32_t b1 = (wb == 0) ? 64 : std::min<uint32_t>(64, b0 + wb);
+            unsigned errs = 0;
+            std::vector<uint8_t> chip_errs;
+            if (scheme == EccScheme::CHIPKILL_x4)
+                chip_errs.assign(chipsPerEccWord(scheme), 0);
+            for (uint32_t byte = b0; byte < b1; ++byte) {
+                unsigned m = mask[byte];
+                while (m) {
+                    unsigned bit = static_cast<unsigned>(__builtin_ctz(m));
+                    m &= m - 1;
+                    ++errs;
+                    if (!chip_errs.empty()) {
+                        unsigned bit_in_word = (byte - b0) * 8 + bit;
+                        unsigned chip = residentChipForWordBit(bit_in_word,
+                                                               chip_errs.size());
+                        if (chip_errs[chip] < 255) ++chip_errs[chip];
+                    }
+                }
+            }
+            if (errs == 0) continue;
+            EccOutcome o = chip_errs.empty()
+                ? classifyEccWord(errs, scheme)
+                : classifyEccWordChipAware(chip_errs, scheme);
+            if (o == EccOutcome::Correctable) {
+                for (auto& f : resident_faults_) {
+                    if (f.permanent) continue;
+                    auto it = f.line_bits.find(lb);
+                    if (it == f.line_bits.end()) continue;
+                    for (uint32_t byte = b0; byte < b1; ++byte)
+                        it->second[byte] = 0;
+                }
+            } else if (o != EccOutcome::Clean) {
+                ++resident_scrub_due_total_;
+                if (stat_resident_scrub_due_) stat_resident_scrub_due_->addData(1);
+            }
+        }
+    }
+    const size_t before = resident_faults_.size();
+    resident_faults_.erase(
+        std::remove_if(resident_faults_.begin(), resident_faults_.end(),
+            [](const ResidentFault& f) {
+                if (f.permanent) return false;
+                for (const auto& kv : f.line_bits)
+                    for (uint8_t b : kv.second)
+                        if (b) return false;
+                return true;
+            }),
+        resident_faults_.end());
+    const size_t cleared = before - resident_faults_.size();
+    if (cleared > 0) {
+        resident_faults_scrubbed_total_ += cleared;
+        if (stat_resident_scrubbed_) stat_resident_scrubbed_->addData(cleared);
+        if (verbose_) {
+            out_->output("EccGuard '%s': patrol scrub cleared %zu transient "
+                         "fault(s); %zu alive\n",
+                         getName().c_str(), cleared, resident_faults_.size());
+        }
+    }
+    rebuildResidentMask();
+}
+
+EccGuard::FaultDraw EccGuard::drawFaultResident(MemEvent* mev,
+                                                uint32_t payload_bytes,
+                                                EccScheme scheme) {
+    FaultDraw d;
+    if (payload_bytes == 0) return d;
+    uint32_t nwords = numWords(payload_bytes, scheme);
+    d.per_word_errors.assign(nwords, 0u);
+    if (resident_mask_.empty()) return d;
+
+    // Same address-space preference as the window filters: the preserved
+    // virtual address when present, else the physical/SST address.
+    uint64_t a = mev->getVirtualAddress();
+    if (a == 0) a = mev->getAddr();
+
+    const uint32_t wb = eccWordBytes(scheme);
+    const bool need_chips = (scheme == EccScheme::CHIPKILL_x4);
+    if (need_chips) d.per_word_chip_errors.resize(nwords);
+
+    for (uint64_t lb = a & ~63ULL; lb < a + payload_bytes; lb += 64) {
+        auto it = resident_mask_.find(lb);
+        if (it == resident_mask_.end()) continue;
+        const auto& mask = it->second;
+        for (unsigned byte = 0; byte < 64; ++byte) {
+            unsigned m = mask[byte];
+            if (!m) continue;
+            const uint64_t abs_byte = lb + byte;
+            if (abs_byte < a || abs_byte >= a + payload_bytes) continue;
+            const uint32_t rel_byte = static_cast<uint32_t>(abs_byte - a);
+            const uint32_t w = (wb == 0) ? 0
+                : std::min<uint32_t>(rel_byte / wb, nwords - 1);
+            while (m) {
+                const unsigned bit = static_cast<unsigned>(__builtin_ctz(m));
+                m &= m - 1;
+                d.exact_bits.push_back(rel_byte * 8 + bit);
+                d.per_word_errors[w] += 1;
+                d.num_errors += 1;
+                if (need_chips) {
+                    auto& cc = d.per_word_chip_errors[w];
+                    if (cc.empty()) cc.assign(chipsPerEccWord(scheme), 0);
+                    const uint32_t bit_in_word = (rel_byte - w * wb) * 8 + bit;
+                    const unsigned chip = residentChipForWordBit(bit_in_word,
+                                                                 cc.size());
+                    if (cc[chip] < 255) ++cc[chip];
+                }
+            }
+        }
+    }
+    return d;
+}
+
+unsigned EccGuard::flipExactBitsInWord(MemEvent* mev, uint32_t word_index,
+                                       EccScheme scheme,
+                                       const std::vector<uint32_t>& exact_bits,
+                                       unsigned& high_flips, unsigned& low_flips) {
+    auto& payload = mev->getPayload();
+    if (payload.empty() || exact_bits.empty()) return 0;
+    const uint32_t total_bits = static_cast<uint32_t>(payload.size()) * 8;
+    const uint32_t wb        = eccWordBytes(scheme);
+    const uint32_t start_bit = (wb == 0) ? 0 : word_index * wb * 8;
+    const uint32_t end_bit   = (wb == 0) ? total_bits
+        : std::min(total_bits, start_bit + wb * 8);
+    unsigned elem_bytes = dtypeBytes(payload_dtype_);
+    if (elem_bytes == 0) elem_bytes = 1;
+
+    unsigned flipped = 0;
+    for (uint32_t b : exact_bits) {
+        if (b < start_bit || b >= end_bit) continue;
+        const uint32_t byte = b / 8u, bit = b % 8u;
+        payload[byte] ^= static_cast<uint8_t>(1u << bit);
+        bool hi = false;
+        if (payload_dtype_ != PayloadDtype::Bytes) {
+            hi = isHighBlastBit(payload_dtype_, (byte % elem_bytes) * 8u + bit);
+        }
+        if (hi) ++high_flips; else ++low_flips;
+        ++flipped;
+    }
+    return flipped;
+}
+
 void EccGuard::warnIfBerExceedsTightBound(double ber, const char* origin) {
     if (ber <= kEccBerTightUpperBound) return;
     // Memoize so repeated BER values don't spam the log.
@@ -995,7 +1482,8 @@ uint64_t EccGuard::applyPolicy(MemEvent* mev) {
 
     if (entry.ber <= 0.0 && fault_event_rate_ <= 0.0
         && entry.scheme == EccScheme::NONE
-        && fault_model_ != FaultModel::Campaign) {
+        && fault_model_ != FaultModel::Campaign
+        && fault_model_ != FaultModel::Resident) {
         countClean();
         return 0;
     }
@@ -1016,6 +1504,9 @@ uint64_t EccGuard::applyPolicy(MemEvent* mev) {
         draw = drawFaultJedecMix(payload_bytes, rate, entry.scheme);
     } else if (fault_model_ == FaultModel::Campaign) {
         draw = drawFaultCampaign(payload_bytes, entry.scheme, kernel_name);
+    } else if (fault_model_ == FaultModel::Resident) {
+        advanceResidentClock(getCurrentSimTimeNano());
+        draw = drawFaultResident(mev, payload_bytes, entry.scheme);
     } else {
         draw = drawFaultPoisson(payload_bytes, entry.ber, entry.scheme);
     }
@@ -1025,6 +1516,31 @@ uint64_t EccGuard::applyPolicy(MemEvent* mev) {
         : aggregateLineOutcomeChipAware(draw.per_word_errors,
                                         draw.per_word_chip_errors, entry.scheme);
     EccOutcome     outcome = line.outcome;
+
+    // DUE response, shared by the DUE and Escape line outcomes (a line can
+    // carry DUE words alongside escaping words; real hardware fires the DUE
+    // response per word, not per line). drop_frame aborts the frame (the
+    // payload is never consumed); latency_only forwards poison -- an
+    // uncorrectable error cannot yield the correct data, so the DUE words'
+    // drawn error bits are flipped into the payload.
+    auto handleDueWords = [&]() {
+        if (line.due_words.empty()) return;
+        if (due_action_ == DueAction::DropFrame) {
+            requestFrameAbort();
+            return;
+        }
+        unsigned hi = 0, lo = 0, flips = 0;
+        for (uint32_t w : line.due_words) {
+            flips += draw.exact_bits.empty()
+                ? flipBitsInWord(mev, w, entry.scheme,
+                                 draw.per_word_errors[w], hi, lo)
+                : flipExactBitsInWord(mev, w, entry.scheme,
+                                      draw.exact_bits, hi, lo);
+        }
+        due_poison_flips_total_ += flips;
+        if (stat_due_poisoned_) stat_due_poisoned_->addData(flips);
+        publishCumulative(state_key_, /*escapes*/0, /*flips*/flips);
+    };
 
     uint64_t latency_ps = 0;
     bool high_blast_flip = false;
@@ -1037,40 +1553,37 @@ uint64_t EccGuard::applyPolicy(MemEvent* mev) {
         break;
     case EccOutcome::DetectableUncorrectable:
         latency_ps = entry.due_latency_ps;
-        if (due_action_ == DueAction::DropFrame) {
-            requestFrameAbort();
-        }
+        handleDueWords();
         break;
-    case EccOutcome::SilentEscape:
+    case EccOutcome::SilentEscape: {
         latency_ps = entry.escape_latency_ps;
-        // Only bits in words whose own ECC decode escaped actually corrupt
-        // the line on the wire (line.escape_bits). Errors in Correctable
-        // words are fixed; errors in DUE words are masked by the DUE event
-        // itself in either drop_frame or latency_only paths. This is the
-        // per-word model's contribution vs the old single-word approximation
-        // which flipped every error on the line.
-        for (unsigned i = 0; i < line.escape_bits && !payload.empty(); ++i) {
-            bool wasHi = false;
-            if (payload_dtype_ == PayloadDtype::Bytes) {
-                flipRandomBit(mev, wasHi);
-            } else {
-                flipDataTypeAware(mev, wasHi);
-            }
-            if (wasHi) {
-                ++escape_high_blast_total_;
-                if (stat_escape_high_blast_) stat_escape_high_blast_->addData(1);
-                high_blast_flip = true;
-            } else {
-                ++escape_low_blast_total_;
-                if (stat_escape_low_blast_) stat_escape_low_blast_->addData(1);
-            }
+        // Corrupt exactly the words whose own ECC decode escaped, flipping
+        // per_word_errors[w] distinct bits inside each escaping word's byte
+        // span. Errors in Correctable words are fixed by the code and leak
+        // nothing; DUE words on the same line get the DUE response below.
+        unsigned hi = 0, lo = 0, flips = 0;
+        for (uint32_t w : line.escape_words) {
+            flips += draw.exact_bits.empty()
+                ? flipBitsInWord(mev, w, entry.scheme,
+                                 draw.per_word_errors[w], hi, lo)
+                : flipExactBitsInWord(mev, w, entry.scheme,
+                                      draw.exact_bits, hi, lo);
         }
-        publishCumulative(state_key_, /*escapes*/1, /*flips*/line.escape_bits);
+        escape_high_blast_total_ += hi;
+        escape_low_blast_total_  += lo;
+        if (hi && stat_escape_high_blast_) stat_escape_high_blast_->addData(hi);
+        if (lo && stat_escape_low_blast_)  stat_escape_low_blast_->addData(lo);
+        high_blast_flip = (hi > 0);
+        publishCumulative(state_key_, /*escapes*/1, /*flips*/flips);
         // Tier B (Fig. 3a) violation attribution: this escape happened
         // while currentKernelName was kernel_name; bump the per-frame map so
         // the pipeline agent can argmax it at frame close.
         publishPerFrameEscape(state_key_, kernel_name);
+        handleDueWords();
+        if (!line.due_words.empty() && entry.due_latency_ps > latency_ps)
+            latency_ps = entry.due_latency_ps;
         break;
+    }
     }
 
     if (stat_total_) stat_total_->addData(1);
@@ -1119,42 +1632,44 @@ uint64_t EccGuard::applyPolicy(MemEvent* mev) {
     return latency_ps;
 }
 
-bool EccGuard::flipDataTypeAware(MemEvent* mev, bool& wasHighBlast) {
+unsigned EccGuard::flipBitsInWord(MemEvent* mev, uint32_t word_index,
+                                  EccScheme scheme, unsigned nbits,
+                                  unsigned& high_flips, unsigned& low_flips) {
     auto& payload = mev->getPayload();
-    if (payload.empty()) { wasHighBlast = false; return false; }
+    if (payload.empty() || nbits == 0) return 0;
+    uint32_t total_bytes = static_cast<uint32_t>(payload.size());
+    uint32_t wb    = eccWordBytes(scheme);
+    uint32_t start = (wb == 0) ? 0 : word_index * wb;
+    uint32_t end   = (wb == 0) ? total_bytes
+                               : std::min(total_bytes, start + wb);
+    if (start >= end) return 0;
+    uint32_t span_bits = (end - start) * 8;
+    if (nbits > span_bits) nbits = span_bits;
+
     unsigned elem_bytes = dtypeBytes(payload_dtype_);
     if (elem_bytes == 0) elem_bytes = 1;
 
-    uint32_t total_bytes = static_cast<uint32_t>(payload.size());
-    uint32_t num_elems   = total_bytes / elem_bytes;
-    if (num_elems == 0) {
-        flipRandomBit(mev, wasHighBlast);
-        return true;
+    // Sample distinct bit positions inside the word span so repeated flips
+    // cannot XOR-cancel. nbits << span_bits in practice, so rejection
+    // sampling terminates quickly; the cap above guarantees termination.
+    std::set<uint32_t> used;
+    unsigned flipped = 0;
+    while (flipped < nbits) {
+        uint32_t bit = rng_.generateNextUInt32() % span_bits;
+        if (!used.insert(bit).second) continue;
+        uint32_t global_byte = start + bit / 8u;
+        uint32_t bit_in_byte = bit % 8u;
+        payload[global_byte] ^= static_cast<uint8_t>(1u << bit_in_byte);
+        bool hi = false;
+        if (payload_dtype_ != PayloadDtype::Bytes) {
+            // Elements are little-endian and aligned to the payload start;
+            // bit 0 of an element is its LSB (byte 0 of bf16 = mantissa low,
+            // byte 1 = sign + exponent high).
+            uint32_t bit_in_elem = (global_byte % elem_bytes) * 8u + bit_in_byte;
+            hi = isHighBlastBit(payload_dtype_, bit_in_elem);
+        }
+        if (hi) ++high_flips; else ++low_flips;
+        ++flipped;
     }
-
-    uint32_t elem_idx     = rng_.generateNextUInt32() % num_elems;
-    uint32_t bit_in_elem  = rng_.generateNextUInt32() % (elem_bytes * 8u);
-    uint32_t byte_in_elem = bit_in_elem / 8u;
-    uint32_t bit_in_byte  = bit_in_elem % 8u;
-    // bf16 stored little-endian: byte 0 = mantissa low, byte 1 = sign+exp high.
-    // Element-relative bit numbering treats bit 0 as element LSB, so for bf16:
-    //   bit_in_elem [0..7]  -> byte 0
-    //   bit_in_elem [8..15] -> byte 1
-    uint32_t global_byte = elem_idx * elem_bytes + byte_in_elem;
-    if (global_byte >= total_bytes) {
-        wasHighBlast = false;
-        return false;
-    }
-    payload[global_byte] ^= static_cast<uint8_t>(1u << bit_in_byte);
-    wasHighBlast = isHighBlastBit(payload_dtype_, bit_in_elem);
-    return true;
-}
-
-void EccGuard::flipRandomBit(MemEvent* mev, bool& wasHighBlast) {
-    auto& payload = mev->getPayload();
-    if (payload.empty()) { wasHighBlast = false; return; }
-    uint32_t byte = rng_.generateNextUInt32() % static_cast<uint32_t>(payload.size());
-    uint32_t bit  = rng_.generateNextUInt32() % 8u;
-    payload[byte] ^= static_cast<uint8_t>(1u << bit);
-    wasHighBlast = false;
+    return flipped;
 }
