@@ -1,31 +1,11 @@
 /*
  * coldfire_irq_demo.c — ISR-driven completion against SST-window devices,
- * ColdFire m68k (mcf5208evb).
- *
- * The interrupt-injection demo: instead of polling STATUS registers, the
- * firmware programs the MCF5208 INTC, `stop`s (low-power wait), and lets the
- * devices interrupt it —
- *
- *   Accelerator   QuetzGpuDevice with irq_line=IRQ_LINE_ACCEL: each doorbell
- *                 op raises the line when it retires; the ISR acks the device
- *                 (REG_IRQ_ACK) and counts. Two ops, zero busy-wait polls.
- *   Sensors       paced QuetzStreamDevice with irq_line=IRQ_LINE_SENSOR: each
- *                 refill that makes STATUS go 0 -> nonzero raises data-ready;
- *                 the drain loop sleeps between refills instead of spinning,
- *                 and still verifies the stream's sum32 trailer.
- *
- * IRQ plumbing under test: device SST Link -> QuetzCPU irq_link_%d -> shared
- * memory IRQ slot -> QEMU bridge poll timer -> mcf_intc GPIO -> vector
- * 64+line via VBR. The ISRs ack the device and then spin until the INTC IPR
- * bit drops (the line lowers one bridge poll tick after the ack) so RTE
- * cannot re-take a stale level interrupt.
- *
- * PASS iff both accel IRQs arrive (counter matches KERNEL_ID, no residual
- * pending line), the sensor stream drains correctly with at least one
- * data-ready IRQ, and the guest actually slept for both.
- *
- * SDL: sysmode/basic_quetz_coldfire_system.py with QUETZ_GPU_IRQ_LINE=30,
- * QUETZ_SENSOR_IRQ_LINE=31, paced sensors, and stdin=/dev/null (no GPS leg).
+ * ColdFire m68k. Accel (QuetzGpuDevice irq_line) and paced sensors
+ * (QuetzStreamDevice irq_line) interrupt the guest instead of being polled; the
+ * ISRs ack the device then spin until the INTC IPR bit drops (the line lowers a
+ * bridge poll tick after ack) so RTE can't re-take a stale level. PASS iff both
+ * accel IRQs and >=1 sensor IRQ arrive and the guest actually slept.
+ * SDL: sysmode/basic_quetz_coldfire_system.py (GPU_IRQ_LINE=30, SENSOR=31).
  */
 
 #include <stdint.h>

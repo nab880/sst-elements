@@ -1,18 +1,9 @@
 /*
- * riscv_virt_gpu_fft.c — 256-point FFT on the SYNTHETIC GPU (no balar/GPGPU-Sim).
- *
- * The FFT math runs on the guest CPU (rv64gc hardware float); the synthetic
- * QuetzGpuDevice is used purely as a TIMING model: each "kernel" is timed by
- * ringing the device doorbell (LATENCY_OVERRIDE -> DOORBELL -> spin on STATUS).
- * To make this a true timing stand-in for the balar FFT run, we issue the SAME
- * number of doorbells as the balar call structure: 1 H2D + 1 bitrev + 8 stages +
- * 1 D2H = 11 kernels (the H2D/D2H doorbells are pure timing; the data never
- * leaves guest RAM).
- *
- * Impulse input (x[0]=1) -> X[k]=1+0j for all k, verified bit-exactly
- * (correct_words=512/512). No GPGPUSIM_ROOT, no .cfg, no fatbin.
- *
- * SDL: sysmode/basic_quetz_gpu.py (QuetzGpuDevice at 0x80100000, DRAM filtered).
+ * riscv_virt_gpu_fft.c — 256-pt FFT on the SYNTHETIC GPU (no balar/GPGPU-Sim).
+ * FFT runs on the guest CPU (rv64gc hard float); QuetzGpuDevice is a pure timing
+ * model timed by 11 doorbells matching the balar call structure (1 H2D + 1 bitrev
+ * + 8 stages + 1 D2H). Impulse -> X[k]=1+0j, bit-exact 512/512.
+ * SDL: sysmode/basic_quetz_gpu.py.
  */
 
 #include <stdint.h>

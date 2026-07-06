@@ -1,9 +1,7 @@
-/* coldfire_gpu_async.c — P4 asynchronous-offload vectorAdd on ColdFire (m68k).
- *
- * Same offload as coldfire_gpu.c, but the post-launch cudaThreadSynchronize is
- * posted via the Quetz async aperture (cb_vadd_async): balar holds its deferred
- * response until the kernel finishes while the 32-bit big-endian ColdFire core
- * runs CPU work and polls the completion counter. Result is verified exactly. */
+/* coldfire_gpu_async.c — P4 async-offload vectorAdd on ColdFire (m68k).
+ * Like coldfire_gpu.c but cudaThreadSynchronize goes via the Quetz async aperture
+ * (cb_vadd_async): balar defers its response while the core polls the completion
+ * counter. Result verified exactly. */
 
 #include "coldfire_uart.h"
 #include "coldfire_balar.h"

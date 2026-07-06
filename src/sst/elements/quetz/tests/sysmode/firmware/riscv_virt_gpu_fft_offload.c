@@ -1,18 +1,9 @@
 /*
  * riscv_virt_gpu_fft_offload.c — 256-pt FFT computed ON THE DEVICE (not the CPU).
- *
- * Contrast with riscv_virt_gpu_fft.c, where the guest CPU runs the butterflies and
- * the synthetic GPU only models latency. Here QuetzGpuDevice runs in kernel_type=
- * fft mode: the guest just fills the input buffer, tells the device where the
- * input/output buffers are (REG_FFT_IN_ADDR / OUT_ADDR / N), rings the doorbell,
- * and reads the result back. The DEVICE DMA-reads the input, computes the FFT in
- * C++, and DMA-writes the output — so the guest issues almost no compute
- * instructions (that collapse is the whole point, and the test asserts it).
- *
- * The FFT buffers live in the SST-backed window at 0x90000000 (see
- * basic_quetz_gpu_compute.py) so the device can DMA them; the buffers are
- * little-endian float32 cfloat[N] (the device's canonical wire format — RISC-V is
- * LE so plain float stores/loads match).
+ * QuetzGpuDevice kernel_type=fft: the guest fills the input, points the device at
+ * the buffers (REG_FFT_IN_ADDR/OUT_ADDR/N), rings the doorbell, reads the result;
+ * the device DMAs + computes in C++ so the guest issues ~no compute (the test
+ * asserts that). Buffers are LE float32 cfloat[N] in the SST window at 0x90000000.
  */
 
 #include <stdint.h>
@@ -64,8 +55,6 @@ void kernel_main(void)
     GPU_FFT_OUT_ADDR = (unsigned long)FFT_WIN + 0x1000;
     GPU_FFT_N        = FFT_N;
     GPU_DOORBELL     = 0;               /* blocking: returns when result is ready */
-    while (GPU_STATUS)                  /* (belt-and-suspenders) */
-        ;
 
     /* read the device's result back and verify impulse -> 1+0j everywhere */
     uint32_t correct = 0;

@@ -596,14 +596,14 @@ markers as the design rationale.)*
 #### P0 — Correctness and trust
 
 1. **Robust memory event capture** — Always register QEMU mem callbacks for decoded ISAs; use classifier only for tagging. Eliminates silent drops (RVC, AMO quirks, future opcodes).
-2. **Regenerate / validate gold files** — ✅ largely landed: `libmem.so` ground-truth comparison runs in CI (warn-only), gold refresh documented in TESTING.md.
+2. **Regenerate / validate gold files** — largely landed: `libmem.so` ground-truth comparison runs in CI (warn-only), gold refresh documented in TESTING.md.
 3. **IPC versioning + tests** — partially landed: `tests/unit/test_ipc_layout.cc` pins `QuetzCommand`/`QuetzSharedData`/IRQ-slot layout against the QEMU overlay's C mirror.
 
 #### P1 — Bare-metal workflow
 
 4. **Platform description file (YAML/JSON)** — open. Partial substitute: `platform` presets + deck env conventions.
-5. **First-class MMIO integration** — ✅ landed and exceeded: `MmioForwardRegionHandler` + `mmio_link_N`, plus the *synchronous* MMIO window (sst-mmio-bridge), SST-side devices (accelerator / stream / sink), and the SST-backed memory window. See README § System mode and § MMIO device components.
-6. **Exit detection** — ✅ landed: `TestFinisherRegionHandler` sentinel (PASS/FAIL) ends the simulation.
+5. **First-class MMIO integration** — landed and exceeded: `MmioForwardRegionHandler` + `mmio_link_N`, plus the *synchronous* MMIO window (sst-mmio-bridge), SST-side devices (accelerator / stream / sink), and the SST-backed memory window. See README § System mode and § MMIO device components.
+6. **Exit detection** — landed: `TestFinisherRegionHandler` sentinel (PASS/FAIL) ends the simulation.
 
 #### P2 — Fidelity knobs
 
@@ -613,7 +613,7 @@ markers as the design rationale.)*
 
 #### P3 — Usability and scale
 
-10. **Documentation** — ✅ landed: SIMULATING-YOUR-SYSTEM.md (tutorial, limits first) + README reference + TESTING.md workflow.
+10. **Documentation** — landed: SIMULATING-YOUR-SYSTEM.md (tutorial, limits first) + README reference + TESTING.md workflow.
 11. **Multi-node** — Merlin test exists for user-mode; extend sysmode multi-core firmware tests.
 12. **Checkpoint / replay** — QEMU snapshots + frozen stat windows (hard; long-term).
 

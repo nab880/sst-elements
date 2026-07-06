@@ -1,23 +1,8 @@
 /*
- * coldfire_accel_scale.c — sensor-batch processing ON THE DEVICE
- * (quetz.ScaleOffsetKernel), ColdFire m68k.
- *
- * The proof that the QuetzKernel API is not FFT-shaped: the same doorbell/
- * DMA machinery runs a saturating int16 scale/offset — the shape of a
- * sensor-path accelerator (calibration / normalization). The guest fills a
- * batch of s16 samples in the SST-backed window, programs the ARG registers,
- * rings the blocking doorbell, and verifies the transformed batch against a
- * CPU-computed expectation (bit-exact, including both saturation edges).
- *
- * Value convention (same trick as coldfire_gpu_fft_offload.c): the bridge
- * mailbox carries *values* and SST serializes them little-endian into window
- * RAM, so packing two samples per u32 store — s0 in bits[15:0], s1 in
- * bits[31:16] — yields the kernel's LE s16 stream with no guest byte-swapping,
- * on a big-endian core.
- *
- * SDL: sysmode/basic_quetz_gpu_compute_coldfire.py with
- * QUETZ_KERNEL=quetz.ScaleOffsetKernel (GPU MMIO at 0x70000000, window at
- * 0x71000000, UART at 0xfc060000, TestFinisher at 0x80000000).
+ * coldfire_accel_scale.c — device-computed saturating int16 scale/offset
+ * (quetz.ScaleOffsetKernel), ColdFire m68k. Samples are packed two per u32 store
+ * so SST's LE value-serialization yields the kernel's LE s16 stream on the BE core.
+ * SDL: sysmode/basic_quetz_gpu_compute_coldfire.py.
  */
 
 #include <stdint.h>
@@ -84,8 +69,6 @@ void kernel_main(void)
     mmio_write32(GPU_ARG3, (uint32_t)(uint16_t)SCALE
                          | ((uint32_t)(uint16_t)OFFSET << 16));
     mmio_write32(GPU_DOORBELL, 0);       /* blocking: returns when done */
-    while (mmio_read32(GPU_STATUS))      /* (belt-and-suspenders) */
-        ;
 
     /* verify the transformed batch, word at a time */
     uint32_t correct = 0;

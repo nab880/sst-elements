@@ -1,29 +1,9 @@
 /*
- * coldfire_accel_sink.c — the full functional-validation loop on one guest:
- * recorded stimulus IN -> guest + accelerator compute -> captured response
- * OUT, ColdFire m68k.
- *
- *   stimulus   QuetzStreamDevice replays the recorded sensor fixture
- *              (252 pattern bytes as 126 LE s16 samples + sum32 trailer);
- *   compute    the guest verifies the trailer, stages the samples in the
- *              SST-backed window, and runs them through the DEVICE
- *              (quetz.ScaleOffsetKernel: sat16(s * SCALE + OFFSET));
- *   response   the transformed samples are pushed byte-exactly into
- *              QuetzSinkDevice, which captures them to a host file the test
- *              diffs against a host-computed expectation.
- *
- * The guest also cross-checks the device output against its own CPU-computed
- * transform, so a mismatch is attributed (device vs capture path) instead of
- * just failing the file diff.
- *
- * Value convention as everywhere on this branch: the bridge mailbox carries
- * *values* and SST serializes them little-endian, so u32 loads/stores move
- * 4 LE stream bytes at a time with no byte swapping on the BE core.
- *
- * SDL: sysmode/basic_quetz_gpu_compute_coldfire.py with
- * QUETZ_KERNEL=quetz.ScaleOffsetKernel, QUETZ_SENSOR_FILE and
- * QUETZ_SINK_FILE set (stream at 0x70010000, sink at 0x70020000, window at
- * 0x71000000).
+ * coldfire_accel_sink.c — full loop on one guest: stimulus (QuetzStreamDevice)
+ * -> device compute (quetz.ScaleOffsetKernel) -> capture (QuetzSinkDevice),
+ * ColdFire m68k. The guest also CPU-cross-checks the device output so a mismatch
+ * is attributed (device vs capture path). u32 moves = 4 LE stream bytes via SST's
+ * value-serialization, no BE swapping. SDL: basic_quetz_gpu_compute_coldfire.py.
  */
 
 #include <stdint.h>
@@ -129,8 +109,6 @@ void kernel_main(void)
     mmio_write32(GPU_ARG3, (uint32_t)(uint16_t)SCALE
                          | ((uint32_t)(uint16_t)OFFSET << 16));
     mmio_write32(GPU_DOORBELL, 0);                /* blocking: returns when done */
-    while (mmio_read32(GPU_STATUS))               /* (belt-and-suspenders) */
-        ;
 
     /* 3. Cross-check the device result, then push it into the sink. */
     uint32_t correct = 0;

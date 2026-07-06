@@ -1,27 +1,10 @@
 /*
- * fft_synth_compute.h — CPU-side staged radix-2 FFT for the synthetic-GPU demo.
- *
- * The synthetic QuetzGpuDevice is a pure latency model (doorbell -> BUSY -> IDLE,
- * no compute, no DMA). So the FFT math runs here on the guest CPU, while each
- * "kernel" is *timed* by ringing the device doorbell. This header holds only the
- * arithmetic (bit-reversal + log2(N) butterfly stages) so both the RISC-V and
- * m68k firmwares share one algorithm; each firmware owns its own MMIO/UART and
- * the launch_timed() doorbell loop.
- *
- * It is a direct port of balar/tests/balar_trace/fft_reference.py:fft_staged()
- * (the host twin of fft.cu). No libm, no balar, no wire packet. The twiddle table
- * comes from fft_firmware_data_256.h (fft_tw_bits[], IEEE-754 float32 bits).
- *
- * Scalar type:
- *   - Default (RISC-V rv64gc): hardware float32. cfloat = {float re, im}.
- *   - -DFFT_FIXED_POINT (ColdFire/m68k): Q16.16 fixed point in int32_t. ColdFire
- *     V2 has no FPU and the m68k libgcc soft-float (__mulsf3 &c.) hangs on it, so
- *     the m68k firmware uses integer arithmetic instead. The twiddle table is
- *     converted from float32 bits to Q16.16 on read.
- *
- * Impulse input (x[0]=1, rest 0) -> X[k] = 1+0j for all k. The twiddles only ever
- * multiply zero in that case, so the result is BIT-EXACT (fixed or float) — no
- * tolerance. verify_impulse() counts exactly-correct scalar words (512 for N=256).
+ * fft_synth_compute.h — CPU-side staged radix-2 FFT (bit-reversal + log2(N)
+ * butterflies) shared by the RISC-V and m68k synthetic-GPU demos; a port of
+ * balar_trace/fft_reference.py. Scalar type is hardware float32 by default;
+ * -DFFT_FIXED_POINT uses Q16.16 on ColdFire V2 because its m68k libgcc soft-float
+ * (__mulsf3 &c.) HANGS. Impulse input -> X[k]=1+0j, bit-exact (twiddles multiply
+ * only zero); verify_impulse() counts exactly-correct scalar words.
  */
 
 #ifndef FFT_SYNTH_COMPUTE_H

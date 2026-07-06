@@ -1,27 +1,12 @@
 /*
- * coldfire_intc.h — MCF5208 interrupt scaffold for QEMU mcf5208evb firmware.
- *
- * Everything needed to take an interrupt on a freestanding ColdFire guest:
- * a RAM vector table + VBR setup, INTC0 unmask/priority helpers, the IPL
- * mask/stop primitives, and the lost-wakeup-free wait pattern. Doubles as
- * the documented example for "how do I take interrupts at all" — see
- * SIMULATING-YOUR-SYSTEM.md § Interrupt-driven devices.
- *
- * Vector table: ColdFire VBR forces 1 MB alignment (its low 20 bits read as
- * zero on real parts), so the table lives in the .vectors section that
- * link_m68k.ld places at the very start of SDRAM (0x40000000). Firmware that
- * includes this header gets the table + a shifted .text automatically;
- * firmware that doesn't is laid out exactly as before (the section is empty).
- *
- * INTC0 (0xFC048000), QEMU model semantics (hw/m68k/mcf_intc.c):
- *   - a source is delivered only when its ICR level is nonzero (the ICR
- *     write is also what enables the source in QEMU) AND its IMR bit is 0;
- *   - CIMR (byte, +0x1D) clears one IMR bit: the value IS the source number;
- *   - vector = 64 + source, fetched from VBR + 4*vector;
- *   - IPR bit n mirrors the (level-semantics) line: it stays set until the
- *     device lowers the line, which for SST-window devices happens a poll
- *     tick after the guest writes the device's REG_IRQ_ACK — ISRs spin on
- *     cf_intc_pending() after acking (see the demo ISRs).
+ * coldfire_intc.h — MCF5208 interrupt scaffold for QEMU mcf5208evb firmware:
+ * RAM vector table + VBR, INTC0 unmask/priority, IPL mask/stop, and a
+ * lost-wakeup-free wait. Documented example — see SIMULATING-YOUR-SYSTEM.md.
+ * INTC0 (0xFC048000, hw/m68k/mcf_intc.c): a source fires when its ICR level != 0
+ * and its IMR bit is clear (CIMR clears by source number); vector = 64 + source;
+ * the IPR bit is level (stays set until the device lowers the line), so ISRs spin
+ * on cf_intc_pending() after acking. The table needs 1 MB-aligned .vectors (see
+ * link_m68k.ld).
  */
 
 #ifndef COLDFIRE_INTC_H

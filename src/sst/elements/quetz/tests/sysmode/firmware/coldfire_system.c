@@ -1,32 +1,10 @@
 /*
- * coldfire_system.c — full embedded-system demo on ColdFire (m68k, big-endian).
- *
- * The reference deck for the primary quetz use case: functionally validate
- * embedded code for a ColdFire board — UART console, GPS receiver, sensor
- * stream, and a generic accelerator — with no physical hardware and no
- * cycle-accuracy requirements ("does my code work?", not "how fast?").
- *
- * Peripherals and where they come from:
- *   UART0 console  QEMU's mcf5208 UART model. TX -> stdout (gold-compared),
- *                  RX <- the NMEA fixture via appstdin. TX and RX are
- *                  independent directions, so console output and GPS input
- *                  share UART0 without interfering.
- *   GPS            NMEA sentences replayed into UART0 RX. The firmware
- *                  validates each "$GPRMC...*HH" checksum and counts
- *                  active ('A') fixes — i.e. real driver-level parsing of
- *                  recorded device data.
- *   Sensors        QuetzStreamDevice at SENSOR_BASE (SST-side MMIO): pops the
- *                  recorded sample stream 4 bytes per DATA read, verifies the
- *                  sum32 trailer, then exercises CTRL rewind.
- *   Accelerator    QuetzGpuDevice at GPU_BASE (synthetic latency model):
- *                  two doorbell "batch process" kernels, completion polled
- *                  via STATUS/KERNEL_ID.
- *
- * PASS iff: GPS checksums and fix count match the fixture, the sensor stream
- * sum and rewind check out, and both accelerator kernels retire.
- *
- * SDL: sysmode/basic_quetz_coldfire_system.py.
- * Fixtures: tests/sysmode/data/gps_nmea.txt, tests/sysmode/data/sensor_stream.bin.
+ * coldfire_system.c — reference embedded-system demo on ColdFire (m68k, BE):
+ * functionally validate embedded code with no hardware — UART0 console (TX gold-
+ * compared, RX = NMEA fixture), GPS ($GPRMC checksum + active-fix parsing), sensor
+ * stream (QuetzStreamDevice, sum32 trailer + CTRL rewind), and a synthetic
+ * accelerator (QuetzGpuDevice, two doorbell kernels). PASS iff all three check out.
+ * SDL: sysmode/basic_quetz_coldfire_system.py; fixtures in tests/sysmode/data/.
  */
 
 #include <stdint.h>

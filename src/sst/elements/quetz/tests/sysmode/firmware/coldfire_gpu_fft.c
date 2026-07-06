@@ -1,17 +1,10 @@
 /*
  * coldfire_gpu_fft.c — 256-pt FFT on the SYNTHETIC GPU (m68k, balar-free).
- *
- * The ColdFire (32-bit big-endian, no FPU) counterpart of riscv_virt_gpu_fft.c.
- * The FFT math runs on the guest CPU in soft-float (libgcc __*sf3 helpers,
- * -msoft-float); the synthetic QuetzGpuDevice is used purely as a TIMING model,
- * with the same 11-kernel structure (1 H2D + 1 bitrev + 8 stages + 1 D2H) timed
- * by ringing the doorbell. Impulse input -> X[k]=1+0j, verified bit-exactly
- * (correct_words=512/512). No balar, no GPGPU-Sim, no wire marshalling — the FFT
- * data never leaves guest RAM, so the big-endian balar packing in
- * coldfire_balar.h is irrelevant here.
- *
- * SDL: sysmode/basic_quetz_gpu_coldfire.py (QuetzGpuDevice at 0x70000000, SDRAM
- * at 0x40000000, UART at 0xfc060000, TestFinisher sentinel at 0x80000000).
+ * ColdFire (32-bit BE, no FPU) counterpart of riscv_virt_gpu_fft.c: the FFT runs
+ * on the guest CPU in Q16.16 fixed point (m68k libgcc soft-float __mulsf3 hangs on
+ * ColdFire V2 — see fft_synth_compute.h); the synthetic QuetzGpuDevice is a pure
+ * timing model (11 doorbells). Impulse -> X[k]=1+0j, bit-exact 512/512. FFT data
+ * never leaves guest RAM. SDL: sysmode/basic_quetz_gpu_coldfire.py.
  */
 
 #include <stdint.h>

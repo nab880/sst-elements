@@ -1,21 +1,9 @@
 /*
- * coldfire_v4_fpu.c — ColdFire V4 codegen smoke: FPU + ISA_B + EMAC under
- * QEMU's cfv4e CPU model (mcf5208evb machine, `-cpu cfv4e`).
- *
- * The supported-parts gate for V4-core targets (CFV4SPPC1: V4 core with
- * EMAC + FPU): everything else in the suite is V2 integer code compiled
- * -mcpu=5208, which proves upward compatibility but exercises none of the
- * V4-only silicon. This firmware is compiled -mcpu=5475 (hard-float V4e),
- * so the compiler emits real ColdFire FPU instructions (fdmul/fdadd/fddiv,
- * int<->double moves) and ISA_B integer forms (mvz/mvs, mov3q), plus one
- * hand-written EMAC multiply-accumulate — and QEMU must execute them all.
- *
- * All FP checks compare exactly-representable values, so equality is
- * bit-exact and the test is deterministic. On the default m5208 CPU model
- * this binary would take an illegal-instruction/FP-unavailable exception —
- * run it only with `-cpu cfv4e`.
- *
- * SDL: sysmode/basic_quetz_sysmode.py (UART + TestFinisher + filtered).
+ * coldfire_v4_fpu.c — ColdFire V4e codegen smoke (FPU + ISA_B + EMAC), the
+ * supported-parts gate for V4 targets. Compiled -mcpu=5475 (hard-float V4e), so it
+ * emits real FPU/ISA_B/EMAC ops; MUST run with `-cpu cfv4e` or it takes an
+ * illegal-instruction/FP-unavailable trap. FP checks are bit-exact.
+ * SDL: sysmode/basic_quetz_sysmode.py.
  */
 
 #include <stdint.h>

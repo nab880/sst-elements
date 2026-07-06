@@ -1,27 +1,11 @@
 /*
  * bsp_torture.c — BSP-survival probe catalogue for QEMU mcf5208evb (m68k).
- *
- * Real ColdFire board code initializes the SoC before anything else: watchdog,
- * PLL/clocking, SCM, chip selects, GPIO, I2C. QEMU models only a few MCF5208
- * peripherals (UARTs, INTC, PITs, FEC, ...) — this firmware probes the
- * *unmodeled* BSP-init ranges and reports, per access, whether the machine
- * faults (access-error exception), reads-as-zero/writes-ignored (RAZ/WI), or
- * returns live values. It also runs the two behavioral hazards a plain
- * fault-catalogue misses:
- *
- *   - read-back-and-branch: a bounded "PLL lock bit" style poll (RAZ turns
- *     these into infinite hangs on real BSPs — worse than a fault);
- *   - write-then-verify: GPIO output readback (WI breaks it silently).
- *
- * Survives faults by installing a full 256-entry vector table (VBR moved to
- * a 1 MB-aligned SDRAM address) whose every entry lands in a handler that
- * records the ColdFire exception frame word, rewrites the saved PC to the
- * probe's resume label, and RTEs.
- *
- * This is the roadmap "BSP-survival spike" probe (plan-bsp-survival.md); the
- * output is the fault table that decides stub-device vs QEMU-overlay vs
- * porting-pattern mitigations. Always ends TESTDEV_PASS — the catalogue
- * itself is the result; assertions come with the mitigations.
+ * Probes the *unmodeled* BSP-init ranges and records per access: fault / RAZ-WI /
+ * live. Also runs the two dangerous behavioral hazards (RAZ on a lock-bit poll =
+ * infinite hang, worse than a fault; WI on a GPIO readback = silent broken verify).
+ * Survives faults via a full vector table that records the exception frame and
+ * RTEs to a resume label. plan-bsp-survival.md; always TESTDEV_PASS (the table is
+ * the result).
  */
 
 #include <stdint.h>
