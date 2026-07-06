@@ -65,52 +65,31 @@ parts are supported by *relocation*, not by new machine models:
 Demo firmware is built with `-mcpu=5208`; anything ISA_A+-compatible runs
 as-is, and V4 builds are covered below.
 
-### Target part: CFV4SPPC1 — assessed, Lane A holds (2026-07-04)
+### ColdFire V4 targets
 
-The named target is Silvaco's **CFV4SPPC1**: the licensable ColdFire V4
-core plus the Standard Product Platform C1 — a V4 core with EMAC and FPU
-(and an MMU), and a platform of a 64-source interrupt controller (unique
-vector per source), 3 UARTs, QSPI, I2C, 16-channel eDMA, 4 DMA timers, and
-an MCM watchdog on an AMBA AHB crossbar with FlexBus; the memory map is
-fixed by the SoC integrator, not by a standard part. Assessment result:
-**the mcf5208evb reference vehicle covers it — add `-cpu cfv4e` to
-`QUETZ_QEMU_ARGS`.** Everything below is verified in the suite:
+The target is a **ColdFire V4** core (V4/V4e with EMAC and FPU). The
+`mcf5208evb` reference vehicle covers it — add `-cpu cfv4e` to
+`QUETZ_QEMU_ARGS`. Verified in the suite:
 
-- **V2-compiled firmware runs unmodified** under `-cpu cfv4e` (full system
-  demo re-run during assessment).
+- **V2-compiled firmware runs unmodified** under `-cpu cfv4e`.
 - **V4-native codegen executes correctly**: `-mcpu=5475` (hard-float V4e)
   FPU doubles (mul/add/div, int↔double conversion), ISA_B integer forms,
   and an EMAC multiply-accumulate — `firmware/coldfire_v4_fpu.c`, gated by
   `test_quetz_coldfire_v4_fpu`.
 - **Interrupts work on the V4e model**: INTC vectoring, `stop` wake, and
-  SST-device IRQ injection — `test_quetz_coldfire_irq_cfv4e`. The C1
-  interrupt controller is the same 64-source unique-vector model family
-  QEMU's `mcf_intc` implements, so the `coldfire_intc.h` scaffold concepts
-  transfer (isolate the INTC register accesses in your driver; silicon
-  offsets may differ from the 5208 block).
+  SST-device IRQ injection — `test_quetz_coldfire_irq_cfv4e`. Isolate the
+  INTC register accesses in your driver; silicon offsets may differ from
+  the 5208 block.
 - **The BSP-honesty table is unchanged** under `-cpu cfv4e`
   (`bsp_torture`: still blanket RAZ/WI, no faults).
 
-Mapping the C1 platform onto the vehicle:
-
-| C1 peripheral | on the reference vehicle |
-|---|---|
-| 3 UARTs | modeled (same MCF UART programming model); relocate via `QUETZ_UART_ADDR` |
-| 64-source INTC | modeled analog (`mcf_intc`); IRQ injection + ISR scaffold work as-is |
-| QSPI, I2C, eDMA, DMA timers, MCM watchdog | not modeled → RAZ/WI; validate the *data path* with stream/sink devices; polled-status stubs on request |
-| AHB crossbar, FlexBus | fabric not modeled (functional fidelity); FlexBus-attached memories are plain RAM ranges |
-| memory map | integrator-defined → the relocation recipe above |
-
-Caveats: QEMU's `cfv4e` does not model the V4 **MMU** (freestanding /
-flat-supervisor firmware — this whole flow — is unaffected; MMU-on OS
-validation is out of scope), and it implements ISA_A/B + FPU + EMAC — if
-your toolchain emits ISA_C forms (`-mcpu=54455`-class), check before
-relying on it; `-mcpu=5475` output is the verified configuration.
-
-For a **different** target part: send the part number, board name, or a
-firmware ELF (`m68k-linux-gnu-readelf -A` shows the arch) — mapping it onto
-the reference vehicle is a short assessment, and this section gets updated
-with the result.
+On-chip peripherals the reference vehicle doesn't model read as RAZ/WI —
+validate the *data path* with stream/sink devices, or ask for
+polled-status stubs; the memory map is integrator-defined, so relocate via
+the table above. QEMU's `cfv4e` does not model the V4 **MMU** (freestanding
+/ flat-supervisor firmware — this whole flow — is unaffected; MMU-on OS
+validation is out of scope), and it implements ISA_A/B + FPU + EMAC —
+`-mcpu=5475` output is the verified configuration.
 
 ## Quickstart (three commands)
 
@@ -232,6 +211,28 @@ Multiple SST devices share **one** bridge window: put a `memHierarchy.Bus`
 between the CPU's `mmio_link_0` and the device interfaces and give each device
 a disjoint `base_addr` inside the window — the bus routes by address. See the
 demo deck's `mmio_bus` wiring.
+
+### Endianness contract (read this if your guest is big-endian)
+
+The bridge mailbox carries **numeric values**, not raw bytes, so a register
+access of a given size round-trips exactly on any guest — that is why the
+same firmware source is correct on ColdFire (BE) and RISC-V (LE) with no
+swapping. Two consequences to know:
+
+- **Device registers** (doorbell, STATUS, DATA, …) are value-semantic. Always
+  access a register at one size; mixed-size access to the same register is
+  not meaningful (devices count it under `bad_offset`/`wrong_direction`
+  statistics).
+- **The SST-backed memory window** (`QUETZ_SST_WIN_START/END`) stores those
+  values **little-endian by default**. Same-size access (write u32, read the
+  same u32) is exact on a BE guest, but *sub-word aliasing* — writing a word
+  and reading its bytes, or `memcpy`ing bytes and reading words — behaves LE,
+  the opposite of real big-endian memory. If your firmware does that (real
+  driver code staging descriptors or strings byte-wise usually does), export
+  `QUETZ_WIN_BIG_ENDIAN=1` (compute deck) or set `window_big_endian=1` on the
+  CPU **and** `data_big_endian=1` on any kernel that interprets window bytes:
+  the window bytes are then stored MSB-first and byte-level layout matches BE
+  hardware, while numeric same-size round-trips still hold.
 
 ## Anatomy of a deck
 
