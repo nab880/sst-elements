@@ -42,8 +42,9 @@ public:
     virtual ~QuetzKernel() {}
 
     // Bytes to DMA-read from src_addr for this op. Return 0 with `err` set
-    // to reject the op (the device fatals with the message) — e.g. a
-    // non-power-of-two FFT N.
+    // to reject the op — e.g. a non-power-of-two FFT N. The device abandons
+    // the op non-fatally: the doorbell completes, kernel_id does not
+    // advance, and the rejection is counted in the ops_rejected statistic.
     virtual uint64_t inputBytes(const KernelArgs& args, std::string& err) = 0;
 
     // Transform `in` -> `out` (the kernel sizes `out`; the device DMA-writes

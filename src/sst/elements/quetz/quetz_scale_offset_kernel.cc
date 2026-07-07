@@ -18,7 +18,8 @@ using namespace SST::Quetz;
 
 ScaleOffsetKernel::ScaleOffsetKernel(ComponentId_t id, Params& params)
     : QuetzKernel(id, params),
-      latency_coeff_(params.find<uint64_t>("latency_coeff", 4))
+      latency_coeff_(params.find<uint64_t>("latency_coeff", 4)),
+      big_endian_(params.find<bool>("data_big_endian", false))
 {}
 
 uint64_t ScaleOffsetKernel::inputBytes(const KernelArgs& args, std::string& err)
@@ -38,13 +39,17 @@ uint64_t ScaleOffsetKernel::compute(const KernelArgs& args,
     int16_t offset = (int16_t)((args.arg3 >> 16) & 0xFFFFu);
 
     uint64_t n = args.arg2;
+    // Byte lanes: [lo, hi] little-endian (default) or [hi, lo] big-endian
+    // (data_big_endian=1, matching a BE guest's window layout).
+    unsigned lo = big_endian_ ? 1 : 0;
+    unsigned hi = 1 - lo;
     out.resize(in.size());
     for (uint64_t i = 0; i < n; i++) {
-        int16_t s = (int16_t)((uint16_t)in[2 * i] |
-                              ((uint16_t)in[2 * i + 1] << 8));
+        int16_t s = (int16_t)((uint16_t)in[2 * i + lo] |
+                              ((uint16_t)in[2 * i + hi] << 8));
         int16_t r = quetz_scale_offset_sat16(s, scale, offset);
-        out[2 * i]     = (uint8_t)((uint16_t)r & 0xFF);
-        out[2 * i + 1] = (uint8_t)(((uint16_t)r >> 8) & 0xFF);
+        out[2 * i + lo] = (uint8_t)((uint16_t)r & 0xFF);
+        out[2 * i + hi] = (uint8_t)(((uint16_t)r >> 8) & 0xFF);
     }
 
     return latency_coeff_ * n;

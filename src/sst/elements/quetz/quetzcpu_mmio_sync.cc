@@ -78,6 +78,13 @@ AcceleratorPort* QuetzCPU::portForAddr(uint64_t addr) const
     return nullptr;
 }
 
+bool QuetzCPU::windowBigEndian(uint64_t addr) const
+{
+    return cfg_.window_big_endian && cfg_.sst_window_size != 0 &&
+           addr >= cfg_.sst_window_base &&
+           addr < cfg_.sst_window_base + cfg_.sst_window_size;
+}
+
 void QuetzCPU::pollMmioSyncMailbox()
 {
     QuetzSharedData* shared = frontend_->tunnel()->getSharedData();
@@ -105,8 +112,17 @@ void QuetzCPU::pollMmioSyncMailbox()
         fake.addr = addr;
         fake.size = size;
         if (cmd == QUETZ_CMD_MMIO_WRITE_REQ) {
-            for (uint32_t i = 0; i < size && i < sizeof(fake.data); i++)
-                fake.data[i] = (uint8_t)((wval >> (8 * i)) & 0xFF);
+            // The mailbox carries the numeric value; serialize it into memory
+            // byte order. LSB-first is the default; SST-window accesses pack
+            // MSB-first when window_big_endian is set so the stored bytes
+            // match a big-endian guest's real memory layout. (size > 8 never
+            // comes from the bridge — max_access_size is 8 — but guard the
+            // shift anyway.)
+            bool be = windowBigEndian(addr) && size <= 8;
+            for (uint32_t i = 0; i < size && i < sizeof(fake.data); i++) {
+                uint32_t shift = be ? (size - 1 - i) : i;
+                fake.data[i] = (uint8_t)((wval >> (8 * shift)) & 0xFF);
+            }
         }
         handleMmioSyncCommand(v, fake);
     }
@@ -133,7 +149,7 @@ bool QuetzCPU::handleMmioSyncCommand(uint32_t vcpu, const QuetzCommand& cmd)
 
     if (cmd.cmd == QUETZ_CMD_MMIO_READ_REQ) {
         auto* req = new StandardMem::Read(cmd.addr, cmd.size);
-        generic_pending_[req->getID()] = { vcpu, true };
+        generic_pending_[req->getID()] = { vcpu, true, windowBigEndian(cmd.addr) };
         iface->send(req);
         cores_[vcpu]->recordMmioSyncRequest(true);
         return true;
@@ -142,7 +158,7 @@ bool QuetzCPU::handleMmioSyncCommand(uint32_t vcpu, const QuetzCommand& cmd)
     if (cmd.cmd == QUETZ_CMD_MMIO_WRITE_REQ) {
         std::vector<uint8_t> payload(cmd.data, cmd.data + cmd.size);
         auto* req = new StandardMem::Write(cmd.addr, cmd.size, payload);
-        generic_pending_[req->getID()] = { vcpu, false };
+        generic_pending_[req->getID()] = { vcpu, false, false };
         iface->send(req);
         cores_[vcpu]->recordMmioSyncRequest(false);
         return true;
@@ -169,8 +185,16 @@ bool QuetzCPU::completeMmioSyncResponse(uint32_t vcpu_hint,
     uint64_t value = 0;
     if (it->second.is_read) {
         auto* rresp = dynamic_cast<StandardMem::ReadResp*>(resp);
-        if (rresp)
-            value = accelDataToU64(rresp->data);
+        if (rresp) {
+            if (it->second.win_be) {
+                // Big-endian window read: byte 0 is the MSB (mirror of the
+                // MSB-first pack in pollMmioSyncMailbox).
+                for (uint8_t b : rresp->data)
+                    value = (value << 8) | b;
+            } else {
+                value = accelDataToU64(rresp->data);
+            }
+        }
     }
     generic_pending_.erase(it);
     delete resp;

@@ -11,6 +11,7 @@
 
 #include "quetz_config.h"
 
+#include <cstdlib>
 #include <cstring>
 #include <inttypes.h>
 #include <sstream>
@@ -51,6 +52,25 @@ QuetzConfig QuetzConfig::fromParams(Params& params, SST::Output* out) {
             "async_offload=1 requires async_doorbell_addr to be set.\n");
     if (cfg.async_completion_depth == 0)
         cfg.async_completion_depth = 1;
+
+    cfg.window_big_endian = params.find<bool>("window_big_endian", false);
+    {
+        // Same source of truth as QemuLauncher::spawn — the SDL exports the
+        // window range for the bridge aperture; mirror it here so the mailbox
+        // knows which sync-MMIO addresses are window (memory-like) accesses.
+        const char* ws = getenv("QUETZ_SST_WIN_START");
+        const char* we = getenv("QUETZ_SST_WIN_END");
+        if (ws && we) {
+            cfg.sst_window_base = strtoull(ws, nullptr, 0);
+            uint64_t end = strtoull(we, nullptr, 0);
+            if (end >= cfg.sst_window_base)
+                cfg.sst_window_size = end - cfg.sst_window_base + 1;
+        }
+    }
+    if (cfg.window_big_endian && cfg.sst_window_size == 0)
+        out->fatal(CALL_INFO, -1,
+            "window_big_endian=1 but no SST window is configured "
+            "(QUETZ_SST_WIN_START/END not set) — nothing to apply it to.\n");
 
     cfg.system_mode        = params.find<bool>("system_mode", false);
     cfg.system_mode_loader = params.find<std::string>("system_mode_loader", "-kernel");

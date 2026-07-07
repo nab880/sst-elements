@@ -19,26 +19,36 @@ using namespace SST;
 using namespace SST::Quetz;
 
 namespace {
-// LE float32 marshalling — the device's canonical wire format, kept here so
-// the device stays ignorant of data formats.
-float le32_to_f32(const uint8_t* p) {
-    uint32_t b = (uint32_t)p[0] | ((uint32_t)p[1] << 8)
-               | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+// float32 marshalling — LE is the historical wire format; BE mirrors a
+// big-endian guest's memory layout (data_big_endian=1). Kept here so the
+// device stays ignorant of data formats.
+float bytes_to_f32(const uint8_t* p, bool be) {
+    uint32_t b = be
+        ? ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16)
+            | ((uint32_t)p[2] << 8) | (uint32_t)p[3]
+        : (uint32_t)p[0] | ((uint32_t)p[1] << 8)
+            | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
     float f;
     memcpy(&f, &b, sizeof(f));
     return f;
 }
-void f32_to_le32(float f, uint8_t* p) {
+void f32_to_bytes(float f, uint8_t* p, bool be) {
     uint32_t b;
     memcpy(&b, &f, sizeof(b));
-    p[0] = (uint8_t)b; p[1] = (uint8_t)(b >> 8);
-    p[2] = (uint8_t)(b >> 16); p[3] = (uint8_t)(b >> 24);
+    if (be) {
+        p[0] = (uint8_t)(b >> 24); p[1] = (uint8_t)(b >> 16);
+        p[2] = (uint8_t)(b >> 8);  p[3] = (uint8_t)b;
+    } else {
+        p[0] = (uint8_t)b; p[1] = (uint8_t)(b >> 8);
+        p[2] = (uint8_t)(b >> 16); p[3] = (uint8_t)(b >> 24);
+    }
 }
 } // namespace
 
 FFTKernel::FFTKernel(ComponentId_t id, Params& params)
     : QuetzKernel(id, params),
-      latency_coeff_(params.find<uint64_t>("fft_latency_coeff", 20))
+      latency_coeff_(params.find<uint64_t>("fft_latency_coeff", 20)),
+      big_endian_(params.find<bool>("data_big_endian", false))
 {}
 
 uint64_t FFTKernel::inputBytes(const KernelArgs& args, std::string& err)
@@ -62,14 +72,14 @@ uint64_t FFTKernel::compute(const KernelArgs& args,
 
     std::vector<QuetzCf> a((size_t)n);
     for (uint32_t i = 0; i < n; i++) {
-        a[i].re = le32_to_f32(&in[(size_t)i * 8 + 0]);
-        a[i].im = le32_to_f32(&in[(size_t)i * 8 + 4]);
+        a[i].re = bytes_to_f32(&in[(size_t)i * 8 + 0], big_endian_);
+        a[i].im = bytes_to_f32(&in[(size_t)i * 8 + 4], big_endian_);
     }
     quetz_fft_radix2(a.data(), n);
     out.resize(in.size());
     for (uint32_t i = 0; i < n; i++) {
-        f32_to_le32(a[i].re, &out[(size_t)i * 8 + 0]);
-        f32_to_le32(a[i].im, &out[(size_t)i * 8 + 4]);
+        f32_to_bytes(a[i].re, &out[(size_t)i * 8 + 0], big_endian_);
+        f32_to_bytes(a[i].im, &out[(size_t)i * 8 + 4], big_endian_);
     }
 
     return latency_coeff_ * (uint64_t)n * (uint64_t)(logn ? logn : 1);

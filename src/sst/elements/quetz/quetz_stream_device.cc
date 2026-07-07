@@ -122,7 +122,10 @@ void QuetzStreamDevice::init(unsigned int phase) { iface_->init(phase); }
 void QuetzStreamDevice::setup() { iface_->setup(); }
 
 // Raise the data-ready IRQ line (level semantics: it stays raised until the
-// guest writes REG_IRQ_ACK). Refills while already raised do not re-send.
+// guest writes REG_IRQ_ACK). Refills while already raised do not re-send —
+// the level is already 1 — but every refill that delivers bytes re-asserts
+// after an ack, so a consumer that acked mid-drain and slept is woken by the
+// next refill rather than sleeping forever (see tickPace).
 void QuetzStreamDevice::raiseDataReadyIrq() {
     if (irq_line_ < 0 || irq_pending_)
         return;
@@ -148,11 +151,17 @@ bool QuetzStreamDevice::tickPace(SST::Cycle_t) {
     if (budget_given_ < stream_.size()) {
         uint64_t take = stream_.size() - budget_given_;
         if (take > pace_bytes_) take = pace_bytes_;
-        bool was_empty = (avail_ == 0);
         budget_given_ += take;
         avail_        += take;
         stat_paced_refills_->addData(1);
-        if (was_empty && take > 0)
+        // Assert on EVERY refill that adds bytes, not only the 0->nonzero
+        // edge: a guest that popped some bytes, acked, and went back to sleep
+        // (avail_ still > 0) must be woken by the next refill. Gating on
+        // "was empty" here lost that wakeup. raiseDataReadyIrq() is a no-op
+        // while the line is still raised. A consumer must still drain to
+        // REG_EOS before its final sleep — after the last refill no further
+        // assertion can come.
+        if (take > 0)
             raiseDataReadyIrq();
     }
     return false;

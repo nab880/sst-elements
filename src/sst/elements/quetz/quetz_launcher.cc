@@ -170,21 +170,10 @@ pid_t QemuLauncher::spawn(const QuetzConfig& cfg,
         output_->fatal(CALL_INFO, -1, "fork() failed: %s\n", strerror(errno));
 
     if (child != 0) {
+        // Startup failure (bad qemu path etc.) is detected by
+        // waitForChildAttach(), which polls waitpid(WNOHANG) while spinning
+        // on the attach flag.
         pid_ = child;
-        int pstat;
-        pid_t rc = waitpid(child, &pstat, WNOHANG);
-        if (rc > 0) {
-            if (WIFEXITED(pstat))
-                output_->fatal(CALL_INFO, -1,
-                    "QEMU exited immediately with status %d.\n",
-                    WEXITSTATUS(pstat));
-            else if (WIFSIGNALED(pstat))
-                output_->fatal(CALL_INFO, -1,
-                    "QEMU terminated by signal %d.\n", WTERMSIG(pstat));
-            else
-                output_->fatal(CALL_INFO, -1,
-                    "QEMU failed to start (pstat=%d).\n", pstat);
-        }
         return pid_;
     }
 
@@ -216,11 +205,37 @@ pid_t QemuLauncher::spawn(const QuetzConfig& cfg,
 }
 
 void QemuLauncher::terminate() {
-    if (pid_ != 0)
-        kill(pid_, SIGTERM);
+    if (pid_ == 0)
+        return;
+    kill(pid_, SIGTERM);
+    // Reap the child so it does not linger as a zombie for the rest of the
+    // SST process lifetime. Give SIGTERM a bounded grace window, then
+    // escalate to SIGKILL (which cannot be ignored) and reap for real.
+    const int grace_ms = 2000;
+    const int poll_ms  = 10;
+    for (int waited = 0; waited < grace_ms; waited += poll_ms) {
+        int pstat;
+        pid_t rc = waitpid(pid_, &pstat, WNOHANG);
+        if (rc == pid_ || (rc < 0 && errno == ECHILD)) {
+            pid_ = 0;
+            return;
+        }
+        usleep(poll_ms * 1000);
+    }
+    output_->verbose(CALL_INFO, 1, 0,
+        "QEMU (pid %d) did not exit within %d ms of SIGTERM; sending SIGKILL.\n",
+        (int)pid_, grace_ms);
+    kill(pid_, SIGKILL);
+    int pstat;
+    waitpid(pid_, &pstat, 0);
+    pid_ = 0;
 }
 
 void QemuLauncher::forceKill() {
-    if (pid_ != 0)
-        kill(pid_, SIGKILL);
+    if (pid_ == 0)
+        return;
+    kill(pid_, SIGKILL);
+    int pstat;
+    waitpid(pid_, &pstat, 0);
+    pid_ = 0;
 }

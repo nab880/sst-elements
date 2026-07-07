@@ -41,9 +41,12 @@ QuetzGpuDevice::QuetzGpuDevice(ComponentId_t id, Params& params)
       irq_line_(params.find<int64_t>("irq_line", -1)),
       irq_vcpu_(params.find<uint32_t>("irq_vcpu", 0)),
       irq_pending_(false),
+      irq_events_(0),
       irq_link_(nullptr),
       kernel_(nullptr),
       mem_iface_(nullptr),
+      dma_range_start_(params.find<uint64_t>("dma_range_start", 0)),
+      dma_range_end_(params.find<uint64_t>("dma_range_end", 0)),
       arg_regs_{0, 0, 0, 0},
       op_args_{0, 0, 0, 0},
       op_phase_(OpPhase::IDLE),
@@ -58,7 +61,8 @@ QuetzGpuDevice::QuetzGpuDevice(ComponentId_t id, Params& params)
       stat_doorbell_while_busy_(nullptr),
       stat_irqs_raised_(nullptr),
       stat_wrong_direction_accesses_(nullptr),
-      stat_bad_offset_accesses_(nullptr)
+      stat_bad_offset_accesses_(nullptr),
+      stat_ops_rejected_(nullptr)
 {
     out.init("", params.find<int>("verbose", 0), 0, Output::STDOUT);
 
@@ -146,6 +150,7 @@ QuetzGpuDevice::QuetzGpuDevice(ComponentId_t id, Params& params)
     stat_wrong_direction_accesses_ =
         registerStatistic<uint64_t>("wrong_direction_accesses");
     stat_bad_offset_accesses_ = registerStatistic<uint64_t>("bad_offset_accesses");
+    stat_ops_rejected_        = registerStatistic<uint64_t>("ops_rejected");
 
     out.verbose(CALL_INFO, 1, 0,
         "%s: MMIO [0x%" PRIx64 ", 0x%" PRIx64 ") kernel_latency=%" PRIu64 " cycles\n",
@@ -181,6 +186,10 @@ void QuetzGpuDevice::startKernel(uint64_t now_clk, uint64_t latency) {
         out.verbose(CALL_INFO, 2, 0,
             "%s: kernel %" PRIu64 " complete at clk %" PRIu64 " (zero latency)\n",
             getName().c_str(), kernel_id_, now_clk);
+        // A zero-latency completion is still a completion: without this an
+        // ISR-driven guest that submits with LATENCY_OVERRIDE=0 (or a deck
+        // with kernel_latency=0) waits forever for an IRQ that never comes.
+        raiseIrqOnRetire();
     } else {
         busy_until_clk_ = now_clk + latency;
         out.verbose(CALL_INFO, 2, 0,
@@ -202,23 +211,41 @@ void QuetzGpuDevice::updatePrimaryHold(bool allow_ok_to_end) {
     }
 }
 
-// Raise the completion IRQ line (level semantics: it stays raised until the
-// guest writes REG_IRQ_ACK). Retires while already raised do not re-send —
-// the ISR reads REG_KERNEL_ID to see how many ops completed.
+// Completion IRQ, level semantics with event counting: every retire adds one
+// unconsumed completion event and the line is held raised while any remain.
+// A retire while the line is already raised does not re-send (the level is
+// already 1) but does count, so an ack between two retires cannot lose the
+// second completion — the line simply stays raised and the guest re-enters
+// its ISR after RTE.
 void QuetzGpuDevice::raiseIrqOnRetire() {
-    if (irq_line_ < 0 || irq_pending_)
+    if (irq_line_ < 0)
+        return;
+    irq_events_++;
+    if (irq_pending_)
         return;
     irq_pending_ = true;
     stat_irqs_raised_->addData(1);
     irq_link_->send(new QuetzIrqEvent(irq_vcpu_, (uint32_t)irq_line_, 1));
     out.verbose(CALL_INFO, 2, 0,
-        "%s: IRQ line %" PRId64 " raised (kernel_id=%" PRIu64 ")\n",
-        getName().c_str(), irq_line_, kernel_id_);
+        "%s: IRQ line %" PRId64 " raised (kernel_id=%" PRIu64
+        ", events=%" PRIu64 ")\n",
+        getName().c_str(), irq_line_, kernel_id_, irq_events_);
 }
 
-void QuetzGpuDevice::ackIrq() {
+// A REG_IRQ_ACK write of N consumes up to N completion events (existing
+// firmware writes 1 per completion; ~0 acks everything). The line lowers only
+// when no unconsumed events remain.
+void QuetzGpuDevice::ackIrq(uint64_t consume) {
     if (irq_line_ < 0 || !irq_pending_)
         return;
+    irq_events_ -= (consume < irq_events_) ? consume : irq_events_;
+    if (irq_events_ > 0) {
+        out.verbose(CALL_INFO, 2, 0,
+            "%s: IRQ ack consumed %" PRIu64 " event(s), %" PRIu64
+            " outstanding — line stays raised\n",
+            getName().c_str(), consume, irq_events_);
+        return;
+    }
     irq_pending_ = false;
     irq_link_->send(new QuetzIrqEvent(irq_vcpu_, (uint32_t)irq_line_, 0));
     out.verbose(CALL_INFO, 2, 0,
@@ -364,9 +391,11 @@ void QuetzGpuDevice::mmioHandlers::handle(StandardMem::Write* write) {
     } else if (offset == REG_ARG3) {
         gpu->arg_regs_[3] = dataToU64(&write->data);
     } else if (offset == REG_IRQ_ACK) {
-        // W1C-style ack: any nonzero value lowers the completion IRQ line.
-        if (dataToU64(&write->data) != 0)
-            gpu->ackIrq();
+        // Ack value = completion events to consume (1 per serviced completion;
+        // ~0 acks all). The line lowers only when every event is consumed.
+        uint64_t consume = dataToU64(&write->data);
+        if (consume != 0)
+            gpu->ackIrq(consume);
     } else if (offset == REG_STATUS || offset == REG_KERNEL_ID ||
                offset == REG_TICKET || offset == REG_RESULT) {
         gpu->stat_wrong_direction_accesses_->addData(1);
@@ -454,12 +483,53 @@ void QuetzGpuDevice::mmioHandlers::handle(StandardMem::WriteResp* resp) {
 // Data format and latency model are the kernel's business; the device only
 // moves bytes.
 
+// The op arguments are guest-programmed registers: buggy firmware — the code
+// a user is here to test — must not be able to crash the simulator with them.
+// A bad op is abandoned: counted, logged, doorbell response released so the
+// guest unblocks, and kernel_id does NOT advance (the guest-visible signal
+// that the op never ran) — analogous to real hardware ignoring a malformed
+// descriptor rather than wedging the bus.
+void QuetzGpuDevice::opReject(const char* why) {
+    stat_ops_rejected_->addData(1);
+    out.verbose(CALL_INFO, 1, 0,
+        "%s: kernel op REJECTED (src=0x%" PRIx64 " dst=0x%" PRIx64
+        " arg2=%" PRIu64 "): %s — kernel_id stays %" PRIu64 "\n",
+        getName().c_str(), op_args_.src_addr, op_args_.dst_addr,
+        op_args_.arg2, why, kernel_id_);
+    op_phase_ = OpPhase::IDLE;
+    busy_until_clk_ = 0;
+    if (op_doorbell_resp_) {
+        iface->send(op_doorbell_resp_);
+        op_doorbell_resp_ = nullptr;
+    }
+    updatePrimaryHold(false);
+}
+
+bool QuetzGpuDevice::dmaRangeOk(uint64_t addr, uint64_t len) const {
+    if (dma_range_end_ == 0)
+        return true;    // unconfigured: no restriction
+    return addr >= dma_range_start_ && addr <= dma_range_end_ &&
+           len <= dma_range_end_ - addr + 1;
+}
+
 void QuetzGpuDevice::opStartDma() {
     std::string err;
     op_in_bytes_ = kernel_->inputBytes(op_args_, err);
     if (op_in_bytes_ == 0) {
-        out.fatal(CALL_INFO, -1, "%s: kernel rejected the op: %s\n",
-            getName().c_str(), err.empty() ? "(no reason given)" : err.c_str());
+        opReject(err.empty() ? "kernel rejected the args (no reason given)"
+                             : err.c_str());
+        return;
+    }
+    if (!dmaRangeOk(op_args_.src_addr, op_in_bytes_)) {
+        opReject("input buffer escapes the DMA range (dma_range_start/end)");
+        return;
+    }
+    // The output size is only known after compute(); the full range check
+    // happens in opBeginWriteback(). Reject an obviously-wild base now so
+    // the op does not burn a whole compute first.
+    if (!dmaRangeOk(op_args_.dst_addr, 1)) {
+        opReject("output buffer base escapes the DMA range (dma_range_start/end)");
+        return;
     }
     op_in_.assign(op_in_bytes_, 0);
     op_req_off_.clear();
@@ -519,6 +589,12 @@ void QuetzGpuDevice::opComputeAndStartBusy() {
 }
 
 void QuetzGpuDevice::opBeginWriteback() {
+    // Output size is known only now (the kernel sized op_out_ in compute):
+    // complete the range check opStartDma() could only start.
+    if (!dmaRangeOk(op_args_.dst_addr, op_out_.size())) {
+        opReject("output buffer escapes the DMA range (dma_range_start/end)");
+        return;
+    }
     op_phase_ = OpPhase::WRITING;
     op_dma_outstanding_ = 0;
     out.verbose(CALL_INFO, 2, 0,

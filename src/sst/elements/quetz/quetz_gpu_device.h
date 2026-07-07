@@ -54,14 +54,27 @@ public:
           "'kernel' slot is populated.", "0" },
         { "irq_line",
           "(int) Machine interrupt-controller input raised when an op "
-          "retires and lowered on a REG_IRQ_ACK write. Requires the 'irq' "
-          "port to be linked to a QuetzCPU irq_link_%d port. -1 = disabled "
-          "(poll REG_STATUS/REG_KERNEL_ID instead).", "-1" },
+          "retires. Level semantics with event counting: each retire adds one "
+          "completion event; a REG_IRQ_ACK write of N consumes up to N events "
+          "and the line lowers only when all events are consumed, so a "
+          "retirement between IRQ delivery and ack is never lost. Requires "
+          "the 'irq' port to be linked to a QuetzCPU irq_link_%d port. -1 = "
+          "disabled (poll REG_STATUS/REG_KERNEL_ID instead).", "-1" },
         { "irq_vcpu",
           "(uint32) IRQ-mailbox row the raise is posted to (single-core "
           "guests: 0).", "0" },
         { "dma_bytes_per_kernel",
-          "(uint64) Synthetic DMA bytes per kernel (P2.b only; must be 0)", "0" })
+          "(uint64) Synthetic DMA bytes per kernel (P2.b only; must be 0)", "0" },
+        { "dma_range_start",
+          "(uint64) With dma_range_end: the only guest-phys range kernel DMA "
+          "may touch (the SST-backed window). An op whose input or output "
+          "buffer falls outside is REJECTED — counted in ops_rejected, the "
+          "doorbell completes, kernel_id does not advance — instead of the "
+          "guest-programmed address crashing the simulation in memHierarchy "
+          "routing. Both 0 = unrestricted (legacy behavior).", "0" },
+        { "dma_range_end",
+          "(uint64) Inclusive end of the kernel-DMA range; see "
+          "dma_range_start. 0 = unrestricted.", "0" })
 
     SST_ELI_DOCUMENT_PORTS(
         { "irq",
@@ -95,7 +108,11 @@ public:
         { "wrong_direction_accesses",
           "Reads/writes to mapped registers with the wrong direction", "requests", 1 },
         { "bad_offset_accesses",
-          "Reads/writes to offsets not in the register map", "requests", 1 })
+          "Reads/writes to offsets not in the register map", "requests", 1 },
+        { "ops_rejected",
+          "Kernel ops rejected non-fatally (kernel refused the args, or a "
+          "buffer escapes dma_range_start/end); kernel_id does not advance",
+          "operations", 1 })
 
     QuetzGpuDevice(ComponentId_t id, Params& params);
 
@@ -137,7 +154,7 @@ protected:
     void startKernel(uint64_t now_clk, uint64_t latency);
     void updatePrimaryHold(bool allow_ok_to_end);
     void raiseIrqOnRetire();
-    void ackIrq();
+    void ackIrq(uint64_t consume);
 
     // --- kernel-slot op: DMA state machine around the plugged compute ---------
     void opStartDma();            // on doorbell: begin DMA-read of the input
@@ -146,6 +163,8 @@ protected:
     void opComputeAndStartBusy(); // input fully read: compute, then go BUSY
     void opBeginWriteback();      // busy done: DMA-write the result
     void opFinish();              // writeback done: retire + release doorbell
+    void opReject(const char* why);  // abandon the op non-fatally
+    bool dmaRangeOk(uint64_t addr, uint64_t len) const;
     Output out;
 
     TimeConverter tc_;
@@ -169,12 +188,16 @@ protected:
     // --- completion IRQ (irq_line_ >= 0) ---------------------------------------
     int64_t   irq_line_;
     uint32_t  irq_vcpu_;
-    bool      irq_pending_;      // line raised, not yet guest-acked
+    bool      irq_pending_;      // line currently raised
+    uint64_t  irq_events_;       // completions not yet consumed by an ack
     SST::Link* irq_link_;
 
     // --- kernel-slot state -----------------------------------------------------
     QuetzKernel* kernel_;                  // nullptr = pure latency model
     Interfaces::StandardMem* mem_iface_;   // memory initiator (kernel ops)
+    // Guest-phys range kernel DMA may touch (dma_range_end_ == 0 = any).
+    uint64_t dma_range_start_;
+    uint64_t dma_range_end_;
 
     // Guest-programmed operand registers (REG_ARG0..3), captured into a
     // KernelArgs at doorbell time.
@@ -204,6 +227,7 @@ protected:
     Statistic<uint64_t>* stat_irqs_raised_;
     Statistic<uint64_t>* stat_wrong_direction_accesses_;
     Statistic<uint64_t>* stat_bad_offset_accesses_;
+    Statistic<uint64_t>* stat_ops_rejected_;
 
     static constexpr size_t kMaxPendingLaunches = 8;
     static constexpr uint64_t REG_DOORBELL         = 0x00;  // W: submit

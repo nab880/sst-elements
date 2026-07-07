@@ -54,6 +54,18 @@ struct QuetzConfig {
     uint64_t async_doorbell_size    = 0x40;
     uint32_t async_completion_depth = 1;
 
+    // SST-backed memory window byte layout. The sync-MMIO mailbox carries
+    // numeric values; when the guest is big-endian, packing them LSB-first
+    // into SST memory (the historical default) diverges from the guest's real
+    // memory layout for mixed-size access. window_big_endian=1 packs window
+    // accesses MSB-first so byte-level aliasing matches BE hardware. The
+    // window range comes from the same QUETZ_SST_WIN_START/END environment
+    // variables the launcher uses; device-register apertures keep value
+    // semantics regardless.
+    bool     window_big_endian = false;
+    uint64_t sst_window_base   = 0;
+    uint64_t sst_window_size   = 0;
+
     bool        system_mode         = false;
     std::string system_mode_loader  = "-kernel";
     std::string qemu_bin            = "qemu-riscv64";

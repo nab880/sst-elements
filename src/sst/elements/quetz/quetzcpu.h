@@ -108,6 +108,16 @@ public:
           "Maximum number of in-flight async offloads per vCPU (1 = single "
           "outstanding op, CUDA single-stream semantics).",
           "1" },
+        { "window_big_endian",
+          "Set to 1 when the guest is big-endian (e.g. ColdFire/m68k) to pack "
+          "SST-window accesses MSB-first, so the window's byte layout in SST "
+          "memory matches the guest's real memory layout for mixed-size "
+          "(byte-then-word) access. Requires QUETZ_SST_WIN_START/END. Device "
+          "kernels interpreting window bytes must be given the matching "
+          "data_big_endian=1. Default 0: numeric-value (little-endian) "
+          "packing, under which same-size access round-trips exactly but "
+          "sub-word aliasing behaves little-endian.",
+          "0" },
         { "executable",
           "Path to the guest binary to run under QEMU.", "" },
         { "qemu",
@@ -415,6 +425,10 @@ private:
     void pollMmioSyncMailbox();
     bool handleMmioSyncCommand(uint32_t vcpu, const QuetzCommand& cmd);
     AcceleratorPort* portForAddr(uint64_t addr) const;
+    // True when `addr` lies in the SST-backed window AND window_big_endian is
+    // set: the access's bytes are packed MSB-first so the window's byte
+    // layout matches big-endian guest memory (see QuetzConfig).
+    bool windowBigEndian(uint64_t addr) const;
     // True while any accelerator port has a posted offload in flight; keeps the
     // simulation alive even when the polling vCPU is otherwise idle.
     bool hasAsyncInFlight() const;
@@ -422,7 +436,7 @@ private:
     bool asyncOutstandingForVcpu(uint32_t vcpu) const;
 
     // Generic (non-accelerator) synchronous MMIO requests awaiting a response.
-    struct GenericPending { uint32_t vcpu; bool is_read; };
+    struct GenericPending { uint32_t vcpu; bool is_read; bool win_be; };
     std::unordered_map<uint64_t, GenericPending> generic_pending_;
 
     QuetzConfig cfg_;

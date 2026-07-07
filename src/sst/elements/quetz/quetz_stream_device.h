@@ -53,10 +53,13 @@ public:
         { "pace_period",
           "(UnitAlgebra/string) Refill interval for pace_bytes", "100us" },
         { "irq_line",
-          "(int) Machine interrupt-controller input raised when a paced "
-          "refill makes STATUS go 0 -> nonzero (data ready) and lowered on a "
-          "REG_IRQ_ACK write. Requires pacing (pace_bytes > 0) and the 'irq' "
-          "port linked to a QuetzCPU irq_link_%d port. -1 = disabled.", "-1" },
+          "(int) Machine interrupt-controller input asserted by every paced "
+          "refill that delivers bytes (data ready) and lowered on a "
+          "REG_IRQ_ACK write; a consumer that acks mid-drain and sleeps is "
+          "re-woken by the next refill. Drain to REG_EOS before the final "
+          "sleep — nothing re-asserts after the last refill. Requires pacing "
+          "(pace_bytes > 0) and the 'irq' port linked to a QuetzCPU "
+          "irq_link_%d port. -1 = disabled.", "-1" },
         { "irq_vcpu",
           "(uint32) IRQ-mailbox row the raise is posted to (single-core "
           "guests: 0).", "0" })

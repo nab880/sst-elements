@@ -33,6 +33,18 @@ QuetzCPU::QuetzCPU(ComponentId_t id, Params& params)
     cfg_ = QuetzConfigManager::fromParams(params, output_).config();
     output_->setVerboseLevel(cfg_.verbosity);
 
+    // The system-mode sync-MMIO path is single-vCPU only: the launcher
+    // instantiates every sst-mmio-bridge aperture with vcpu_id=0, so two MTTCG
+    // vCPU threads would race one request slot (lost requests, interleaved
+    // field writes) with no diagnostic. Refuse the config until per-vCPU
+    // bridge instances exist.
+    if (cfg_.system_mode && cfg_.vcpu_count > 1) {
+        output_->fatal(CALL_INFO, -1,
+            "system_mode=1 supports only vcpu_count=1 (the QEMU MMIO bridge "
+            "is wired to mailbox slot 0; SMP guests would race it). Use "
+            "vcpu_count=1, or user mode for multi-threaded workloads.\n");
+    }
+
     output_->verbose(CALL_INFO, 1, 0, "Creating QuetzComponent...\n");
     output_->verbose(CALL_INFO, 1, 0,
         "Configuring for %" PRIu32 " vCPU(s).\n", cfg_.vcpu_count);

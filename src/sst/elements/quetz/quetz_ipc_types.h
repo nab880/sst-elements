@@ -87,8 +87,15 @@ static constexpr unsigned QUETZ_MAX_MMIO_VCORES = 256;
 // acquire-load of `seq` and re-applies qemu_set_irq(level) whenever seq moved.
 // QEMU never writes the slot, so there is no lost-update window — a consumer
 // that pairs a stale seq with a newer level merely re-applies the same level
-// on its next poll tick. Level semantics (not edges): the device holds the
-// line raised until the guest acks it through the device's MMIO ack register.
+// on its next poll tick.
+//
+// CONTRACT (level semantics, not edges): the slot carries the CURRENT line
+// level, and the poller only ever observes the latest value — a raise
+// followed by a lower between two poll ticks collapses to the final level.
+// Transient pulses are therefore lost BY DESIGN. A device must hold the line
+// raised for as long as unconsumed work exists and lower it only when the
+// guest has acked everything (see QuetzGpuDevice::ackIrq's event counting) —
+// under that discipline the collapsed observation is always the correct one.
 // Keep in sync with quetz-docker/qemu-overlay/include/quetz/quetz_ipc_types.h.
 static constexpr unsigned QUETZ_MAX_IRQ_LINES = 64;
 
@@ -96,6 +103,15 @@ struct QuetzIrqSlot {
     volatile uint32_t seq;    // release-store by SST, acquire-load by QEMU
     uint32_t          level;  // 1 = raise, 0 = lower
 };
+
+// Layout stamp written by the SST master at init and verified by every
+// attaching client (QEMU bridge / overlay IPC client) before it touches the
+// region. It sits at the END of QuetzSharedData on purpose: its offset moves
+// if either this struct or SST-core's tunnel header (which the overlay client
+// hand-mirrors) drifts, turning silent layout skew into a loud attach
+// failure. 'QZM' + layout version — BUMP THE LOW BYTE on ANY change to this
+// struct, and keep the overlay mirror header in lockstep.
+static constexpr uint32_t QUETZ_SHM_MAGIC = 0x515A4D01u;
 
 struct QuetzSharedData {
     size_t            numCores;
@@ -106,6 +122,8 @@ struct QuetzSharedData {
     QuetzMmioResponseSlot mmio_slot[QUETZ_MAX_MMIO_VCORES];
     QuetzMmioSyncRequest  mmio_req[QUETZ_MAX_MMIO_VCORES];
     QuetzIrqSlot          irq_slot[QUETZ_MAX_MMIO_VCORES][QUETZ_MAX_IRQ_LINES];
+    volatile uint32_t magic;   // QUETZ_SHM_MAGIC — keep as the LAST field
+    uint32_t          _pad1;
 };
 
 } // namespace Quetz
