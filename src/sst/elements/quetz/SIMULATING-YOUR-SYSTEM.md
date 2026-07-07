@@ -378,6 +378,12 @@ level)` (ICR + CIMR), and the lost-wakeup-free `cf_wait_until(cond)` pattern
 built on `stop #0x2000`. Declare ISRs `__attribute__((interrupt_handler))`;
 ack the device first, then spin on `cf_intc_pending(line)` until the lower
 propagates (one bridge poll tick) so RTE doesn't re-enter on the stale
-level. `firmware/coldfire_irq_demo.c` (+ `test_quetz_coldfire_irq`) is the
+level — but guard the spin with the device's own line state (read back via
+its IRQ_ACK register): if the device still holds or re-raises the line (the
+GPU keeps it raised while unconsumed completion events remain; a paced
+stream refill can re-assert between your ack and the bridge's next poll),
+the IPR bit is legitimately set and the ISR must return so RTE re-takes the
+IRQ — an unguarded `while (cf_intc_pending(line));` deadlocks there.
+`firmware/coldfire_irq_demo.c` (+ `test_quetz_coldfire_irq`) is the
 complete worked example: ISR-driven accelerator completion and data-ready
 sensor drain with zero busy-wait polls.

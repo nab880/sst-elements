@@ -25,8 +25,11 @@ typedef int32_t fft_scalar;
  * ColdFire would lower a 64-bit multiply to libgcc's __muldi3, which HANGS on
  * ColdFire V2). We form the unsigned 64-bit product as hi:lo two 32-bit words
  * from 16-bit-limb partials (each a 32-bit ColdFire mulu.l), take bits [47:16]
- * as the Q16.16 magnitude, then apply the sign. Result matches
- * ((int64_t)a*b)>>16 for the bounded FFT range (|value| < 2^24). */
+ * as the Q16.16 magnitude, then apply the sign. NOTE: magnitude-truncate-then-
+ * negate rounds toward zero, whereas ((int64_t)a*b)>>16 floors — negative
+ * products with nonzero low 16 bits come out 1 ULP higher here. The impulse
+ * test is unaffected (every twiddle product is exactly zero), but real-signal
+ * outputs will differ from fft_reference.py by up to 1 ULP per multiply. */
 static inline fft_scalar fft_mul(fft_scalar a, fft_scalar b)
 {
     int32_t neg = 0;

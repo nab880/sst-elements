@@ -143,8 +143,8 @@ M68K_FP_FLAGS="-mcpu=5208 -O2 -DFFT_FIXED_POINT \
   -nostdlib -nostartfiles -ffreestanding \
   -T link_m68k.ld -Wl,--build-id=none"
 # NO -lgcc: this m68k libgcc's helpers (__mulsf3, __muldi3, ...) hang on ColdFire
-# V2. The firmware supplies its own __muldi3 (fft_muldi3.h) built from 32-bit
-# multiplies, which is the only runtime helper the Q16.16 FFT needs.
+# V2. fft_mul (fft_synth_compute.h) builds the Q16.16 product from 16-bit-limb
+# 32-bit multiplies, so the FFT needs no libgcc runtime helpers at all.
 echo "=== ColdFire mcf5208evb GPU FFT (synthetic, Q16.16 fixed-point, no balar) ==="
 $M68K_CC $M68K_FP_FLAGS coldfire_startup.S coldfire_gpu_fft.c -o coldfire_gpu_fft
 echo "  -> coldfire_gpu_fft"
@@ -164,13 +164,9 @@ echo "=== x86 multiboot hello ==="
 $X86_CC $X86_FLAGS x86_hello.c -o x86_hello
 echo "  -> x86_hello"
 
-echo "=== MIPS Malta hello (Python-generated raw binary) ==="
-python3 gen_mips_hello.py
-echo "  -> mips_malta_hello.bin"
-
 echo ""
 echo "All firmware binaries built successfully."
 ls -lh riscv_virt_hello riscv_virt_uart_echo riscv_virt_mmio_poke \
         riscv_virt_gpu_trace riscv_virt_gpu_kernel riscv_virt_balar_kernel \
         riscv_virt_balar_fft \
-        arm_m7_hello x86_hello mips_malta_hello.bin 2>/dev/null
+        arm_m7_hello x86_hello 2>/dev/null

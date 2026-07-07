@@ -53,11 +53,24 @@ if not exe:
     raise RuntimeError("QUETZ_EXE is not set")
 if not qemu_bin:
     raise RuntimeError("QUETZ_QEMU is not set")
+# The synthetic GPU's registers are served by the sync-MMIO bridge; without
+# QUETZ_MMIO_PAYLOAD=1 the launcher creates no bridge, register reads are RAZ
+# from QEMU (KERNEL_ID reads 0 forever) and doorbell/latency writes take the
+# imprecise trace path — fail here with the actual cause instead.
+if os.environ.get("QUETZ_MMIO_PAYLOAD", "") != "1":
+    raise RuntimeError(
+        "QUETZ_MMIO_PAYLOAD=1 is required by this deck: the GPU registers "
+        "(QUETZ_MMIO_START/END) must be served synchronously by the "
+        "sst-mmio-bridge for doorbells and STATUS/KERNEL_ID reads to work. "
+        "Export QUETZ_MMIO_PAYLOAD=1 (tests: enable_mmio_payload_delivery()).")
 
 cpu_params = {
     "verbose": 1,
     "clock": clock,
-    "vcpu_count": 1,
+    # Override only for deliberate misconfiguration probes (e.g. the
+    # system_mode SMP guard) -- every wiring below assumes vcpu_count=1 and
+    # will not scale to more.
+    "vcpu_count": int(os.environ.get("QUETZ_VCPU_COUNT", "1")),
     "maxcorequeue": 64,
     "maxtranscore": 16,
     "maxissuepercycle": 2,
@@ -77,15 +90,20 @@ if stdout_file:
 cpu = sst.Component("cpu", "quetz.QuetzComponent")
 cpu.addParams(cpu_params)
 
-# First-match-wins; doorbell/uart/sentinel must precede the DRAM default. Guest
-# RAM is not given a handler here — it is serviced by QEMU (filtered) and the
-# cache_link path only carries the (unused-for-RAM) default.
+# First-match-wins; doorbell/uart/sentinel must precede the RAM forward.
 mmio_rh = cpu.setSubComponent("region_handler", "quetz.MmioForwardRegionHandler", 0)
 mmio_rh.addParams({"start": mmio_start, "end": mmio_end})
 uart_rh = cpu.setSubComponent("region_handler", "quetz.UartRegionHandler", 1)
 uart_rh.addParams({"start": uart_addr, "end": uart_addr + 0xFF, "tx_offset": 0x0C})
 fin_rh = cpu.setSubComponent("region_handler", "quetz.TestFinisherRegionHandler", 2)
 fin_rh.addParams({"start": sentinel_addr, "end": sentinel_addr + 3})
+# RAM forwards to the MemController explicitly; everything else (SoC
+# peripherals, wild addresses from buggy guest code) is filtered so it becomes
+# a counted statistic instead of a memHierarchy fatal for an unowned address.
+ram_rh = cpu.setSubComponent("region_handler", "quetz.ForwardRegionHandler", 3)
+ram_rh.addParams({"start": ram_start, "end": ram_end})
+wild_rh = cpu.setSubComponent("region_handler", "quetz.FilteredRegionHandler", 4)
+wild_rh.addParams({"start": 0x0, "end": 0xFFFFFFFFFFFFFFFF})
 cpu.enableAllStatistics()
 
 memctrl = sst.Component("memory", "memHierarchy.MemController")

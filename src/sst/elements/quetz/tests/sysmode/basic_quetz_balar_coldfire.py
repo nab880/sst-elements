@@ -140,13 +140,20 @@ if os.environ.get("QUETZ_ASYNC_OFFLOAD", "0") == "1":
 cpu = sst.Component("cpu", "quetz.QuetzComponent")
 cpu.addParams(cpu_params)
 
-# First-match-wins; the doorbell/uart/sentinel must precede the DRAM default.
+# First-match-wins; the doorbell/uart/sentinel must precede the RAM forward.
 mmio_rh = cpu.setSubComponent("region_handler", "quetz.MmioForwardRegionHandler", 0)
 mmio_rh.addParams({"start": mmio_start, "end": mmio_end})
 uart_rh = cpu.setSubComponent("region_handler", "quetz.UartRegionHandler", 1)
 uart_rh.addParams({"start": uart_addr, "end": uart_addr + 0xFF, "tx_offset": 0x0C})
 fin_rh = cpu.setSubComponent("region_handler", "quetz.TestFinisherRegionHandler", 2)
 fin_rh.addParams({"start": sentinel_addr, "end": sentinel_addr + 3})
+# RAM forwards to the MemController explicitly (balar packet staging lives
+# there); everything else is filtered so a wild guest access becomes a counted
+# statistic instead of a memHierarchy fatal for an unowned address.
+ram_rh = cpu.setSubComponent("region_handler", "quetz.ForwardRegionHandler", 3)
+ram_rh.addParams({"start": ram_start, "end": ram_end})
+wild_rh = cpu.setSubComponent("region_handler", "quetz.FilteredRegionHandler", 4)
+wild_rh.addParams({"start": 0x0, "end": 0xFFFFFFFFFFFFFFFF})
 cpu.enableAllStatistics()
 
 balar_builder = balarBlock.Builder({"BALAR_CUDA_EXE_PATH": cuda_exe})

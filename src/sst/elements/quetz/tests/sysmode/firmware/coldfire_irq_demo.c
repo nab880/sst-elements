@@ -3,8 +3,11 @@
  * ColdFire m68k. Accel (QuetzGpuDevice irq_line) and paced sensors
  * (QuetzStreamDevice irq_line) interrupt the guest instead of being polled; the
  * ISRs ack the device then spin until the INTC IPR bit drops (the line lowers a
- * bridge poll tick after ack) so RTE can't re-take a stale level. PASS iff both
- * accel IRQs and >=1 sensor IRQ arrive and the guest actually slept.
+ * bridge poll tick after ack) so RTE can't re-take a stale level — but only
+ * while the device reports the line low, since a device that (re-)raises while
+ * we spin legitimately holds IPR set and the IRQ must be re-taken after RTE.
+ * PASS iff both accel IRQs and >=1 sensor IRQ arrive and the guest actually
+ * slept.
  * SDL: sysmode/basic_quetz_coldfire_system.py (GPU_IRQ_LINE=30, SENSOR=31).
  */
 
@@ -46,8 +49,12 @@ static inline uint32_t mmio_read32(uint32_t addr)
 /* --- ISRs -------------------------------------------------------------------
  * Ack the device, then wait for the INTC to see the line drop (the lower
  * propagates via the bridge's poll timer, ~10 us of virtual time) before
- * returning — otherwise RTE would re-enter on the stale level. Counters are
- * the ISR -> main handshake. */
+ * returning — otherwise RTE would re-enter on the stale level. The spin is
+ * guarded by the device's own line state (reading *_IRQ_ACK): if the device
+ * (re-)raises while we wait — the GPU holding the line for unconsumed
+ * completion events, or a paced sensor refill landing between ack and the
+ * bridge's next poll — IPR is legitimately set, the spin must end, and the
+ * IRQ is re-taken after RTE. Counters are the ISR -> main handshake. */
 
 static volatile uint32_t g_accel_irqs;
 static volatile uint32_t g_sensor_irqs;
@@ -56,7 +63,7 @@ __attribute__((interrupt_handler))
 static void isr_accel(void)
 {
     mmio_write32(GPU_IRQ_ACK, 1);
-    while (cf_intc_pending(IRQ_LINE_ACCEL))
+    while (cf_intc_pending(IRQ_LINE_ACCEL) && mmio_read32(GPU_IRQ_ACK) == 0)
         ;
     g_accel_irqs++;
 }
@@ -65,7 +72,7 @@ __attribute__((interrupt_handler))
 static void isr_sensor(void)
 {
     mmio_write32(SENSOR_IRQ_ACK, 1);
-    while (cf_intc_pending(IRQ_LINE_SENSOR))
+    while (cf_intc_pending(IRQ_LINE_SENSOR) && mmio_read32(SENSOR_IRQ_ACK) == 0)
         ;
     g_sensor_irqs++;
 }

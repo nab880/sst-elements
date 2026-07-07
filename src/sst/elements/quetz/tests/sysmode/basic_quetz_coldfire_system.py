@@ -91,6 +91,15 @@ sentinel_addr = _parse_addr(os.environ.get("QUETZ_SENTINEL_ADDR", "0x80000000"))
 if not os.path.exists(exe):
     raise FileNotFoundError(
         "coldfire_system firmware not found at {}; run sysmode/firmware/build.sh".format(exe))
+# Without QUETZ_MMIO_PAYLOAD=1 the launcher creates no sst-mmio-bridge, the
+# devices below are unreachable (their registers read as zero from QEMU), and
+# the firmware spins on SENSOR_STATUS until the timeout — an opaque hang.
+if os.environ.get("QUETZ_MMIO_PAYLOAD", "") != "1":
+    print("WARNING: basic_quetz_coldfire_system.py: QUETZ_MMIO_PAYLOAD=1 is "
+          "not set — the sync-MMIO bridge will NOT be created and the "
+          "GPU/sensor devices will be invisible to the guest (reads return "
+          "0). If the run hangs polling a device register, this is why.",
+          flush=True)
 if not os.path.exists(stdin_file):
     raise FileNotFoundError("GPS NMEA fixture not found at {}".format(stdin_file))
 if not os.path.exists(sensor_file):
@@ -132,6 +141,16 @@ fin_rh.addParams({"start": sentinel_addr, "end": sentinel_addr + 3})
 # forwarded to the RAM-only MemController. Must come after the UART slot.
 soc_rh = cpu.setSubComponent("region_handler", "quetz.FilteredRegionHandler", 3)
 soc_rh.addParams({"start": 0xFC000000, "end": 0xFCFFFFFF})
+# RAM forwards to the MemController (explicit, so the catch-all below cannot
+# swallow it), and EVERYTHING else is filtered: a wild guest access (the buggy
+# firmware a user is here to test) must degrade to a counted statistic, not a
+# memHierarchy fatal for an address no controller owns. QEMU itself is RAZ/WI
+# for unassigned mcf5208evb space (pinned by test_quetz_coldfire_bsp_torture),
+# so the guest survives either way.
+ram_rh = cpu.setSubComponent("region_handler", "quetz.ForwardRegionHandler", 4)
+ram_rh.addParams({"start": ram_start, "end": ram_end})
+wild_rh = cpu.setSubComponent("region_handler", "quetz.FilteredRegionHandler", 5)
+wild_rh.addParams({"start": 0x0, "end": 0xFFFFFFFFFFFFFFFF})
 cpu.enableAllStatistics()
 
 memctrl = sst.Component("memory", "memHierarchy.MemController")

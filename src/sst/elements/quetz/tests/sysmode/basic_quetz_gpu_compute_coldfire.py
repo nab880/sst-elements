@@ -17,12 +17,23 @@ ColdFire mcf5208evb map:
 The window is trapped in QEMU by a second sst-mmio-bridge aperture (the launcher
 creates it from QUETZ_SST_WIN_START/END, which MUST be exported alongside the
 MMIO vars) and delivered synchronously through the CPU's mmio interface onto the
-NoC; the plugin drops those accesses from the trace ring. Because the mailbox
-carries values and SST serializes them little-endian, the big-endian guest needs
-no byte swapping — see coldfire_gpu_fft_offload.c.
+NoC; the plugin drops those accesses from the trace ring.
+
+Window byte layout: the mailbox carries numeric values, and by default SST
+serializes them little-endian — same-size (u32-in/u32-out) access round-trips
+exactly on the big-endian guest with no byte swapping (what
+coldfire_gpu_fft_offload.c relies on), but SUB-WORD ALIASING (byte-write then
+word-read of the same window word) behaves little-endian, unlike real ColdFire
+memory. Export QUETZ_WIN_BIG_ENDIAN=1 to store window bytes MSB-first instead
+(window_big_endian on the CPU + data_big_endian on the kernel, kept in
+lockstep here): byte-level layout then matches BE hardware, and numeric u32
+round-trips still hold.
 
 Env: QUETZ_EXE, QUETZ_QEMU(=qemu-system-m68k), QUETZ_QEMU_ARGS, QUETZ_LOADER,
-QUETZ_MMIO_START/END, QUETZ_SST_WIN_START/END, QUETZ_FFT_LATENCY_COEFF.
+QUETZ_MMIO_START/END, QUETZ_SST_WIN_START/END, QUETZ_FFT_LATENCY_COEFF,
+QUETZ_KERNEL_BIG_ENDIAN (independent override of the kernel's data_big_endian,
+default: matches QUETZ_WIN_BIG_ENDIAN — set it differently only to reproduce
+the documented mismatched-flags footgun).
 
 Optional stimulus/response devices for the full-loop demo (coldfire_accel_sink):
 QUETZ_SENSOR_FILE adds a quetz.QuetzStreamDevice at QUETZ_SENSOR_BASE
@@ -71,6 +82,13 @@ mmio_end   = _parse_addr(os.environ.get("QUETZ_MMIO_END", "0x700003FF"))
 win_start  = _parse_addr(os.environ.get("QUETZ_SST_WIN_START", "0x71000000"))
 win_end    = _parse_addr(os.environ.get("QUETZ_SST_WIN_END", "0x7100FFFF"))
 win_size   = win_end - win_start + 1
+# BE window byte layout (see the docstring). The CPU-side and kernel-side
+# flags MUST agree or the kernel reads byte-swapped values; QUETZ_KERNEL_BIG_ENDIAN
+# is an independent override (default: matches win_be) for deliberately
+# testing that mismatched-flags failure mode.
+win_be     = os.environ.get("QUETZ_WIN_BIG_ENDIAN", "0") == "1"
+kernel_be  = os.environ.get("QUETZ_KERNEL_BIG_ENDIAN",
+                            "1" if win_be else "0") == "1"
 uart_addr  = _parse_addr(os.environ.get("QUETZ_UART_ADDR", "0xfc060000"))
 sentinel_addr = _parse_addr(os.environ.get("QUETZ_SENTINEL_ADDR", "0x80000000"))
 sensor_file = os.environ.get("QUETZ_SENSOR_FILE", "")
@@ -82,6 +100,16 @@ if not exe:
     raise RuntimeError("QUETZ_EXE is not set")
 if not qemu_bin:
     raise RuntimeError("QUETZ_QEMU is not set")
+# The launcher only instantiates the sync-MMIO bridge for the GPU register
+# range when QUETZ_MMIO_PAYLOAD=1. Without it the doorbell/ARG writes take
+# the imprecise trace path and the kernel DMA reads garbage addresses — fail
+# here with the actual cause instead of a MemNIC routing fatal mid-run.
+if os.environ.get("QUETZ_MMIO_PAYLOAD", "") != "1":
+    raise RuntimeError(
+        "QUETZ_MMIO_PAYLOAD=1 is required by this deck: the GPU registers "
+        "(QUETZ_MMIO_START/END) must be served synchronously by the "
+        "sst-mmio-bridge for the kernel doorbell/DMA path to work. Export "
+        "QUETZ_MMIO_PAYLOAD=1 (tests: enable_mmio_payload_delivery()).")
 
 cpu = sst.Component("cpu", "quetz.QuetzComponent")
 cpu.addParams({
@@ -98,6 +126,7 @@ cpu.addParams({
     "system_mode": 1,
     "system_mode_loader": loader,
     "qemu_args": qemu_args,
+    "window_big_endian": 1 if win_be else 0,
 })
 
 # Region handlers (first match wins). The FFT window needs no handler: its
@@ -149,12 +178,20 @@ gpu.addParams({
     "mmio_size": 0x400 if (sensor_file or sink_file)
                  else (mmio_end - mmio_start + 1),
     "clock": "1GHz",
-    "doorbell_blocking": 1,   # required when a kernel is loaded
+    # Required when a kernel is loaded; override only to probe the device's
+    # ctor-time misconfiguration guard (kernel + doorbell_blocking=0 fatals).
+    "doorbell_blocking": int(os.environ.get("QUETZ_DOORBELL_BLOCKING", "1")),
+    # Kernel DMA may only touch the SST-backed window: a guest-programmed
+    # buffer address outside it rejects the op (gpu.ops_rejected) instead
+    # of crashing the simulation in memHierarchy routing.
+    "dma_range_start": win_start,
+    "dma_range_end": win_end,
 })
 gpu.enableAllStatistics()
 # Kernel selection: any quetz.QuetzKernel subclass (QUETZ_KERNEL env).
 kernel_name = os.environ.get("QUETZ_KERNEL", "quetz.FFTKernel")
 gpu_kernel = gpu.setSubComponent("kernel", kernel_name)
+gpu_kernel.addParams({"data_big_endian": 1 if kernel_be else 0})
 if kernel_name == "quetz.FFTKernel":
     gpu_kernel.addParams({
         "fft_latency_coeff": int(os.environ.get("QUETZ_FFT_LATENCY_COEFF", "20")),

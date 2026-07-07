@@ -137,6 +137,11 @@ gpu.addParams({
     "mmio_size": (mmio_end - mmio_start + 1),
     "clock": "1GHz",
     "doorbell_blocking": 1,   # required when a kernel is loaded
+    # Kernel DMA may only touch the SST-backed window: a guest-programmed
+    # buffer address outside it rejects the op (gpu.ops_rejected) instead
+    # of crashing the simulation in memHierarchy routing.
+    "dma_range_start": win_start,
+    "dma_range_end": win_end,
 })
 gpu.enableAllStatistics()
 # Kernel selection: any quetz.QuetzKernel subclass (QUETZ_KERNEL env).

@@ -4,9 +4,12 @@
  * lost-wakeup-free wait. Documented example — see SIMULATING-YOUR-SYSTEM.md.
  * INTC0 (0xFC048000, hw/m68k/mcf_intc.c): a source fires when its ICR level != 0
  * and its IMR bit is clear (CIMR clears by source number); vector = 64 + source;
- * the IPR bit is level (stays set until the device lowers the line), so ISRs spin
- * on cf_intc_pending() after acking. The table needs 1 MB-aligned .vectors (see
- * link_m68k.ld).
+ * the IPR bit is level (stays set until the device lowers the line), so ISRs
+ * spin on cf_intc_pending() after acking — guarded by the device's own line
+ * state (read back via its IRQ_ACK register): if the device still holds or
+ * re-raises the line (unconsumed completion events, a new paced refill), IPR
+ * is legitimately set, the spin must end, and RTE re-takes the IRQ. The table
+ * needs 1 MB-aligned .vectors (see link_m68k.ld).
  */
 
 #ifndef COLDFIRE_INTC_H
