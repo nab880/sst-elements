@@ -280,7 +280,12 @@ void QuetzGpuDevice::retireIfReady(uint64_t now_clk) {
 
     raiseIrqOnRetire();
 
-    if (!pending_latencies_.empty()) {
+    // A zero-latency pop completes instantly and leaves busy_until_clk_ == 0;
+    // without the loop, the doorbells still queued behind it would strand
+    // forever (every later retireIfReady() early-outs on busy_until_clk_ == 0
+    // and nothing else pops the queue). A nonzero-latency pop sets busy and
+    // exits the loop naturally.
+    while (!pending_latencies_.empty() && busy_until_clk_ == 0) {
         uint64_t latency = pending_latencies_.front();
         pending_latencies_.pop_front();
         startKernel(now_clk, latency);

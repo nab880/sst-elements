@@ -1,11 +1,20 @@
 /*
  * coldfire_xt_irq_zero_latency.c — completion IRQ for ZERO-latency kernels.
- * startKernel()'s latency==0 shortcut used to complete the op (kernel_id++)
- * without ever calling raiseIrqOnRetire(), so an ISR-driven guest that
- * submits with LATENCY_OVR=0 waited forever. This fires BATCH zero-latency
- * doorbells (each completes instantly, the device is never BUSY between
- * them) and requires one counted IRQ per completion; pre-fix, the first
- * cf_wait_until never returns and the report/PASS lines never print.
+ *
+ * Phase 1: startKernel()'s latency==0 shortcut used to complete the op
+ * (kernel_id++) without ever calling raiseIrqOnRetire(), so an ISR-driven
+ * guest that submits with LATENCY_OVR=0 waited forever. Fires BATCH
+ * zero-latency doorbells (each completes instantly, the device is never
+ * BUSY between them) and requires one counted IRQ per completion; pre-fix,
+ * the first cf_wait_until never returns.
+ *
+ * Phase 2: zero-latency doorbells QUEUED behind a busy op. retireIfReady()
+ * used to pop only ONE pending doorbell per retire; a zero-latency pop
+ * completes instantly and leaves the device un-busy, so nothing ever popped
+ * the doorbells queued behind it — the queue wedged forever (kernel_id
+ * never advances, the device holds the sim open until the harness timeout).
+ * Submits one slow op, queues QBATCH zero-latency doorbells behind it while
+ * it is busy, and requires every completion's IRQ.
  *
  * SDL: sysmode/basic_quetz_coldfire_system.py (QUETZ_GPU_IRQ_LINE=30); the
  * sensor device is present but untouched by this firmware.
@@ -25,6 +34,8 @@
 #define IRQ_LINE_ACCEL    30
 
 #define BATCH             3u
+#define QBATCH            2u    /* zero-latency doorbells queued behind a busy op */
+#define SLOW_CYCLES       20000u
 
 static inline void mmio_write32(uint32_t addr, uint32_t v)
 {
@@ -72,7 +83,28 @@ void kernel_main(void)
     uart_put_u32_dec(kid);
     uart_putc('\n');
 
-    int pass = (g_accel_irqs == BATCH) && (kid == BATCH);
+    /* --- Phase 2: zero-latency doorbells queued behind a busy op ----------
+     * The slow op keeps the device BUSY long enough (20000 cycles >> the
+     * few sync-MMIO round trips below) that both zero-latency doorbells are
+     * queued, not started directly. When the slow op retires, the device
+     * must drain BOTH from the queue (pre-fix it popped one and wedged). */
+    mmio_write32(GPU_LATENCY_OVR, SLOW_CYCLES);
+    mmio_write32(GPU_DOORBELL, 0);
+    for (uint32_t i = 0; i < QBATCH; i++) {
+        mmio_write32(GPU_LATENCY_OVR, 0);
+        mmio_write32(GPU_DOORBELL, 0);
+    }
+    uint32_t target = BATCH + 1u + QBATCH;
+    cf_wait_until(g_accel_irqs >= target);
+
+    uint32_t kid2 = mmio_read32(GPU_KERNEL_ID);
+    uart_puts("queued-zero-latency: accel_irqs=");
+    uart_put_u32_dec(g_accel_irqs);
+    uart_puts(" kernel_id=");
+    uart_put_u32_dec(kid2);
+    uart_putc('\n');
+
+    int pass = (g_accel_irqs == target) && (kid == BATCH) && (kid2 == target);
     uart_puts(pass ? "ZERO LATENCY IRQ PASS\n" : "ZERO LATENCY IRQ FAIL\n");
     testdev_done(pass ? TESTDEV_PASS : TESTDEV_FAIL);
 }

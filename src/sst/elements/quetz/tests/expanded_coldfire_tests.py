@@ -177,7 +177,12 @@ class testcase_expanded_coldfire(SSTTestCase):
         IRQ. startKernel()'s latency==0 shortcut used to bump kernel_id
         without calling raiseIrqOnRetire(), so an ISR-driven guest submitting
         with LATENCY_OVR=0 slept forever; pre-fix this hangs at the first
-        cf_wait_until and the report/PASS lines never print."""
+        cf_wait_until and the report/PASS lines never print.
+
+        Phase 2 covers the pending-queue wedge: retireIfReady() used to pop
+        only ONE queued doorbell per retire, so a zero-latency pop (which
+        leaves the device un-busy) stranded everything queued behind it —
+        kernel_id froze and the device held the sim open until timeout."""
         test_path = self.get_testsuite_dir()
         sst_prefix, sst_bindir, sst_libexec, qemu_bin = self._qemu_system_m68k()
         exe_abs = self._expanded_fw(test_path, "coldfire_xt_irq_zero_latency")
@@ -213,6 +218,9 @@ class testcase_expanded_coldfire(SSTTestCase):
         self.assertIn("zero-latency: accel_irqs=3 kernel_id=3", raw,
             "zero-latency completions were not all IRQ-observable — the "
             "startKernel latency==0 path may have lost raiseIrqOnRetire again")
+        self.assertIn("queued-zero-latency: accel_irqs=6 kernel_id=6", raw,
+            "doorbells queued behind a zero-latency pop were stranded — "
+            "retireIfReady's drain-while-unbusy loop may have regressed")
         self.assertIn("ZERO LATENCY IRQ PASS", raw)
         self.assertIn("TESTFINISH[0]", raw)
 
