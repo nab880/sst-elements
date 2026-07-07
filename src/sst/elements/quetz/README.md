@@ -10,6 +10,10 @@ The design mirrors `ariel` (the Pin-based component) but uses QEMU instead
 of Pin, making it portable to any architecture that QEMU supports in
 user-mode and allowing custom ISA extensions via QEMU's TCG plugin API.
 
+New here and just want to run your own ColdFire firmware? Start with
+[GETTING-STARTED.md](GETTING-STARTED.md) — a Docker-only walkthrough, no
+host SST/QEMU install needed.
+
 ---
 
 ## How it works
