@@ -113,7 +113,7 @@ echo "=== ColdFire mcf5208evb IRQ demo (ISR-driven accel + sensor stream) ==="
 $M68K_CC $M68K_FLAGS coldfire_startup.S coldfire_irq_demo.c -o coldfire_irq_demo
 echo "  -> coldfire_irq_demo"
 
-# ColdFire V4 codegen smoke (CFV4SPPC1 supported-parts gate): -mcpu=5475 is
+# ColdFire V4 codegen smoke (ColdFire V4 supported-parts gate): -mcpu=5475 is
 # hard-float V4e, so the compiler emits real FPU/ISA_B/EMAC instructions.
 # Runs only under `-cpu cfv4e` (the default m5208 core has no FPU).
 M68K_V4_FLAGS="-mcpu=5475 -O2 \

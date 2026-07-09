@@ -407,9 +407,15 @@ firmware are identical either way.
 map a second bridge aperture whose contents live in the SST memory
 hierarchy (directory + MemController), not QEMU RAM.  Use it when a device
 DMA and the guest must see the same bytes — e.g. kernel-compute buffers
-(ARG0/ARG1 point into the window).  Because the mailbox carries *values*
-and SST serializes them little-endian, big-endian guests read/write the
-window with plain word accesses and no byte swapping.
+(ARG0/ARG1 point into the window).  Same-size word round-trips are exact
+on any guest endianness, but *sub-word aliasing* in the window defaults to
+little-endian byte layout — see SIMULATING-YOUR-SYSTEM.md § Endianness
+contract for `window_big_endian` / `data_big_endian`.
+
+**System mode is single-vCPU.**  `vcpu_count` must be `1` when
+`system_mode=1`: every `sst-mmio-bridge` aperture is wired to mailbox slot
+0, so SMP guests would race the sync-MMIO path. Use user mode for
+multi-threaded workloads.
 
 ---
 
@@ -447,7 +453,7 @@ Register map (`quetz_gpu_device.h`):
 | 0x20 | TICKET | R | last submit ticket (async poll contract) |
 | 0x28 | RESULT | R | completed-op latch (mirrors KERNEL_ID on the synthetic device) |
 | 0x30–0x48 | ARG0–ARG3 | W | kernel operands: ARG0 = input addr, ARG1 = output addr, ARG2/ARG3 kernel-defined |
-| 0x50 | IRQ_ACK | R/W | R: completion line raised; W nonzero: ack (lower the line) |
+| 0x50 | IRQ_ACK | R/W | R: completion line raised; W: consume *N* completion events (~0 = all); line lowers when count hits zero |
 
 Key parameters: `base_addr`, `mmio_size`, `kernel_latency`,
 `doorbell_blocking` (required =1 when a kernel is loaded), `irq_line` /
@@ -472,9 +478,11 @@ SIMULATING-YOUR-SYSTEM.md § Adding your own kernel):
 Replays a binary fixture file (`stream_file`) through a FIFO register
 interface — sensors, telemetry, CAN logs, any recorded byte stream.
 Optionally paced: with `pace_bytes`/`pace_period` set, STATUS fills over
-simulated time and firmware polling/timeout logic gets exercised; a paced
-refill that makes STATUS go 0 → nonzero can raise a data-ready IRQ
-(`irq_line`).
+simulated time and firmware polling/timeout logic gets exercised; every
+paced refill that delivers bytes can raise (or re-assert) a data-ready IRQ
+(`irq_line`). Poll `STATUS` when data is already visible and no further
+refills are coming — see SIMULATING-YOUR-SYSTEM.md § Interrupt-driven
+devices.
 
 Register map (`quetz_stream_device.h`):
 
@@ -631,7 +639,8 @@ Build a test binary:
 
 Set `vcpu_count` to the number of OS threads the binary will create.  QEMU
 user-mode transparently handles `pthread_create` and OpenMP — each new thread
-becomes a new vCPU in the plugin's view.
+becomes a new vCPU in the plugin's view.  In **system mode**
+(`system_mode=1`) only `vcpu_count=1` is supported (see § System mode).
 
 **Halt quorum:** the simulation ends only when **every** vCPU has halted (via
 EXIT or `max_insts`) **and** every vCPU has drained its in-flight memory

@@ -1,6 +1,6 @@
 # Quetz — build and test guide
 
-This document describes how to **build** the Quetz SST element and QEMU plugin and **run** the in-tree regression suite. The workflow below matches what was used to validate the compartmentalized layout on branch `quetz-refactor` (Docker image build + `sst-test-elements`).
+This document describes how to **build** the Quetz SST element and QEMU plugin and **run** the in-tree regression suite. The workflow below matches what CI uses (Docker image build + `sst-test-elements`).
 
 For day-to-day development, use the **quetz-docker** repo (`quetz-docker/` sibling to `sst-elements/` in your workspace). A native host build is possible but not covered here.
 
@@ -290,6 +290,25 @@ diffs the sink capture byte-exactly against a host-computed expectation,
 and `test_quetz_coldfire_irq` covers SST-device IRQ injection end to end
 (INTC programming, stop/wake, device ack).
 
+### Optional robustness suite (`expanded_coldfire_tests.py`)
+
+Not part of the default harness (`sst-test-elements` only auto-discovers
+`testsuite_*.py`). Invoke explicitly when validating IRQ event counting,
+BE window layout, DMA-range rejection, or other corners exercised by the
+expanded firmware under `tests/sysmode/firmware/expanded/`:
+
+```bash
+docker run --rm -v "$(pwd)/sst-elements:/src/sst-elements" raptor-quetz-test \
+  bash -c 'export PATH=/opt/sst/bin:$PATH LD_LIBRARY_PATH=/opt/sst/lib SST_HOME=/opt/sst; \
+           cd /src/sst-elements/src/sst/elements/quetz/tests && \
+           sst-test-elements -p expanded_coldfire_tests.py'
+```
+
+Build expanded firmware first:
+`cd tests/sysmode/firmware/expanded && M68K_CC=m68k-linux-gnu-gcc ./build.sh`.
+See the module docstring for what each test asserts (some document known
+limitations rather than regressions).
+
 ---
 
 ## libmem ground-truth validation
@@ -356,6 +375,7 @@ Quetz `configure` must find `qemu-plugin.h` and a plugin-capable QEMU. The Docke
 
 ## Related docs
 
+- [GETTING-STARTED.md](GETTING-STARTED.md) — Docker-only on-ramp for your own ColdFire V4 firmware
 - [README.md](README.md) — full component reference: parameters, devices, system mode, IRQ injection, env vars
 - [SIMULATING-YOUR-SYSTEM.md](SIMULATING-YOUR-SYSTEM.md) — the embedded-system tutorial (limits and supported parts up front)
 - [QUETZ_OUTLINE.md](QUETZ_OUTLINE.md) — architecture and source map

@@ -164,7 +164,8 @@ check-quetz-integration:
 # Distribution: test suite, SDL decks, firmware, gold files, and docs, so a
 # make-dist tarball can run the quetz tests (mirrors the balar convention).
 # ---------------------------------------------------------------------------
-EXTRA_DIST =	QUETZ_OUTLINE.md \
+EXTRA_DIST =	GETTING-STARTED.md \
+	QUETZ_OUTLINE.md \
 	README.md \
 	SIMULATING-YOUR-SYSTEM.md \
 	TESTING.md \

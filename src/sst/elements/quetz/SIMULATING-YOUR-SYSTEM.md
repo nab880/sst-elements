@@ -117,7 +117,9 @@ export QUETZ_MMIO_PAYLOAD=1 QUETZ_MMIO_START=0x70000000 QUETZ_MMIO_END=0x7001FFF
 sst tests/sysmode/basic_quetz_coldfire_system.py
 ```
 
-Expected guest transcript (this is the code under test talking):
+Expected guest transcript (this is the code under test talking; the
+`waits=` counters on the GPS/sensor lines vary with timing and are not
+part of the PASS contract):
 
 ```
 ColdFire system demo: uart + gps + sensors + accelerator
@@ -346,12 +348,18 @@ raises its line on the event of interest and holds it until your ISR writes
 the device's `REG_IRQ_ACK`.
 
 - `quetz.QuetzGpuDevice`: `irq_line=N` raises line N when an op retires
-  (both latency-only and kernel-compute flows); ack at `REG_IRQ_ACK`
-  (0x50, R: raised / W nonzero: ack). Retires while already raised don't
-  re-raise — read `REG_KERNEL_ID` in the ISR if you batch.
-- `quetz.QuetzStreamDevice`: `irq_line=N` raises when a **paced** refill
-  makes STATUS go 0 → nonzero (data ready); ack at `REG_IRQ_ACK` (0x28).
-  Requires `pace_bytes > 0`.
+  (both latency-only and kernel-compute flows, including zero-latency
+  completions). Each retire adds one completion *event*; the line stays
+  raised while any events remain unconsumed. Ack at `REG_IRQ_ACK` (0x50,
+  R: raised / W: consume *N* events, ~0 = all); the line lowers only when
+  the event count reaches zero. Retires while the line is already raised
+  do not re-send an SST IRQ (the level is already 1) but do increment the
+  count — batching several doorbells before servicing the ISR is safe.
+- `quetz.QuetzStreamDevice`: `irq_line=N` re-asserts on **every paced
+  refill that delivers bytes** (not only the first 0→nonzero edge); ack at
+  `REG_IRQ_ACK` (0x28). Requires `pace_bytes > 0`. If the guest acks while
+  `STATUS > 0` and no further refills will arrive (stream fully budgeted),
+  poll `STATUS` — do not sleep IRQ-only after the last refill.
 
 Wiring (see `basic_quetz_coldfire_system.py` with `QUETZ_GPU_IRQ_LINE` /
 `QUETZ_SENSOR_IRQ_LINE` for a worked example):

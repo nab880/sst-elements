@@ -713,6 +713,7 @@ quetz/
 │   ├── decoder_aarch64.*              # AArch64 classifier
 │   └── decoder_generic.*              # Size-based fallback
 ├── configure.m4 / Makefile.am
+├── GETTING-STARTED.md                 # Docker-only ColdFire V4 on-ramp
 ├── README.md                          # Reference (components, devices, env vars)
 ├── SIMULATING-YOUR-SYSTEM.md          # Embedded-system tutorial (limits first)
 ├── TESTING.md                         # Build + test workflow
@@ -726,4 +727,4 @@ quetz/
 
 ---
 
-*Aligned with the compartmentalized layout on branch `quetz-refactor`; behavior unchanged — see `README.md` and in-tree tests.*
+*See `README.md`, `GETTING-STARTED.md`, and in-tree tests for current behavior.*

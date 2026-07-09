@@ -18,7 +18,7 @@ If you just want the deep reference docs instead of a walkthrough, jump to
 | Requirement | Notes |
 |---|---|
 | **Docker** | Desktop (macOS) or Engine (Linux). No SST/QEMU/cross-compiler install needed — they're baked into the image. |
-| **Disk** | ~4 GB for the image (`quetz-sim`, this is the lightweight non-CUDA target) |
+| **Disk** | ~4 GB for the runtime image (`quetz-sim`); ~8 GB if you also build the full test image (`raptor-quetz-test`, see `TESTING.md`) |
 | **This workspace** | `raptor-balar/` with its `sst-elements/` and `quetz-docker/` siblings already checked out |
 
 **macOS:** install Docker Desktop, start it, and the commands below just work —
@@ -44,6 +44,12 @@ bridge), SST-Core, SST-Elements' `quetz` module, and the `m68k-linux-gnu-gcc`
 cross-compiler, all into one image. You only redo this when the QEMU overlay,
 Quetz C++, or `Dockerfile` change — not for every firmware edit.
 
+**What the image bakes vs what the mount updates:** `quetz-run` bind-mounts
+your checkout's `sst-elements/` tree for **decks, Python helpers, and
+firmware** (host mode). **`libquetz.so` and the QEMU plugin live in the
+image** at `/opt/sst`. After pulling C++ or overlay changes, rebuild
+`quetz-sim` even if your firmware sources are up to date on the host.
+
 ## Step 2 — sanity check: run the shipped demo
 
 ```sh
@@ -51,7 +57,7 @@ Quetz C++, or `Dockerfile` change — not for every firmware edit.
 cat artifacts/transcript.txt artifacts/result.txt
 ```
 
-Tested output:
+Tested output (the `waits=` counters vary with timing — not part of PASS):
 
 ```
 ColdFire system demo: uart + gps + sensors + accelerator
@@ -135,6 +141,13 @@ and expected for freestanding firmware with no OS loader.)
 
 ### 3c. Run it under Quetz with the V4 CPU model
 
+By default `quetz-run` uses the shipped **full system deck**
+(`basic_quetz_coldfire_system.py`: GPS replay, sensor stream, accelerator).
+That is fine for a UART-only hello-world — unused devices stay idle. For a
+minimal UART + sentinel setup, pass an explicit deck (copy
+`tests/sysmode/template_system.py` and trim devices, or wire only UART +
+TestFinisher like the `coldfire_v4_fpu` test does via env vars).
+
 ```sh
 ./quetz-docker/quetz-run --image quetz-sim \
   --firmware "$MYCODE/my_v4_app" \
@@ -142,6 +155,12 @@ and expected for freestanding firmware with no OS loader.)
   --out artifacts/
 cat artifacts/transcript.txt artifacts/result.txt
 ```
+
+When you add SST-side MMIO devices (accelerator, stream, sink) in your own
+deck, export `QUETZ_MMIO_PAYLOAD=1` and `QUETZ_MMIO_START`/`QUETZ_MMIO_END`
+so the launcher instantiates the bridge — `quetz-run` sets these for the
+default demo; custom decks must set them explicitly (see
+`SIMULATING-YOUR-SYSTEM.md`).
 
 Tested output:
 
@@ -178,9 +197,15 @@ If you compile with `-mcpu=5475` but run with the *default* QEMU machine args
 (no `-cpu cfv4e`, i.e. you drop `--env QUETZ_QEMU_ARGS=...`), the guest hits
 an FPU instruction the default V2 core doesn't have. Tested result: **it
 doesn't fail fast** — no transcript, no PASS/FAIL, just a silent hang until
-`quetz-run`'s timeout fires:
+`quetz-run`'s timeout fires (default **600 s**; the repro below uses
+`--timeout 30` for a faster failure):
 
-```
+```sh
+./quetz-docker/quetz-run --image quetz-sim \
+  --firmware "$MYCODE/my_v4_app" \
+  --timeout 30 \
+  --out artifacts/
+# ...
 quetz-run: ERROR: timeout after 30s
 ```
 
@@ -209,6 +234,11 @@ pattern.
 Timing is functional, not cycle-accurate — assert on program behavior
 (PASS/FAIL, transcript content), not on instruction counts or cycle timing.
 
+If you later wire an **accelerator with DMA buffers** on a big-endian guest,
+read SIMULATING-YOUR-SYSTEM.md § Endianness contract — the default SST
+window layout is not byte-identical to real BE RAM for mixed-size access;
+set `QUETZ_WIN_BIG_ENDIAN=1` and matching kernel flags when you need that.
+
 ## Where to go next
 
 This doc is deliberately narrow (V4, Docker, one file in, one transcript
@@ -217,7 +247,7 @@ out). For more:
 - **[SIMULATING-YOUR-SYSTEM.md](SIMULATING-YOUR-SYSTEM.md)** — the
   full guide: wiring a UART + sensor-stream + accelerator system, adding your
   own accelerator kernel or MMIO device, interrupt-driven devices, anatomy of
-  a deck (SDL). Also has the full ColdFire V4 supported-parts notes.
+  a deck (SDL). Includes ColdFire V4 assessment notes (`-cpu cfv4e`).
 - **[tests/sysmode/README-coldfire-demo.md](tests/sysmode/README-coldfire-demo.md)**
   — the ColdFire↔GPU (balar) offload demo, and the 32-bit-big-endian vs
   64-bit-little-endian marshalling issues that come up if your V4 code talks

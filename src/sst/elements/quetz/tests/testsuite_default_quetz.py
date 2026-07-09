@@ -2558,7 +2558,7 @@ class testcase_quetz_sysmode(SSTTestCase):
     def test_quetz_coldfire_irq_cfv4e(self):
         """The IRQ demo on QEMU's ColdFire V4e CPU model (`-cpu cfv4e`).
 
-        Part of the CFV4SPPC1 supported-parts gate: the target part is a V4
+        Part of the ColdFire V4 supported-parts gate: the target is a V4
         core, and interrupt delivery (INTC vectoring, `stop` wake, exception
         frames) is the CPU-model-sensitive corner its ISR-driven code
         depends on. Same functional assertions as the V2 run."""
@@ -2670,7 +2670,7 @@ class testcase_quetz_sysmode(SSTTestCase):
     def test_quetz_coldfire_v4_fpu(self):
         """ColdFire V4 codegen smoke on QEMU's cfv4e CPU model.
 
-        The other half of the CFV4SPPC1 supported-parts gate: firmware
+        The other half of the ColdFire V4 supported-parts gate: firmware
         compiled -mcpu=5475 (hard-float V4e) so the compiler emits real
         ColdFire FPU instructions (double mul/add/div, int<->double moves),
         ISA_B integer forms (mvz/mvs), and one hand-written EMAC
