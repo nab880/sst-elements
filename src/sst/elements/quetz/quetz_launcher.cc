@@ -70,20 +70,17 @@ pid_t QemuLauncher::spawn(const QuetzConfig& cfg,
         plugin_arg += plug_mmio;
     }
 
-    // Optional SST-backed memory window (QUETZ_SST_WIN_START/END): a guest-phys
-    // range whose accesses are trapped by a second sst-mmio-bridge aperture and
-    // served synchronously by the SST memory hierarchy (router -> directory ->
-    // MemController), so a device DMA and the guest see the same bytes. The
-    // plugin is told the range so those accesses are NOT also trace-streamed.
-    const char* win_start_env = getenv("QUETZ_SST_WIN_START");
-    const char* win_end_env   = getenv("QUETZ_SST_WIN_END");
-    uint64_t win_base = 0;
-    uint64_t win_size = 0;
-    if (win_start_env && win_end_env) {
-        win_base = strtoull(win_start_env, nullptr, 0);
-        uint64_t win_end = strtoull(win_end_env, nullptr, 0);
-        if (win_end >= win_base)
-            win_size = win_end - win_base + 1;
+    // Optional SST-backed memory window: a guest-phys range whose accesses are
+    // trapped by a second sst-mmio-bridge aperture and served synchronously by
+    // the SST memory hierarchy (router -> directory -> MemController), so a
+    // device DMA and the guest see the same bytes. The plugin is told the
+    // range so those accesses are NOT also trace-streamed. QuetzConfig is the
+    // single owner of the range (it parses QUETZ_SST_WIN_START/END once);
+    // consuming it from cfg keeps the aperture and the mailbox's idea of the
+    // window from ever diverging.
+    uint64_t win_base = cfg.sst_window_base;
+    uint64_t win_size = cfg.sst_window_size;
+    if (win_size != 0) {
         char plug_win[128];
         snprintf(plug_win, sizeof(plug_win),
             ",win_base=0x%" PRIx64 ",win_size=0x%" PRIx64, win_base, win_size);
@@ -204,6 +201,23 @@ pid_t QemuLauncher::spawn(const QuetzConfig& cfg,
     _exit(127);
 }
 
+// Poll-reap `pid` for up to `timeout_ms`. Never blocks in waitpid(): even
+// after SIGKILL a child stuck in uninterruptible (D-state) I/O — e.g. wedged
+// on the shmem mapping — is not reaped until it leaves the kernel, so an
+// unconditional blocking waitpid() could hang the caller forever.
+static bool reapBounded(pid_t pid, int timeout_ms) {
+    const int poll_ms = 10;
+    for (int waited = 0;; waited += poll_ms) {
+        int pstat;
+        pid_t rc = waitpid(pid, &pstat, WNOHANG);
+        if (rc == pid || (rc < 0 && errno == ECHILD))
+            return true;
+        if (waited >= timeout_ms)
+            return false;
+        usleep(poll_ms * 1000);
+    }
+}
+
 void QemuLauncher::terminate() {
     if (pid_ == 0)
         return;
@@ -212,22 +226,18 @@ void QemuLauncher::terminate() {
     // SST process lifetime. Give SIGTERM a bounded grace window, then
     // escalate to SIGKILL (which cannot be ignored) and reap for real.
     const int grace_ms = 2000;
-    const int poll_ms  = 10;
-    for (int waited = 0; waited < grace_ms; waited += poll_ms) {
-        int pstat;
-        pid_t rc = waitpid(pid_, &pstat, WNOHANG);
-        if (rc == pid_ || (rc < 0 && errno == ECHILD)) {
-            pid_ = 0;
-            return;
+    if (!reapBounded(pid_, grace_ms)) {
+        output_->verbose(CALL_INFO, 1, 0,
+            "QEMU (pid %d) did not exit within %d ms of SIGTERM; sending SIGKILL.\n",
+            (int)pid_, grace_ms);
+        kill(pid_, SIGKILL);
+        if (!reapBounded(pid_, grace_ms)) {
+            output_->verbose(CALL_INFO, 1, 0,
+                "QEMU (pid %d) not reaped within %d ms of SIGKILL (stuck in "
+                "uninterruptible I/O?); leaving it for process exit.\n",
+                (int)pid_, grace_ms);
         }
-        usleep(poll_ms * 1000);
     }
-    output_->verbose(CALL_INFO, 1, 0,
-        "QEMU (pid %d) did not exit within %d ms of SIGTERM; sending SIGKILL.\n",
-        (int)pid_, grace_ms);
-    kill(pid_, SIGKILL);
-    int pstat;
-    waitpid(pid_, &pstat, 0);
     pid_ = 0;
 }
 
@@ -235,7 +245,8 @@ void QemuLauncher::forceKill() {
     if (pid_ == 0)
         return;
     kill(pid_, SIGKILL);
-    int pstat;
-    waitpid(pid_, &pstat, 0);
+    // Emergency-shutdown path (SST fatal/signal teardown): must not hang, so
+    // the reap is bounded; an unreaped child is cleaned up at process exit.
+    reapBounded(pid_, 500);
     pid_ = 0;
 }

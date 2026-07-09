@@ -15,20 +15,7 @@
 
 #include "coldfire_uart.h"
 #include "coldfire_intc.h"
-
-#define GPU_BASE          0x70000000UL
-#define GPU_DOORBELL      (GPU_BASE + 0x00UL)   /* W: submit */
-#define GPU_STATUS        (GPU_BASE + 0x08UL)   /* R: busy(1)/idle(0) */
-#define GPU_KERNEL_ID     (GPU_BASE + 0x10UL)   /* R: completed counter */
-#define GPU_LATENCY_OVR   (GPU_BASE + 0x18UL)   /* W: next-kernel cycles */
-#define GPU_IRQ_ACK       (GPU_BASE + 0x50UL)   /* R: raised; W1: ack */
-
-#define SENSOR_BASE       0x70010000UL
-#define SENSOR_STATUS     (SENSOR_BASE + 0x00UL) /* R: bytes ready now */
-#define SENSOR_DATA       (SENSOR_BASE + 0x08UL) /* R: pop 4 bytes (packed) */
-#define SENSOR_SEQ        (SENSOR_BASE + 0x10UL) /* R: bytes consumed */
-#define SENSOR_EOS        (SENSOR_BASE + 0x20UL) /* R: fully consumed */
-#define SENSOR_IRQ_ACK    (SENSOR_BASE + 0x28UL) /* R: raised; W1: ack */
+#include "coldfire_devices.h"
 
 /* Machine INTC source numbers — must match the deck's QUETZ_GPU_IRQ_LINE /
  * QUETZ_SENSOR_IRQ_LINE. 30/31 are unused on QEMU's mcf5208evb (UARTs are
@@ -36,25 +23,10 @@
 #define IRQ_LINE_ACCEL    30
 #define IRQ_LINE_SENSOR   31
 
-static inline void mmio_write32(uint32_t addr, uint32_t v)
-{
-    *(volatile uint32_t *)addr = v;
-}
-
-static inline uint32_t mmio_read32(uint32_t addr)
-{
-    return *(volatile uint32_t *)addr;
-}
-
 /* --- ISRs -------------------------------------------------------------------
- * Ack the device, then wait for the INTC to see the line drop (the lower
- * propagates via the bridge's poll timer, ~10 us of virtual time) before
- * returning — otherwise RTE would re-enter on the stale level. The spin is
- * guarded by the device's own line state (reading *_IRQ_ACK): if the device
- * (re-)raises while we wait — the GPU holding the line for unconsumed
- * completion events, or a paced sensor refill landing between ack and the
- * bridge's next poll — IPR is legitimately set, the spin must end, and the
- * IRQ is re-taken after RTE. Counters are the ISR -> main handshake. */
+ * cf_isr_ack_settle (coldfire_intc.h) acks the device then waits for the
+ * INTC to see the line drop, guarded by the device's own line state.
+ * Counters are the ISR -> main handshake. */
 
 static volatile uint32_t g_accel_irqs;
 static volatile uint32_t g_sensor_irqs;
@@ -62,18 +34,14 @@ static volatile uint32_t g_sensor_irqs;
 __attribute__((interrupt_handler))
 static void isr_accel(void)
 {
-    mmio_write32(GPU_IRQ_ACK, 1);
-    while (cf_intc_pending(IRQ_LINE_ACCEL) && mmio_read32(GPU_IRQ_ACK) == 0)
-        ;
+    cf_isr_ack_settle(IRQ_LINE_ACCEL, GPU_IRQ_ACK);
     g_accel_irqs++;
 }
 
 __attribute__((interrupt_handler))
 static void isr_sensor(void)
 {
-    mmio_write32(SENSOR_IRQ_ACK, 1);
-    while (cf_intc_pending(IRQ_LINE_SENSOR) && mmio_read32(SENSOR_IRQ_ACK) == 0)
-        ;
+    cf_isr_ack_settle(IRQ_LINE_SENSOR, SENSOR_IRQ_ACK);
     g_sensor_irqs++;
 }
 

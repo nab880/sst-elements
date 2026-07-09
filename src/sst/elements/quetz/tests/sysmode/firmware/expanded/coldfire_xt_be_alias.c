@@ -28,13 +28,7 @@
 #include <stdint.h>
 
 #include "coldfire_uart.h"
-
-#define GPU_BASE          0x70000000UL
-#define GPU_DOORBELL      (GPU_BASE + 0x00UL)
-#define GPU_ARG0          (GPU_BASE + 0x30UL)
-#define GPU_ARG1          (GPU_BASE + 0x38UL)
-#define GPU_ARG2          (GPU_BASE + 0x40UL)
-#define GPU_ARG3          (GPU_BASE + 0x48UL)
+#include "coldfire_devices.h"
 
 #define WIN               0x71000000UL
 /* Raw byte/word aliasing probe -- no kernel involvement. */
@@ -49,11 +43,6 @@
 #define K2IN_ADDR         (WIN + 0x2100UL)
 #define K2OUT_ADDR        (WIN + 0x3100UL)
 #define K2_OFFSET         0xCC
-
-static inline void mmio_write32(uint32_t addr, uint32_t v)
-{
-    *(volatile uint32_t *)addr = v;
-}
 
 void kernel_main(void)
 {

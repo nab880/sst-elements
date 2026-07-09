@@ -58,6 +58,7 @@ public:
                 mmio_sync_.clearSlot((uint32_t)i);
                 mmio_sync_.clearIrqSlots((uint32_t)i);
             }
+            sharedData->irq_generation = 0;
             // Layout stamp, checked by the QEMU-side IPC client at attach
             // (quetz_ipc_client.c). Written last, after the slots are in
             // their initial state; the QEMU process is spawned strictly

@@ -59,9 +59,10 @@ struct QuetzConfig {
     // into SST memory (the historical default) diverges from the guest's real
     // memory layout for mixed-size access. window_big_endian=1 packs window
     // accesses MSB-first so byte-level aliasing matches BE hardware. The
-    // window range comes from the same QUETZ_SST_WIN_START/END environment
-    // variables the launcher uses; device-register apertures keep value
-    // semantics regardless.
+    // window range is parsed from QUETZ_SST_WIN_START/END once, here (the
+    // launcher and mailbox both consume these fields — fromParams is the
+    // single owner); device-register apertures keep value semantics
+    // regardless.
     bool     window_big_endian = false;
     uint64_t sst_window_base   = 0;
     uint64_t sst_window_size   = 0;

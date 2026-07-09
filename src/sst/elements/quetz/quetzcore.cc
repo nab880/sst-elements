@@ -24,7 +24,7 @@ QuetzCore::QuetzCore(
         uint32_t              coreID,
         SST::Output*          out,
         TimeConverter         tc,
-        Params&               ,
+        Params&               params,
         const MemRegionTable* region_table,
         uint32_t              maxPendTrans,
         uint32_t              maxIssuePerCycle,
@@ -63,6 +63,8 @@ QuetzCore::QuetzCore(
     ctx_.cache_line_size     = cacheLineSize;
     ctx_.check_addresses     = checkAddresses;
     ctx_.detailed_tracking   = detailedTracking;
+    ctx_.filter_unmatched_regions =
+        params.find<bool>("filter_unmatched_regions", false);
     ctx_.region_table        = region_table;
     ctx_.exec_latency        = exec_latency_;
     ctx_.compute_latency     = compute_latency_;
@@ -88,11 +90,13 @@ QuetzCore::QuetzCore(
     output_->verbose(CALL_INFO, 1, 0,
         "QuetzCore %" PRIu32 " created: maxPend=%" PRIu32
         " maxIssue=%" PRIu32 " maxQ=%" PRIu32 " clineSize=%" PRIu64
-        " latency[int/fp/vec]=%" PRIu32 "/%" PRIu32 "/%" PRIu32 "\n",
+        " latency[int/fp/vec]=%" PRIu32 "/%" PRIu32 "/%" PRIu32
+        " filterUnmatched=%d\n",
         core_id_, maxPendTrans, maxIssuePerCycle, maxQueueLen, cacheLineSize,
         exec_latency_[QUETZ_INSN_INT_MEM],
         exec_latency_[QUETZ_INSN_FP_MEM],
-        exec_latency_[QUETZ_INSN_VEC_MEM]);
+        exec_latency_[QUETZ_INSN_VEC_MEM],
+        (int)ctx_.filter_unmatched_regions);
 }
 
 QuetzCore::~QuetzCore() {

@@ -33,7 +33,8 @@ public:
 
     void configure(const QuetzCoreContext& ctx) override {
         if (ctx.region_table)
-            strategy_.reset(new RegionTableMemAccessStrategy(*ctx.region_table));
+            strategy_.reset(new RegionTableMemAccessStrategy(
+                *ctx.region_table, ctx.filter_unmatched_regions));
     }
 
     bool handle(const QuetzCommand& cmd, QuetzCoreStats& stats,

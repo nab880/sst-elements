@@ -8,14 +8,8 @@
 #include <stdint.h>
 
 #include "coldfire_uart.h"        /* uart_* + TESTDEV/testdev_done */
-
-#define GPU_BASE          0x70000000UL
-#define GPU_DOORBELL      (GPU_BASE + 0x00UL)   /* W: submit (blocking) */
-#define GPU_STATUS        (GPU_BASE + 0x08UL)   /* R: busy(1)/idle(0) */
-#define GPU_ARG0          (GPU_BASE + 0x30UL)   /* W: input  s16[N] addr */
-#define GPU_ARG1          (GPU_BASE + 0x38UL)   /* W: output s16[N] addr */
-#define GPU_ARG2          (GPU_BASE + 0x40UL)   /* W: sample count N */
-#define GPU_ARG3          (GPU_BASE + 0x48UL)   /* W: scale | offset<<16 */
+#include "coldfire_devices.h"
+#include "coldfire_scale_ref.h"
 
 #define N_SAMPLES  64u
 #define SCALE      3
@@ -25,29 +19,15 @@
 static volatile uint32_t *const buf_in  = (volatile uint32_t *)(WIN + 0x0000);
 static volatile uint32_t *const buf_out = (volatile uint32_t *)(WIN + 0x1000);
 
-static inline void mmio_write32(uint32_t addr, uint32_t v)
-{
-    *(volatile uint32_t *)addr = v;
-}
-
-static inline uint32_t mmio_read32(uint32_t addr)
-{
-    return *(volatile uint32_t *)addr;
-}
-
 /* Sample generator: spans both saturation edges at SCALE/OFFSET. */
 static int16_t sample(uint32_t i)
 {
     return (int16_t)((int32_t)i * 900 - 28000);
 }
 
-/* Mirror of quetz_scale_offset.h:quetz_scale_offset_sat16(). */
 static int16_t expect(int16_t s)
 {
-    int32_t v = (int32_t)s * SCALE + OFFSET;
-    if (v > 32767)  return 32767;
-    if (v < -32768) return -32768;
-    return (int16_t)v;
+    return cf_scale_offset_ref(s, SCALE, OFFSET);
 }
 
 void kernel_main(void)

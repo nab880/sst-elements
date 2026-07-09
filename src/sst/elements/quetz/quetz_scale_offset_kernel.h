@@ -19,9 +19,9 @@ namespace Quetz {
 
 // Saturating int16 scale/offset kernel — a sensor-path accelerator
 // (calibration / normalization) and the proof that the QuetzKernel API is
-// not FFT-shaped. Samples are int16 — little-endian by default, big-endian
-// with data_big_endian=1 (pair with the CPU's window_big_endian for BE
-// guests); REG_ARG2 = sample count N; REG_ARG3 packs the parameters:
+// not FFT-shaped. Samples are int16 — byte order comes from the device's
+// data_big_endian param (pushed in via setDataBigEndian, default LE);
+// REG_ARG2 = sample count N; REG_ARG3 packs the parameters:
 // scale = (int16)(arg3 & 0xFFFF), offset = (int16)((arg3 >> 16) & 0xFFFF).
 class ScaleOffsetKernel : public QuetzKernel {
 public:
@@ -38,13 +38,7 @@ public:
         { "latency_coeff",
           "(uint64) Modeled BUSY cycles = coeff * N. "
           "REG_LATENCY_OVERRIDE still forces an explicit per-op latency.",
-          "4" },
-        { "data_big_endian",
-          "(bool) Interpret the DMA'd buffer as big-endian int16 samples "
-          "instead of little-endian. Set alongside the QuetzCPU's "
-          "window_big_endian=1 so a big-endian guest's window bytes are "
-          "read back as the values it wrote. Default 0 (LE).",
-          "0" })
+          "4" })
 
     ScaleOffsetKernel(ComponentId_t id, Params& params);
 
@@ -55,7 +49,6 @@ public:
 
 private:
     uint64_t latency_coeff_;
-    bool     big_endian_;
 };
 
 } // namespace Quetz

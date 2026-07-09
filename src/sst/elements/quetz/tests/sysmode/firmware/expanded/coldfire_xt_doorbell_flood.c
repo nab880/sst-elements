@@ -19,12 +19,7 @@
 #include <stdint.h>
 
 #include "coldfire_uart.h"
-
-#define GPU_BASE          0x70000000UL
-#define GPU_DOORBELL      (GPU_BASE + 0x00UL)
-#define GPU_STATUS        (GPU_BASE + 0x08UL)
-#define GPU_KERNEL_ID     (GPU_BASE + 0x10UL)
-#define GPU_LATENCY_OVR   (GPU_BASE + 0x18UL)
+#include "coldfire_devices.h"
 
 #define FLOOD_COUNT       11u   /* kMaxPendingLaunches(8) + 1 active + 2 excess */
 #define ACCEPTED_EXPECTED 9u
@@ -33,15 +28,6 @@
  * writes): a retire mid-flood pops the queue and frees a slot, making the
  * accepted count timing-dependent (10 accepted was observed with 2000). */
 #define FLOOD_LATENCY     200000u
-
-static inline void mmio_write32(uint32_t addr, uint32_t v)
-{
-    *(volatile uint32_t *)addr = v;
-}
-static inline uint32_t mmio_read32(uint32_t addr)
-{
-    return *(volatile uint32_t *)addr;
-}
 
 void kernel_main(void)
 {

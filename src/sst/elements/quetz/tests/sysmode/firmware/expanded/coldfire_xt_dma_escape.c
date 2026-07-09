@@ -24,14 +24,8 @@
 #include <stdint.h>
 
 #include "coldfire_uart.h"
-
-#define GPU_BASE          0x70000000UL
-#define GPU_DOORBELL      (GPU_BASE + 0x00UL)
-#define GPU_KERNEL_ID     (GPU_BASE + 0x10UL)
-#define GPU_ARG0          (GPU_BASE + 0x30UL)
-#define GPU_ARG1          (GPU_BASE + 0x38UL)
-#define GPU_ARG2          (GPU_BASE + 0x40UL)
-#define GPU_ARG3          (GPU_BASE + 0x48UL)
+#include "coldfire_devices.h"
+#include "coldfire_scale_ref.h"
 
 #define WIN               0x71000000UL
 #define IN_ADDR           (WIN + 0x0000UL)
@@ -42,16 +36,6 @@
 #define N_VALID           64u
 #define SCALE             2
 #define OFFSET            100
-
-static inline void mmio_write32(uint32_t addr, uint32_t v)
-{
-    *(volatile uint32_t *)addr = v;
-}
-
-static inline uint32_t mmio_read32(uint32_t addr)
-{
-    return *(volatile uint32_t *)addr;
-}
 
 /* Ring the (blocking) doorbell for src/dst/n; returns KERNEL_ID after. */
 static uint32_t submit(uint32_t src, uint32_t dst, uint32_t n)
@@ -67,10 +51,7 @@ static uint32_t submit(uint32_t src, uint32_t dst, uint32_t n)
 
 static int16_t expect(int16_t s)
 {
-    int32_t v = (int32_t)s * SCALE + OFFSET;
-    if (v > 32767)  return 32767;
-    if (v < -32768) return -32768;
-    return (int16_t)v;
+    return cf_scale_offset_ref(s, SCALE, OFFSET);
 }
 
 void kernel_main(void)

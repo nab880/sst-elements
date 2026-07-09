@@ -232,7 +232,8 @@ swapping. Two consequences to know:
   the opposite of real big-endian memory. If your firmware does that (real
   driver code staging descriptors or strings byte-wise usually does), export
   `QUETZ_WIN_BIG_ENDIAN=1` (compute deck) or set `window_big_endian=1` on the
-  CPU **and** `data_big_endian=1` on any kernel that interprets window bytes:
+  CPU **and** `data_big_endian=1` on the `QuetzGpuDevice` (the device pushes
+  it into whatever kernel it loads — kernels take no endianness param):
   the window bytes are then stored MSB-first and byte-level layout matches BE
   hardware, while numeric same-size round-trips still hold.
 

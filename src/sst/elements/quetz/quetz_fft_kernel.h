@@ -18,9 +18,9 @@ namespace SST {
 namespace Quetz {
 
 // Radix-2 FFT kernel for QuetzGpuDevice's "kernel" slot. Buffers are
-// float32 cfloat[N] {re, im} — little-endian by default, big-endian with
-// data_big_endian=1 (pair it with the CPU's window_big_endian for BE
-// guests); N comes from REG_ARG2 and must be a nonzero power of two. The
+// float32 cfloat[N] {re, im} — byte order comes from the device's
+// data_big_endian param (pushed in via setDataBigEndian, default LE);
+// N comes from REG_ARG2 and must be a nonzero power of two. The
 // math lives in quetz_fft.h (host-side, unit-tested by
 // tests/unit/test_fft_compute.cc); this class only marshals and models
 // latency.
@@ -38,13 +38,7 @@ public:
         { "fft_latency_coeff",
           "(uint64) Modeled BUSY cycles = coeff * N * log2(N). "
           "REG_LATENCY_OVERRIDE still forces an explicit per-op latency.",
-          "20" },
-        { "data_big_endian",
-          "(bool) Interpret the DMA'd buffer as big-endian float32 words "
-          "instead of little-endian. Set alongside the QuetzCPU's "
-          "window_big_endian=1 so a big-endian guest's window bytes are "
-          "read back as the values it wrote. Default 0 (LE).",
-          "0" })
+          "20" })
 
     FFTKernel(ComponentId_t id, Params& params);
 
@@ -55,7 +49,6 @@ public:
 
 private:
     uint64_t latency_coeff_;
-    bool     big_endian_;
 };
 
 } // namespace Quetz

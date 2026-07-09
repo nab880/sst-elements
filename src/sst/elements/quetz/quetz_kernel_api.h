@@ -41,6 +41,13 @@ public:
     QuetzKernel(ComponentId_t id, Params&) : SubComponent(id) {}
     virtual ~QuetzKernel() {}
 
+    // Byte layout of the DMA'd guest buffers. Set ONCE by QuetzGpuDevice from
+    // its data_big_endian param right after the slot is loaded — kernels do
+    // not take their own endianness param, so a kernel can never be
+    // configured out of step with the device (and, via the deck, the CPU's
+    // window_big_endian).
+    void setDataBigEndian(bool be) { data_big_endian_ = be; }
+
     // Bytes to DMA-read from src_addr for this op. Return 0 with `err` set
     // to reject the op — e.g. a non-power-of-two FFT N. The device abandons
     // the op non-fatally: the doorbell completes, kernel_id does not
@@ -54,6 +61,11 @@ public:
     virtual uint64_t compute(const KernelArgs& args,
                              const std::vector<uint8_t>& in,
                              std::vector<uint8_t>& out) = 0;
+
+protected:
+    // Interpret buffer words MSB-first (big-endian) when true; see
+    // setDataBigEndian.
+    bool data_big_endian_ = false;
 };
 
 } // namespace Quetz

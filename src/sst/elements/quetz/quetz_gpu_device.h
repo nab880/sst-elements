@@ -74,7 +74,15 @@ public:
           "routing. Both 0 = unrestricted (legacy behavior).", "0" },
         { "dma_range_end",
           "(uint64) Inclusive end of the kernel-DMA range; see "
-          "dma_range_start. 0 = unrestricted.", "0" })
+          "dma_range_start. 0 = unrestricted (setting dma_range_start "
+          "without dma_range_end is a fatal config error).", "0" },
+        { "data_big_endian",
+          "(bool) Byte layout of the kernel's DMA'd buffers: interpret words "
+          "MSB-first (big-endian) instead of little-endian. Pushed into the "
+          "'kernel' subcomponent at load — kernels take no endianness param "
+          "of their own. Set alongside the QuetzCPU's window_big_endian=1 "
+          "when the buffers live in a BE-packed SST window. Default 0 (LE).",
+          "0" })
 
     SST_ELI_DOCUMENT_PORTS(
         { "irq",

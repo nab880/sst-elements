@@ -50,6 +50,12 @@ public:
         QuetzIrqSlot& slot = shared_->irq_slot[vcpu][line];
         slot.level = level;
         __atomic_store_n(&slot.seq, slot.seq + 1, __ATOMIC_RELEASE);
+        // Global change stamp, bumped after the slot: the bridge's poll tick
+        // acquire-loads it and skips the whole irq_slot matrix scan when it
+        // has not moved, so an idle run costs one load per tick instead of
+        // numCores x QUETZ_MAX_IRQ_LINES.
+        __atomic_store_n(&shared_->irq_generation,
+                         shared_->irq_generation + 1, __ATOMIC_RELEASE);
     }
 
     // `ready` is the publication flag for `value`: release-store on the producer

@@ -39,7 +39,12 @@ public:
 
 class RegionTableMemAccessStrategy : public MemAccessStrategy {
 public:
-    explicit RegionTableMemAccessStrategy(const MemRegionTable& table);
+    // filter_unmatched: no-match action. true = count as filtered and
+    // consume (same observable behavior as a full-range
+    // FilteredRegionHandler in the last slot); false = legacy
+    // forward-to-cache.
+    explicit RegionTableMemAccessStrategy(const MemRegionTable& table,
+                                          bool filter_unmatched = false);
 
     MemRegionHandler::Action handleMemoryAccess(const QuetzCommand& cmd,
                                                 QuetzCoreStats& stats) override;
@@ -50,6 +55,7 @@ public:
 private:
     const MemRegionTable& table_;
     std::vector<MemRegionHandler*> handlers_for_finish_;
+    bool filter_unmatched_;
 };
 
 } // namespace Quetz

@@ -15,9 +15,10 @@ using namespace SST;
 using namespace SST::Quetz;
 
 RegionTableMemAccessStrategy::RegionTableMemAccessStrategy(
-        const MemRegionTable& table)
+        const MemRegionTable& table, bool filter_unmatched)
     : table_(table),
-      handlers_for_finish_(table.handlers())
+      handlers_for_finish_(table.handlers()),
+      filter_unmatched_(filter_unmatched)
 {}
 
 MemRegionHandler::Action
@@ -27,8 +28,19 @@ RegionTableMemAccessStrategy::handleMemoryAccess(const QuetzCommand& cmd,
         return MemRegionHandler::Action::FORWARD;
 
     MemRegionHandler* h = table_.findHandler(cmd.addr);
-    if (!h)
+    if (!h) {
+        // filter_unmatched: the deck declared its memory map, so an address
+        // no handler owns is wild guest traffic — count it and consume it
+        // instead of forwarding into memHierarchy, where an unowned address
+        // is a routing fatal. Same observable behavior as the full-range
+        // FilteredRegionHandler decks used to append by hand.
+        if (filter_unmatched_) {
+            ((cmd.cmd == QUETZ_CMD_READ) ? stats.filtered_reads
+                                         : stats.filtered_writes)->addData(1);
+            return MemRegionHandler::Action::CONSUME;
+        }
         return MemRegionHandler::Action::FORWARD;
+    }
 
     return (cmd.cmd == QUETZ_CMD_READ) ? h->onRead(cmd, stats) : h->onWrite(cmd, stats);
 }

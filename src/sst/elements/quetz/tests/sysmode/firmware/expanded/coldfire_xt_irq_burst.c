@@ -28,42 +28,20 @@
 
 #include "coldfire_uart.h"
 #include "coldfire_intc.h"
-
-#define GPU_BASE          0x70000000UL
-#define GPU_DOORBELL      (GPU_BASE + 0x00UL)   /* W: submit (non-blocking) */
-#define GPU_STATUS        (GPU_BASE + 0x08UL)   /* R: busy(1)/idle(0) */
-#define GPU_KERNEL_ID     (GPU_BASE + 0x10UL)   /* R: completed counter */
-#define GPU_LATENCY_OVR   (GPU_BASE + 0x18UL)   /* W: next-kernel cycles */
-#define GPU_IRQ_ACK       (GPU_BASE + 0x50UL)   /* R: raised; W: consume N */
+#include "coldfire_devices.h"
 
 #define IRQ_LINE_ACCEL    30
 
 #define BATCH1            5u
 #define BATCH2            3u
 
-static inline void mmio_write32(uint32_t addr, uint32_t v)
-{
-    *(volatile uint32_t *)addr = v;
-}
-
-static inline uint32_t mmio_read32(uint32_t addr)
-{
-    return *(volatile uint32_t *)addr;
-}
-
 static volatile uint32_t g_accel_irqs;
 
 __attribute__((interrupt_handler))
 static void isr_accel(void)
 {
-    mmio_write32(GPU_IRQ_ACK, 1);       /* consume exactly one event */
-    /* Wait out the INTC's stale view of the level, but only while the device
-     * actually holds the line LOW (GPU_IRQ_ACK reads back the line state).
-     * With event counting, unconsumed completions keep the line raised on
-     * purpose — the IRQ must simply be re-taken after RTE; spinning until
-     * IPR clears would deadlock the ISR. */
-    while (cf_intc_pending(IRQ_LINE_ACCEL) && mmio_read32(GPU_IRQ_ACK) == 0)
-        ;
+    /* Ack exactly one completion event, guarded settle (coldfire_intc.h). */
+    cf_isr_ack_settle(IRQ_LINE_ACCEL, GPU_IRQ_ACK);
     g_accel_irqs++;
 }
 

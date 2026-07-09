@@ -55,9 +55,12 @@ QuetzConfig QuetzConfig::fromParams(Params& params, SST::Output* out) {
 
     cfg.window_big_endian = params.find<bool>("window_big_endian", false);
     {
-        // Same source of truth as QemuLauncher::spawn — the SDL exports the
-        // window range for the bridge aperture; mirror it here so the mailbox
-        // knows which sync-MMIO addresses are window (memory-like) accesses.
+        // SINGLE owner of the SST-window range: the deck exports
+        // QUETZ_SST_WIN_START/END, this is the only place that parses them,
+        // and everyone else (QemuLauncher's bridge aperture + plugin range,
+        // the mailbox's window classification) consumes
+        // cfg.sst_window_base/size — so the aperture and the mailbox can
+        // never disagree about where the window is.
         const char* ws = getenv("QUETZ_SST_WIN_START");
         const char* we = getenv("QUETZ_SST_WIN_END");
         if (ws && we) {

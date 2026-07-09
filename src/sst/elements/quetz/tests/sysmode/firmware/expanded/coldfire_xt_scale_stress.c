@@ -23,13 +23,8 @@
 #include <stdint.h>
 
 #include "coldfire_uart.h"
-
-#define GPU_BASE          0x70000000UL
-#define GPU_DOORBELL      (GPU_BASE + 0x00UL)
-#define GPU_ARG0          (GPU_BASE + 0x30UL)
-#define GPU_ARG1          (GPU_BASE + 0x38UL)
-#define GPU_ARG2          (GPU_BASE + 0x40UL)
-#define GPU_ARG3          (GPU_BASE + 0x48UL)
+#include "coldfire_devices.h"
+#include "coldfire_scale_ref.h"
 
 #define N_SAMPLES  512u
 #define SCALE      3
@@ -38,11 +33,6 @@
 #define WIN        0x71000000UL
 #define IN_ADDR    (WIN + 0x0000UL)
 #define OUT_ADDR   (WIN + 0x1000UL)
-
-static inline void mmio_write32(uint32_t addr, uint32_t v)
-{
-    *(volatile uint32_t *)addr = v;
-}
 
 /* Front-loaded extremes, then a ramp spanning nearly the full s16 range. */
 static int16_t sample(uint32_t i)
@@ -56,13 +46,9 @@ static int16_t sample(uint32_t i)
     }
 }
 
-/* Mirror of quetz_scale_offset.h:quetz_scale_offset_sat16(). */
 static int16_t expect(int16_t s)
 {
-    int32_t v = (int32_t)s * SCALE + OFFSET;
-    if (v > 32767)  return 32767;
-    if (v < -32768) return -32768;
-    return (int16_t)v;
+    return cf_scale_offset_ref(s, SCALE, OFFSET);
 }
 
 void kernel_main(void)

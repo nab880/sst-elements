@@ -111,7 +111,7 @@ struct QuetzIrqSlot {
 // hand-mirrors) drifts, turning silent layout skew into a loud attach
 // failure. 'QZM' + layout version — BUMP THE LOW BYTE on ANY change to this
 // struct, and keep the overlay mirror header in lockstep.
-static constexpr uint32_t QUETZ_SHM_MAGIC = 0x515A4D01u;
+static constexpr uint32_t QUETZ_SHM_MAGIC = 0x515A4D02u;
 
 struct QuetzSharedData {
     size_t            numCores;
@@ -122,6 +122,10 @@ struct QuetzSharedData {
     QuetzMmioResponseSlot mmio_slot[QUETZ_MAX_MMIO_VCORES];
     QuetzMmioSyncRequest  mmio_req[QUETZ_MAX_MMIO_VCORES];
     QuetzIrqSlot          irq_slot[QUETZ_MAX_MMIO_VCORES][QUETZ_MAX_IRQ_LINES];
+    // Bumped (release) by SST on every postIrq; the QEMU bridge's poll tick
+    // acquire-loads it and skips the whole irq_slot scan when unchanged.
+    volatile uint32_t irq_generation;
+    uint32_t          _pad2;
     volatile uint32_t magic;   // QUETZ_SHM_MAGIC — keep as the LAST field
     uint32_t          _pad1;
 };

@@ -47,8 +47,7 @@ void f32_to_bytes(float f, uint8_t* p, bool be) {
 
 FFTKernel::FFTKernel(ComponentId_t id, Params& params)
     : QuetzKernel(id, params),
-      latency_coeff_(params.find<uint64_t>("fft_latency_coeff", 20)),
-      big_endian_(params.find<bool>("data_big_endian", false))
+      latency_coeff_(params.find<uint64_t>("fft_latency_coeff", 20))
 {}
 
 uint64_t FFTKernel::inputBytes(const KernelArgs& args, std::string& err)
@@ -72,14 +71,14 @@ uint64_t FFTKernel::compute(const KernelArgs& args,
 
     std::vector<QuetzCf> a((size_t)n);
     for (uint32_t i = 0; i < n; i++) {
-        a[i].re = bytes_to_f32(&in[(size_t)i * 8 + 0], big_endian_);
-        a[i].im = bytes_to_f32(&in[(size_t)i * 8 + 4], big_endian_);
+        a[i].re = bytes_to_f32(&in[(size_t)i * 8 + 0], data_big_endian_);
+        a[i].im = bytes_to_f32(&in[(size_t)i * 8 + 4], data_big_endian_);
     }
     quetz_fft_radix2(a.data(), n);
     out.resize(in.size());
     for (uint32_t i = 0; i < n; i++) {
-        f32_to_bytes(a[i].re, &out[(size_t)i * 8 + 0], big_endian_);
-        f32_to_bytes(a[i].im, &out[(size_t)i * 8 + 4], big_endian_);
+        f32_to_bytes(a[i].re, &out[(size_t)i * 8 + 0], data_big_endian_);
+        f32_to_bytes(a[i].im, &out[(size_t)i * 8 + 4], data_big_endian_);
     }
 
     return latency_coeff_ * (uint64_t)n * (uint64_t)(logn ? logn : 1);

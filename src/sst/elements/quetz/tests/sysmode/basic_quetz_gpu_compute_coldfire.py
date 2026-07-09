@@ -25,13 +25,13 @@ exactly on the big-endian guest with no byte swapping (what
 coldfire_gpu_fft_offload.c relies on), but SUB-WORD ALIASING (byte-write then
 word-read of the same window word) behaves little-endian, unlike real ColdFire
 memory. Export QUETZ_WIN_BIG_ENDIAN=1 to store window bytes MSB-first instead
-(window_big_endian on the CPU + data_big_endian on the kernel, kept in
-lockstep here): byte-level layout then matches BE hardware, and numeric u32
-round-trips still hold.
+(window_big_endian on the CPU + data_big_endian on the GPU device, which
+pushes it into its kernel, kept in lockstep here): byte-level layout then
+matches BE hardware, and numeric u32 round-trips still hold.
 
 Env: QUETZ_EXE, QUETZ_QEMU(=qemu-system-m68k), QUETZ_QEMU_ARGS, QUETZ_LOADER,
 QUETZ_MMIO_START/END, QUETZ_SST_WIN_START/END, QUETZ_FFT_LATENCY_COEFF,
-QUETZ_KERNEL_BIG_ENDIAN (independent override of the kernel's data_big_endian,
+QUETZ_KERNEL_BIG_ENDIAN (independent override of the device's data_big_endian,
 default: matches QUETZ_WIN_BIG_ENDIAN — set it differently only to reproduce
 the documented mismatched-flags footgun).
 
@@ -139,8 +139,7 @@ uart_rh = cpu.setSubComponent("region_handler", "quetz.UartRegionHandler", 1)
 uart_rh.addParams({"start": uart_addr, "end": uart_addr + 0xFF, "tx_offset": 0x0C})
 fin_rh = cpu.setSubComponent("region_handler", "quetz.TestFinisherRegionHandler", 2)
 fin_rh.addParams({"start": sentinel_addr, "end": sentinel_addr + 3})
-ram_rh = cpu.setSubComponent("region_handler", "quetz.FilteredRegionHandler", 3)
-ram_rh.addParams({"start": 0x00000000, "end": 0xFFFFFFFF})
+cpu.addParams({"filter_unmatched_regions": 1})
 cpu.enableAllStatistics()
 
 # CPU cache path onto the NoC (unused for traffic here — all guest RAM is
@@ -186,12 +185,14 @@ gpu.addParams({
     # of crashing the simulation in memHierarchy routing.
     "dma_range_start": win_start,
     "dma_range_end": win_end,
+    # Buffer byte layout, pushed by the device into whatever kernel loads
+    # below (kernels take no endianness param of their own).
+    "data_big_endian": 1 if kernel_be else 0,
 })
 gpu.enableAllStatistics()
 # Kernel selection: any quetz.QuetzKernel subclass (QUETZ_KERNEL env).
 kernel_name = os.environ.get("QUETZ_KERNEL", "quetz.FFTKernel")
 gpu_kernel = gpu.setSubComponent("kernel", kernel_name)
-gpu_kernel.addParams({"data_big_endian": 1 if kernel_be else 0})
 if kernel_name == "quetz.FFTKernel":
     gpu_kernel.addParams({
         "fft_latency_coeff": int(os.environ.get("QUETZ_FFT_LATENCY_COEFF", "20")),

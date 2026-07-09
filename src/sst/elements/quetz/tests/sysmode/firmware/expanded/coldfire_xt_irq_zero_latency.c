@@ -24,12 +24,7 @@
 
 #include "coldfire_uart.h"
 #include "coldfire_intc.h"
-
-#define GPU_BASE          0x70000000UL
-#define GPU_DOORBELL      (GPU_BASE + 0x00UL)   /* W: submit (non-blocking) */
-#define GPU_KERNEL_ID     (GPU_BASE + 0x10UL)   /* R: completed counter */
-#define GPU_LATENCY_OVR   (GPU_BASE + 0x18UL)   /* W: next-kernel cycles */
-#define GPU_IRQ_ACK       (GPU_BASE + 0x50UL)   /* R: raised; W: consume N */
+#include "coldfire_devices.h"
 
 #define IRQ_LINE_ACCEL    30
 
@@ -37,26 +32,13 @@
 #define QBATCH            2u    /* zero-latency doorbells queued behind a busy op */
 #define SLOW_CYCLES       20000u
 
-static inline void mmio_write32(uint32_t addr, uint32_t v)
-{
-    *(volatile uint32_t *)addr = v;
-}
-
-static inline uint32_t mmio_read32(uint32_t addr)
-{
-    return *(volatile uint32_t *)addr;
-}
-
 static volatile uint32_t g_accel_irqs;
 
 __attribute__((interrupt_handler))
 static void isr_accel(void)
 {
-    mmio_write32(GPU_IRQ_ACK, 1);       /* consume exactly one event */
-    /* Guarded stale-level spin (see coldfire_intc.h): if unconsumed events
-     * hold the line, return and let RTE re-take the IRQ. */
-    while (cf_intc_pending(IRQ_LINE_ACCEL) && mmio_read32(GPU_IRQ_ACK) == 0)
-        ;
+    /* Ack exactly one completion event, guarded settle (coldfire_intc.h). */
+    cf_isr_ack_settle(IRQ_LINE_ACCEL, GPU_IRQ_ACK);
     g_accel_irqs++;
 }
 

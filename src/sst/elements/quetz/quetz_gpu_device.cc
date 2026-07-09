@@ -74,6 +74,23 @@ QuetzGpuDevice::QuetzGpuDevice(ComponentId_t id, Params& params)
             getName().c_str(), dma_bytes);
     }
 
+    // dma_range_end==0 means "unrestricted", so a start without an end would
+    // silently disable the whole range guard — refuse the half-configured
+    // pair instead of running with the guard off.
+    if (dma_range_start_ != 0 && dma_range_end_ == 0) {
+        out.fatal(CALL_INFO, -1,
+            "%s: dma_range_start=0x%" PRIx64 " but dma_range_end=0 "
+            "(unrestricted) — set dma_range_end (inclusive) too, or leave "
+            "both 0 for no restriction.\n",
+            getName().c_str(), dma_range_start_);
+    }
+    if (dma_range_end_ != 0 && dma_range_end_ < dma_range_start_) {
+        out.fatal(CALL_INFO, -1,
+            "%s: dma_range_end=0x%" PRIx64 " is below dma_range_start=0x%"
+            PRIx64 ".\n",
+            getName().c_str(), dma_range_end_, dma_range_start_);
+    }
+
     std::string clockfreq = params.find<std::string>("clock", "1GHz");
     UnitAlgebra clock_ua(clockfreq);
     if (!(clock_ua.hasUnits("Hz") || clock_ua.hasUnits("s")) ||
@@ -120,6 +137,10 @@ QuetzGpuDevice::QuetzGpuDevice(ComponentId_t id, Params& params)
                 "guest must block until the result is in memory).\n",
                 getName().c_str());
         }
+        // The device owns the buffer byte layout; push it into whatever
+        // kernel was loaded so a kernel can never be configured out of step
+        // with the device (kernels take no endianness param of their own).
+        kernel_->setDataBigEndian(params.find<bool>("data_big_endian", false));
     }
 
     // Completion IRQ: raise irq_line on op retire, lower on REG_IRQ_ACK.
@@ -513,8 +534,12 @@ void QuetzGpuDevice::opReject(const char* why) {
 bool QuetzGpuDevice::dmaRangeOk(uint64_t addr, uint64_t len) const {
     if (dma_range_end_ == 0)
         return true;    // unconfigured: no restriction
+    if (len == 0)
+        return true;    // touches no bytes
+    // len-1 <= end-addr, not len <= end-addr+1: the latter wraps to 0 when
+    // the range ends at UINT64_MAX and would reject every op.
     return addr >= dma_range_start_ && addr <= dma_range_end_ &&
-           len <= dma_range_end_ - addr + 1;
+           len - 1 <= dma_range_end_ - addr;
 }
 
 void QuetzGpuDevice::opStartDma() {

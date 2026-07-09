@@ -27,37 +27,20 @@
 
 #include "coldfire_uart.h"
 #include "coldfire_intc.h"
-
-#define SENSOR_BASE       0x70010000UL
-#define SENSOR_STATUS     (SENSOR_BASE + 0x00UL) /* R: bytes ready now */
-#define SENSOR_DATA       (SENSOR_BASE + 0x08UL) /* R: pop up to 4 bytes */
-#define SENSOR_IRQ_ACK    (SENSOR_BASE + 0x28UL) /* R: raised; W1: ack */
+#include "coldfire_devices.h"
 
 #define IRQ_LINE_SENSOR   31
 #define NEED_WAKES        4u
-
-static inline uint32_t mmio_read32(uint32_t addr)
-{
-    return *(volatile uint32_t *)addr;
-}
-static inline void mmio_write32(uint32_t addr, uint32_t v)
-{
-    *(volatile uint32_t *)addr = v;
-}
 
 static volatile uint32_t g_sensor_irqs;
 
 __attribute__((interrupt_handler))
 static void isr_sensor(void)
 {
-    mmio_write32(SENSOR_IRQ_ACK, 1);
-    /* Wait out the INTC's stale view of the level, but only while the device
-     * actually holds the line LOW (SENSOR_IRQ_ACK reads back the line
-     * state): a paced refill can re-raise between the ack and the bridge's
-     * next poll, and that re-assert is a genuinely new wakeup the ISR must
-     * return for — spinning until IPR clears would deadlock. */
-    while (cf_intc_pending(IRQ_LINE_SENSOR) && mmio_read32(SENSOR_IRQ_ACK) == 0)
-        ;
+    /* Ack + guarded settle (coldfire_intc.h): a paced refill can re-raise
+     * between the ack and the bridge's next poll — that re-assert is a
+     * genuinely new wakeup the ISR must return for. */
+    cf_isr_ack_settle(IRQ_LINE_SENSOR, SENSOR_IRQ_ACK);
     g_sensor_irqs++;
 }
 

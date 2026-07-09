@@ -62,6 +62,21 @@ static inline uint32_t cf_intc_pending(unsigned line)
     return (INTC0_IPRH >> (line - 32)) & 1u;
 }
 
+/* ISR epilogue for a Quetz device whose IRQ_ACK register reads back the
+ * line state (GPU_IRQ_ACK, SENSOR_IRQ_ACK): ack ONE event, then wait out
+ * the INTC's stale view of the level — but only while the device itself
+ * reads the line low. If unconsumed completion events or a new paced refill
+ * hold/re-raise the line, IPR is legitimately set: return at once and let
+ * RTE re-take the IRQ; spinning until IPR clears would deadlock the ISR.
+ * The guard condition is the contract with the reverse-IRQ bridge — keep it
+ * here, not hand-copied per ISR. */
+static inline void cf_isr_ack_settle(unsigned line, uint32_t ack_reg)
+{
+    *(volatile uint32_t *)ack_reg = 1;
+    while (cf_intc_pending(line) && *(volatile uint32_t *)ack_reg == 0)
+        ;
+}
+
 /* IPL 7: no interrupt below NMI is taken (supervisor mode assumed —
  * freestanding -kernel firmware never leaves it). */
 static inline void cf_irq_mask_all(void)

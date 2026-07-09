@@ -225,9 +225,12 @@ EXTRA_DIST =	GETTING-STARTED.md \
 	tests/sysmode/firmware/coldfire_gpu_fft_offload \
 	tests/sysmode/firmware/coldfire_gpu_fft_offload.c \
 	tests/sysmode/firmware/coldfire_gpu_fft.c \
+	tests/sysmode/firmware/coldfire_devices.h \
+	tests/sysmode/firmware/coldfire_fault.h \
 	tests/sysmode/firmware/coldfire_gpu.c \
 	tests/sysmode/firmware/coldfire_hello.c \
 	tests/sysmode/firmware/coldfire_intc.h \
+	tests/sysmode/firmware/coldfire_scale_ref.h \
 	tests/sysmode/firmware/coldfire_irq_demo \
 	tests/sysmode/firmware/coldfire_irq_demo.c \
 	tests/sysmode/firmware/coldfire_monitor.c \

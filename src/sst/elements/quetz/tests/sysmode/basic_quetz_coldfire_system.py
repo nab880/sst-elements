@@ -141,16 +141,15 @@ fin_rh.addParams({"start": sentinel_addr, "end": sentinel_addr + 3})
 # forwarded to the RAM-only MemController. Must come after the UART slot.
 soc_rh = cpu.setSubComponent("region_handler", "quetz.FilteredRegionHandler", 3)
 soc_rh.addParams({"start": 0xFC000000, "end": 0xFCFFFFFF})
-# RAM forwards to the MemController (explicit, so the catch-all below cannot
-# swallow it), and EVERYTHING else is filtered: a wild guest access (the buggy
+# RAM forwards to the MemController explicitly, and EVERYTHING else is
+# filtered by the CPU's no-match policy: a wild guest access (the buggy
 # firmware a user is here to test) must degrade to a counted statistic, not a
 # memHierarchy fatal for an address no controller owns. QEMU itself is RAZ/WI
 # for unassigned mcf5208evb space (pinned by test_quetz_coldfire_bsp_torture),
 # so the guest survives either way.
 ram_rh = cpu.setSubComponent("region_handler", "quetz.ForwardRegionHandler", 4)
 ram_rh.addParams({"start": ram_start, "end": ram_end})
-wild_rh = cpu.setSubComponent("region_handler", "quetz.FilteredRegionHandler", 5)
-wild_rh.addParams({"start": 0x0, "end": 0xFFFFFFFFFFFFFFFF})
+cpu.addParams({"filter_unmatched_regions": 1})
 cpu.enableAllStatistics()
 
 memctrl = sst.Component("memory", "memHierarchy.MemController")

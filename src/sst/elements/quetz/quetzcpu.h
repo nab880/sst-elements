@@ -118,6 +118,15 @@ public:
           "packing, under which same-size access round-trips exactly but "
           "sub-word aliasing behaves little-endian.",
           "0" },
+        { "filter_unmatched_regions",
+          "No-match policy for the region_handler table. 1 = an address no "
+          "handler owns is counted (filtered_reads/filtered_writes) and "
+          "consumed, exactly like a full-range FilteredRegionHandler in the "
+          "last slot — use this in system-mode decks that declare their "
+          "memory map, so wild guest accesses cannot reach memHierarchy "
+          "(where an unowned address is a routing fatal). Default 0: legacy "
+          "forward-to-cache, required by decks that rely on unmatched "
+          "addresses reaching the cache hierarchy.", "0" },
         { "executable",
           "Path to the guest binary to run under QEMU.", "" },
         { "qemu",

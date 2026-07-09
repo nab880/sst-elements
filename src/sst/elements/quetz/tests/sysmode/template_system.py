@@ -99,6 +99,12 @@ rh1 = cpu.setSubComponent("region_handler", "quetz.UartRegionHandler", 1)
 rh1.addParams({"start": UART_ADDR, "end": UART_ADDR + 0xFF, "tx_offset": 0x0C})
 rh2 = cpu.setSubComponent("region_handler", "quetz.TestFinisherRegionHandler", 2)
 rh2.addParams({"start": SENTINEL_ADDR, "end": SENTINEL_ADDR + 3})
+# RAM forwards to the MemController explicitly; anything no handler owns —
+# a wild access from the buggy firmware you are here to test — is filtered
+# into a counted statistic instead of fataling in memHierarchy routing.
+rh3 = cpu.setSubComponent("region_handler", "quetz.ForwardRegionHandler", 3)
+rh3.addParams({"start": RAM_START, "end": RAM_END})
+cpu.addParams({"filter_unmatched_regions": 1})
 cpu.enableAllStatistics()
 
 memctrl = sst.Component("memory", "memHierarchy.MemController")

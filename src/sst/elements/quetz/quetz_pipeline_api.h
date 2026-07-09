@@ -58,6 +58,11 @@ struct QuetzCoreContext {
     uint64_t                 cache_line_size;
     uint32_t                 check_addresses;
     bool                     detailed_tracking;
+    // No-match policy for the region table: true = count the access as
+    // filtered and consume it (a deck that declares its memory map should
+    // not forward wild addresses into memHierarchy, where an unowned
+    // address is a routing fatal); false = legacy forward-to-cache.
+    bool                     filter_unmatched_regions;
     const MemRegionTable*    region_table;
     const uint32_t*          exec_latency;
     const uint32_t*          compute_latency;

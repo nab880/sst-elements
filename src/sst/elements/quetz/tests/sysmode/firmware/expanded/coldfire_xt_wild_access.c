@@ -4,9 +4,9 @@
  * mapped region (RAM, the MMIO bridge window, on-chip peripherals) used to
  * reach memHierarchy's MemController with an address it doesn't own, which
  * is a hard SST `fatal` -- the whole simulator aborts instead of the guest
- * merely misbehaving. The three ColdFire decks now end their region-handler
- * chain with an explicit RAM forward + a whole-address-space
- * FilteredRegionHandler catch-all.
+ * merely misbehaving. The ColdFire decks now pair an explicit RAM forward
+ * with the CPU's filter_unmatched_regions=1 no-match policy, so unmatched
+ * addresses are counted and consumed.
  *
  * Probes four addresses in the gaps NOT covered by any handler in
  * basic_quetz_gpu_coldfire.py (RAM 0x40000000-0x47FFFFFF, MMIO window
@@ -29,65 +29,9 @@
 #include <stdint.h>
 
 #include "coldfire_uart.h"
+#include "coldfire_fault.h"
 
 #define VEC_TABLE_ADDR  0x40900000UL   /* distinct from bsp_torture's 0x40800000 */
-
-volatile uint32_t g_fault_flag;
-volatile uint32_t g_fault_frame;
-volatile uint32_t g_resume_pc;
-
-__asm__(
-"       .text\n"
-"       .align 2\n"
-"       .global xt_fault_handler\n"
-"xt_fault_handler:\n"
-"       move.l  %a0,-(%sp)\n"
-"       move.l  %d0,-(%sp)\n"
-"       moveq   #1,%d0\n"
-"       lea     g_fault_flag,%a0\n"
-"       move.l  %d0,(%a0)\n"
-"       move.l  8(%sp),%d0\n"
-"       lea     g_fault_frame,%a0\n"
-"       move.l  %d0,(%a0)\n"
-"       lea     g_resume_pc,%a0\n"
-"       move.l  (%a0),%d0\n"
-"       move.l  %d0,12(%sp)\n"
-"       move.l  (%sp)+,%d0\n"
-"       move.l  (%sp)+,%a0\n"
-"       rte\n"
-);
-extern void xt_fault_handler(void);
-
-static void install_vectors(void)
-{
-    volatile uint32_t *vt = (volatile uint32_t *)VEC_TABLE_ADDR;
-    for (uint32_t i = 0; i < 256; i++)
-        vt[i] = (uint32_t)xt_fault_handler;
-    __asm__ volatile("movec %0,%%vbr" :: "r"(VEC_TABLE_ADDR));
-}
-
-#define PROBE_BODY(ACCESS)                                        \
-    g_fault_flag = 0;                                             \
-    g_resume_pc = (uint32_t)&&resume;                             \
-    __asm__ volatile("" ::: "memory");                            \
-    ACCESS;                                                       \
-    __asm__ volatile("" ::: "memory");                            \
-resume:                                                           \
-    __asm__ volatile("" ::: "memory");
-
-static uint32_t probe_r32(uint32_t addr, uint32_t *val)
-{
-    uint32_t v = 0;
-    PROBE_BODY(v = *(volatile uint32_t *)addr)
-    *val = v;
-    return g_fault_flag;
-}
-
-static uint32_t probe_w32(uint32_t addr, uint32_t v)
-{
-    PROBE_BODY(*(volatile uint32_t *)addr = v)
-    return g_fault_flag;
-}
 
 static uint32_t n_fault, n_clean;
 
@@ -112,9 +56,9 @@ static void report(const char *name, uint32_t addr, uint32_t fault, uint32_t val
 static void probe_addr(const char *name, uint32_t addr)
 {
     uint32_t v, f;
-    f = probe_r32(addr, &v);
+    f = cf_probe_r32(addr, &v);
     report(name, addr, f, v);
-    f = probe_w32(addr, 0x5A5A5A5Au);
+    f = cf_probe_w32(addr, 0x5A5A5A5Au);
     report(name, addr, f, 0);
 }
 
@@ -122,7 +66,7 @@ void kernel_main(void)
 {
     uart_init();
     uart_puts("Wild-access probe: addresses outside every region handler (m68k)\n");
-    install_vectors();
+    cf_install_fault_vectors(VEC_TABLE_ADDR);
 
     probe_addr("LOW   ", 0x08000000UL);
     probe_addr("GAP1  ", 0x50000000UL);

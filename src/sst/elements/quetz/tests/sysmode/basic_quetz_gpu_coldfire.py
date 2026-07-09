@@ -98,12 +98,12 @@ uart_rh.addParams({"start": uart_addr, "end": uart_addr + 0xFF, "tx_offset": 0x0
 fin_rh = cpu.setSubComponent("region_handler", "quetz.TestFinisherRegionHandler", 2)
 fin_rh.addParams({"start": sentinel_addr, "end": sentinel_addr + 3})
 # RAM forwards to the MemController explicitly; everything else (SoC
-# peripherals, wild addresses from buggy guest code) is filtered so it becomes
-# a counted statistic instead of a memHierarchy fatal for an unowned address.
+# peripherals, wild addresses from buggy guest code) is filtered by the CPU's
+# no-match policy so it becomes a counted statistic instead of a memHierarchy
+# fatal for an unowned address.
 ram_rh = cpu.setSubComponent("region_handler", "quetz.ForwardRegionHandler", 3)
 ram_rh.addParams({"start": ram_start, "end": ram_end})
-wild_rh = cpu.setSubComponent("region_handler", "quetz.FilteredRegionHandler", 4)
-wild_rh.addParams({"start": 0x0, "end": 0xFFFFFFFFFFFFFFFF})
+cpu.addParams({"filter_unmatched_regions": 1})
 cpu.enableAllStatistics()
 
 memctrl = sst.Component("memory", "memHierarchy.MemController")
