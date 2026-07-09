@@ -94,7 +94,6 @@ EXTRA_DIST = \
 	tests/testsuite_default_balar.py \
 	tests/fft_stats_report.py \
 	tests/run_fft_sweep.sh \
-	tests/README-fft-demo.md \
 	tests/utils.py \
 	tests/vanadisBlock.py \
 	tests/vanadisOS.py
