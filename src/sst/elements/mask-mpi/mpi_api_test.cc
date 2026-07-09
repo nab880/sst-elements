@@ -63,6 +63,7 @@ MpiApi::test(MPI_Request *request, MPI_Status *status, int& tag, int& source)
 
   MpiRequest* reqPtr = getRequest(*request);
   if (reqPtr->isComplete()){
+    stageRecvOnComplete(reqPtr); // non-blocking recv pays its deferred H2D stage here
     if (status != MPI_STATUS_IGNORE){
       *status = reqPtr->status();
     }

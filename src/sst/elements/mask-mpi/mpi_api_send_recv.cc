@@ -81,6 +81,7 @@ MpiApi::send(const void *buf, int count, MPI_Datatype datatype, int dest, int ta
 
   if (dest != MPI_PROC_NULL){
     MpiRequest* req = MpiRequest::construct(MpiRequest::Send);
+    stageDeviceBuffer(buf, count, datatype); // D2H stage if a device pointer
     queue_->send(req, count, datatype, dest, tag, commPtr, const_cast<void*>(buf));
     queue_->progressLoop(req);
     delete req;
@@ -190,6 +191,7 @@ MpiApi::doStart(MPI_Request req)
       queue_->send(reqPtr, op->count, op->datatype, op->partner, op->tag, commPtr, op->content);
     } else {
       queue_->recv(reqPtr, op->count, op->datatype, op->partner, op->tag, commPtr, op->content);
+      reqPtr->armRecvStaging(op->content, op->count, op->datatype); // charge H2D stage on wait/test
     }
   }
 
@@ -278,6 +280,7 @@ MpiApi::doIsend(const void *buf, int count, MPI_Datatype datatype, int dest,
   if (dest == MPI_PROC_NULL){
     req->setComplete(true); //just mark complete
   } else {
+    stageDeviceBuffer(buf, count, datatype); // D2H stage if a device pointer
     queue_->send(req, count, datatype, dest, tag, commPtr, const_cast<void*>(buf));
   }
   return req;
@@ -346,6 +349,7 @@ MpiApi::doRecv(void *buf, int count, MPI_Datatype datatype, int source,
   MpiComm* commPtr = getComm(comm);
   queue_->recv(req, count, datatype, source, tag, commPtr, buf);
   queue_->progressLoop(req);
+  stageDeviceBuffer(buf, count, datatype); // H2D stage if a device pointer
   if (status != MPI_STATUS_IGNORE){
     *status = req->status();
   }
@@ -411,6 +415,7 @@ MpiApi::irecv(void *buf, int count, MPI_Datatype datatype, int source,
 
   if (source != MPI_PROC_NULL){
     queue_->recv(req, count, datatype, source, tag, commPtr, buf);
+    req->armRecvStaging(buf, count, datatype); // charge H2D stage on wait/test
   } else {
     req->setComplete(true); //just mark done
     req->setStatus(proc_null_status);

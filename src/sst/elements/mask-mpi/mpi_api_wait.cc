@@ -110,6 +110,7 @@ MpiApi::doWait(MPI_Request *request, MPI_Status *status, int& tag, int& source)
 void
 MpiApi::finalizeWaitRequest(MpiRequest* reqPtr, MPI_Request* req, MPI_Status* status)
 {
+  stageRecvOnComplete(reqPtr); // non-blocking recv pays its deferred H2D stage here
   if (status != MPI_STATUS_IGNORE){
     *status = reqPtr->status();
   }

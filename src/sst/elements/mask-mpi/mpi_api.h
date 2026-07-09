@@ -827,6 +827,18 @@ class MpiApi : public SST::Iris::sumi::SimTransport
   int iprobe_delay_us_;
   int test_delay_us_;
 
+  // GPU staging: without gpu_direct_, device pointers pay PCIe host-staging cost.
+  void stageDeviceBuffer(const void* buf, int count, MPI_Datatype datatype);
+  // Charge a completed non-blocking recv's H2D staging (once), if it was armed.
+  void stageRecvOnComplete(MpiRequest* reqPtr);
+  bool gpu_direct_;
+  // Cached at construction: is a "GpuLibrary" declared for this app? When false,
+  // no buffer can be a device pointer, so device-pointer probes are skipped
+  // (probing would abort in App::getLibrary for non-GPU apps).
+  bool has_gpu_lib_;
+  double pcie_latency_;
+  double pcie_bandwidth_;
+
   enum {
     is_fresh, is_initialized, is_finalizing, is_finalized
   } status_;
