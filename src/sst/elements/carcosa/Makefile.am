@@ -34,6 +34,8 @@ libcarcosa_la_SOURCES =                     \
     injectors/randomFlipFaultInjector.h     \
     injectors/dropFlipFaultInjector.cc      \
     injectors/dropFlipFaultInjector.h       \
+    injectors/portModuleStateGate.cc        \
+    injectors/portModuleStateGate.h         \
     injectors/faultInjectorMemH.cc          \
     injectors/faultInjectorMemH.h           \
     faultlogic/faultBase.cc                 \
@@ -75,7 +77,11 @@ libcarcosa_la_SOURCES =                     \
     components/sensorEvent.h                \
     components/haliEvent.h                  \
     components/ringProtocol.h               \
-    components/carcosaHash.h
+    components/carcosaHash.h                \
+    examples/SimplePipeline/simplePipelineExample.cc \
+    examples/SimplePipeline/simplePipelineExample.h \
+    examples/MmioControl/mmioControlExample.cc \
+    examples/MmioControl/mmioControlExample.h
 
 EXTRA_DIST = \
     hyades.h                                      \
@@ -83,6 +89,10 @@ EXTRA_DIST = \
     tests/fourstate.c                             \
     tests/testCarcosaPingPong.py                  \
     tests/testFourStateRegistry.py                \
+    tests/testFourStateRegistryGated.py           \
+    examples/SimplePipeline/tests/testSimplePipeline.py \
+    examples/SimplePipeline/tests/testPortModuleStateGate.py \
+    examples/MmioControl/tests/testMmioControl.py \
     tests/testCorruptMemBasic.py                  \
     tests/testCorruptMemDouble.py                 \
     tests/testCorruptMemDoubleOverlap.py          \
@@ -107,6 +117,8 @@ EXTRA_DIST = \
     tests/testEccPoissonDistribution.py           \
     tests/testEccJedecDistribution.py             \
     tests/testEccResidentDistribution.py          \
+    tests/testStateGateRegionNoOverlap.py         \
+    tests/testStateGateRegionOverlap.py           \
     tests/testActionScorerTaxonomy.py             \
     tests/testActionScorerTokenFallback.py        \
     tests/testActionScorerDropDivergence.py       \
@@ -128,6 +140,7 @@ nobase_sst_HEADERS =                        \
     injectors/randomDropFaultInjector.h     \
     injectors/randomFlipFaultInjector.h     \
     injectors/dropFlipFaultInjector.h       \
+    injectors/portModuleStateGate.h         \
     injectors/faultInjectorMemH.h           \
     faultlogic/faultBase.h                  \
     faultlogic/stuckAtFault.h               \
@@ -151,6 +164,8 @@ nobase_sst_HEADERS =                        \
     components/pingPongAgent.h              \
     components/fourStateAgent.h             \
     components/haliEvent.h                  \
+    examples/SimplePipeline/simplePipelineExample.h \
+    examples/MmioControl/mmioControlExample.h \
     components/vlaRegions.h
 
 libcarcosa_la_LDFLAGS = -module -avoid-version
