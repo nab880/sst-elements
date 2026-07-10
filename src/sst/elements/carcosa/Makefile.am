@@ -11,6 +11,15 @@ comp_LTLIBRARIES = libcarcosa.la
 libcarcosa_la_SOURCES =                     \
     components/hali.cc                      \
     components/hali.h                       \
+    components/eccGuard.cc                  \
+    components/eccGuard.h                   \
+    components/eccModelMath.h               \
+    components/criticalActionWatcher.cc     \
+    components/criticalActionWatcher.h      \
+    components/eccScheme.h                  \
+    components/eccPolicy.h                  \
+    components/actionScorer.cc              \
+    components/actionScorer.h               \
     components/faultInjManager.cc           \
     components/faultInjManager.h            \
     injectors/faultInjectorBase.cc          \
@@ -50,19 +59,30 @@ libcarcosa_la_SOURCES =                     \
     components/faultInjEvent.h              \
     components/faultInjManagerAPI.h         \
     components/interceptionAgentAPI.h       \
+    components/hyadesProtocol.h             \
+    components/pipelineStateRegistry.h      \
     components/pingPongAgent.cc             \
     components/pingPongAgent.h              \
+    components/fourStateAgent.cc            \
+    components/fourStateAgent.h             \
+    components/regressionTestComponents.cc  \
+    components/regressionTestComponents.h   \
+    components/vlaRegions.h                 \
     components/carcosaMemCtrl.cc            \
     components/carcosaMemCtrl.h             \
     components/sensorComponent.cc           \
-    components/sensorComponent.h           \
+    components/sensorComponent.h            \
     components/sensorEvent.h                \
-    components/haliEvent.h
+    components/haliEvent.h                  \
+    components/ringProtocol.h               \
+    components/carcosaHash.h
 
 EXTRA_DIST = \
     hyades.h                                      \
     tests/pingpong.c                              \
-    tests/testcarcosaPingPong.py                  \
+    tests/fourstate.c                             \
+    tests/testCarcosaPingPong.py                  \
+    tests/testFourStateRegistry.py                \
     tests/testCorruptMemBasic.py                  \
     tests/testCorruptMemDouble.py                 \
     tests/testCorruptMemDoubleOverlap.py          \
@@ -73,11 +93,32 @@ EXTRA_DIST = \
     tests/testStuckAtOverlap.py                   \
     tests/testStuckAtSameByte.py                  \
     tests/mhlib.py                                \
-    tests/testdynamicPM.py                        \
-    tests/testhaliBacking.py                      \
-    tests/testhaliMemH.py                         \
-    tests/testhaliPM.py                           \
-    tests/testmanagerLogic.py
+    tests/testDynamicPM.py                        \
+    tests/testEccGuardJedecMix.py                 \
+    tests/testEccGuardRegionPolicy.py             \
+    tests/testEccGuardResident.py                 \
+    tests/testEccGuardSmoke.py                    \
+    tests/testEccModelDeterministic.py            \
+    tests/eccRuntimeCommon.py                     \
+    tests/testEccRuntimeCorrectable.py            \
+    tests/testEccRuntimeDueDrop.py                \
+    tests/testEccRuntimeEscape.py                 \
+    tests/testEccCampaignReentry.py               \
+    tests/testEccPoissonDistribution.py           \
+    tests/testEccJedecDistribution.py             \
+    tests/testEccResidentDistribution.py          \
+    tests/testActionScorerTaxonomy.py             \
+    tests/testActionScorerTokenFallback.py        \
+    tests/testActionScorerDropDivergence.py       \
+    tests/haliEdgeCommon.py                       \
+    tests/testHaliPayloadlessGetX.py              \
+    tests/testHaliDoubleDeferred.py               \
+    tests/testHaliDeferredComplete.py             \
+    tests/testHaliPayloadGetX.py                  \
+    tests/testHaliBacking.py                      \
+    tests/testHaliMemH.py                         \
+    tests/testHaliPM.py                           \
+    tests/testManagerLogic.py
 
 sstdir = $(includedir)/sst/elements/carcosa
 nobase_sst_HEADERS =                        \
@@ -95,12 +136,24 @@ nobase_sst_HEADERS =                        \
     faultlogic/randomFlipFault.h            \
     faultlogic/randomFlipMemHFault.h        \
     components/pmDataRegistry.h             \
-    components/faultInjManagerAPI.h        \
-    components/interceptionAgentAPI.h      \
-    components/pingPongAgent.h
+    components/eccScheme.h                  \
+    components/eccPolicy.h                  \
+    components/eccGuard.h                   \
+    components/eccModelMath.h               \
+    components/criticalActionWatcher.h      \
+    components/actionScorer.h               \
+    components/faultInjManagerAPI.h         \
+    components/interceptionAgentAPI.h       \
+    components/ringProtocol.h               \
+    components/hyadesProtocol.h             \
+    components/carcosaHash.h                \
+    components/pipelineStateRegistry.h      \
+    components/pingPongAgent.h              \
+    components/fourStateAgent.h             \
+    components/haliEvent.h                  \
+    components/vlaRegions.h
 
 libcarcosa_la_LDFLAGS = -module -avoid-version
-libcarcosa_la_LIBADD =
 
 AM_CPPFLAGS += $(HMC_FLAG)
 install-exec-hook:
