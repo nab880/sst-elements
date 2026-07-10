@@ -48,7 +48,6 @@
 #include <mercury/operating_system/launch/app_launcher.h>
 
 #include <cstring>
-#include <cctype>
 
 using SST::Hg::TimeDelta;
 
@@ -474,6 +473,33 @@ SimTransport::freeWorkspace(void *buf, uint64_t /*size*/)
 }
 
 namespace {
+// Single source of truth for the registry-selectable ops: each op's Python
+// param key and env-var key. The ctor resolves algorithm names from this
+// table and startCollectiveOp's error message cites it. pymercury.py (HgOS)
+// must declare every param_key listed here — a key missing there is silently
+// dropped by addParam before it ever reaches the engine.
+struct AlgKeys {
+  Collective::type_t type;
+  const char* param_key;
+  const char* env_key;
+};
+constexpr AlgKeys alg_keys[] = {
+  { Collective::allreduce,      "allreduce_alg",      "SUMI_ALLREDUCE_ALG" },
+  { Collective::reduce,         "reduce_alg",         "SUMI_REDUCE_ALG" },
+  { Collective::bcast,          "bcast_alg",          "SUMI_BCAST_ALG" },
+  { Collective::reduce_scatter, "reduce_scatter_alg", "SUMI_REDUCE_SCATTER_ALG" },
+  { Collective::scan,           "scan_alg",           "SUMI_SCAN_ALG" },
+  { Collective::gather,         "gather_alg",         "SUMI_GATHER_ALG" },
+  { Collective::scatter,        "scatter_alg",        "SUMI_SCATTER_ALG" },
+};
+
+const AlgKeys* algKeysFor(Collective::type_t ty)
+{
+  for (const auto& k : alg_keys)
+    if (k.type == ty) return &k;
+  return nullptr;
+}
+
 // Resolve an op's algorithm name: Python param wins, else SUMI_<OP>_ALG env,
 // else empty ("use built-in default").
 std::string resolveAlgName(SST::Params& params, const char* param_key,
@@ -513,13 +539,8 @@ CollectiveEngine::CollectiveEngine(SST::Params& params, Transport *tport) :
 
   // Per-op algorithm selection for the registry-driven ops. Param "<op>_alg"
   // (e.g. allreduce_alg=ring) wins over env SUMI_<OP>_ALG; empty => built-in.
-  alg_names_[Collective::allreduce]      = resolveAlgName(params, "allreduce_alg", "SUMI_ALLREDUCE_ALG");
-  alg_names_[Collective::reduce]         = resolveAlgName(params, "reduce_alg", "SUMI_REDUCE_ALG");
-  alg_names_[Collective::bcast]          = resolveAlgName(params, "bcast_alg", "SUMI_BCAST_ALG");
-  alg_names_[Collective::reduce_scatter] = resolveAlgName(params, "reduce_scatter_alg", "SUMI_REDUCE_SCATTER_ALG");
-  alg_names_[Collective::scan]           = resolveAlgName(params, "scan_alg", "SUMI_SCAN_ALG");
-  alg_names_[Collective::gather]         = resolveAlgName(params, "gather_alg", "SUMI_GATHER_ALG");
-  alg_names_[Collective::scatter]        = resolveAlgName(params, "scatter_alg", "SUMI_SCATTER_ALG");
+  for (const auto& k : alg_keys)
+    alg_names_[k.type] = resolveAlgName(params, k.param_key, k.env_key);
 
   int default_qos = params.find<int>("default_qos", 0);
   rdma_get_qos_ = params.find<int>("collective_rdma_get_qos", default_qos);
@@ -540,29 +561,29 @@ CollectiveEngine::engineAlgName(Collective::type_t ty) const
   return it == alg_names_.end() ? std::string() : it->second;
 }
 
-bool
-CollectiveEngine::startAlgOverride(Collective::type_t ty,
+CollectiveDoneMessage*
+CollectiveEngine::startCollectiveOp(Collective::type_t ty,
     void* dst, void* src, int root, int nelems, int type_size, int tag,
-    int cq_id, reduce_fxn fxn, Communicator* comm, CollectiveDoneMessage** msg)
+    int cq_id, reduce_fxn fxn, Communicator* comm,
+    const std::function<Collective*()>& makeDefault)
 {
   std::string alg = engineAlgName(ty);
-  if (alg.empty()) return false;
-
-  auto args = makeArgs(this, dst, src, root, nelems, type_size, tag, cq_id, fxn, comm);
-  Collective* c = CollectiveRegistry::make(ty, alg, args);
-  if (!c){
-    const char* op = Collective::tostr(ty);
-    std::string env(op);
-    for (char& ch : env) ch = std::toupper((unsigned char)ch);
-    sst_hg_abort_printf("unknown %s algorithm '%s' (%s_alg / SUMI_%s_ALG)",
-                        op, alg.c_str(), op, env.c_str());
+  if (!alg.empty()){
+    auto args = makeArgs(this, dst, src, root, nelems, type_size, tag, cq_id, fxn, comm);
+    Collective* c = CollectiveRegistry::make(ty, alg, args);
+    if (!c){
+      const AlgKeys* keys = algKeysFor(ty);
+      sst_hg_abort_printf("unknown %s algorithm '%s' (param %s / env %s)",
+                          Collective::tostr(ty), alg.c_str(),
+                          keys ? keys->param_key : "?", keys ? keys->env_key : "?");
+    }
+    // Override selected: this is a flat single-DAG choice that always wins,
+    // even when startCollective() returns nullptr because the collective is
+    // still in flight (the common async, multi-rank case) — we must not fall
+    // through to the built-in default in that case.
+    return startCollective(c);
   }
-  // Override selected: this is a flat single-DAG choice that always wins,
-  // even when startCollective() returns nullptr because the collective is
-  // still in flight (the common async, multi-rank case) — the caller must
-  // not fall through to the built-in default in that case.
-  *msg = startCollective(c);
-  return true;
+  return startCollective(makeDefault());
 }
 
 void
@@ -626,12 +647,11 @@ CollectiveEngine::allreduce(void* dst, void *src, int nelems, int type_size, int
 
   // A user-selected algorithm is a flat single-DAG choice: it overrides the
   // SMP-hierarchical composition below.
-  CollectiveDoneMessage* alg_msg;
-  if (startAlgOverride(Collective::allreduce, dst, src, 0, nelems, type_size, tag, cq_id, fxn, comm, &alg_msg))
-    return alg_msg;
-
-  Collective* coll = nullptr;
-  if (comm->smpComm()){
+  return startCollectiveOp(Collective::allreduce, dst, src, 0, nelems, type_size, tag, cq_id, fxn, comm,
+      [&]() -> Collective* {
+    if (!comm->smpComm()){
+      return new WilkeHalvingAllreduce(this, dst, src, nelems, type_size, tag, fxn, cq_id, comm);
+    }
     //tags are restricted to 28 bits - the front 4 bits are mine for various internal operations
     int intra_reduce_tag = 1<<28 | tag;
     auto* intra_reduce = new WilkeHalvingAllreduce(this, dst, src, nelems,
@@ -658,13 +678,10 @@ CollectiveEngine::allreduce(void* dst, void *src, int nelems, int type_size, int
                                                       cq_id, comm->smpComm());
     prev->setSubsequent(intra_bcast);
     //this should report back as done on the original communicator!
-    coll = new DoNothingCollective(this, tag, cq_id, comm);
+    auto* coll = new DoNothingCollective(this, tag, cq_id, comm);
     intra_bcast->setSubsequent(coll);
-  } else {
-    coll = new WilkeHalvingAllreduce(this, dst, src, nelems, type_size, tag, fxn, cq_id, comm);
-  }
-
-  return startCollective(coll);
+    return coll;
+  });
 }
 
 sumi::CollectiveDoneMessage*
@@ -675,11 +692,8 @@ CollectiveEngine::reduceScatter(void* dst, void *src, int nelems, int type_size,
   if (msg) return msg;
 
   if (!comm) comm = global_domain_;
-  CollectiveDoneMessage* alg_msg;
-  if (startAlgOverride(Collective::reduce_scatter, dst, src, 0, nelems, type_size, tag, cq_id, fxn, comm, &alg_msg))
-    return alg_msg;
-  DagCollective* coll = new HalvingReduceScatter(this, dst, src, nelems, type_size, tag, fxn, cq_id, comm);
-  return startCollective(coll);
+  return startCollectiveOp(Collective::reduce_scatter, dst, src, 0, nelems, type_size, tag, cq_id, fxn, comm,
+      [&]{ return new HalvingReduceScatter(this, dst, src, nelems, type_size, tag, fxn, cq_id, comm); });
 }
 
 sumi::CollectiveDoneMessage*
@@ -690,11 +704,8 @@ CollectiveEngine::scan(void* dst, void* src, int nelems, int type_size, int tag,
   if (msg) return msg;
 
   if (!comm) comm = global_domain_;
-  CollectiveDoneMessage* alg_msg;
-  if (startAlgOverride(Collective::scan, dst, src, 0, nelems, type_size, tag, cq_id, fxn, comm, &alg_msg))
-    return alg_msg;
-  DagCollective* coll = new SimultaneousBtreeScan(this, dst, src, nelems, type_size, tag, fxn, cq_id, comm);
-  return startCollective(coll);
+  return startCollectiveOp(Collective::scan, dst, src, 0, nelems, type_size, tag, cq_id, fxn, comm,
+      [&]{ return new SimultaneousBtreeScan(this, dst, src, nelems, type_size, tag, fxn, cq_id, comm); });
 }
 
 
@@ -706,11 +717,8 @@ CollectiveEngine::reduce(int root, void* dst, void *src, int nelems, int type_si
   if (msg) return msg;
 
   if (!comm) comm = global_domain_;
-  CollectiveDoneMessage* alg_msg;
-  if (startAlgOverride(Collective::reduce, dst, src, root, nelems, type_size, tag, cq_id, fxn, comm, &alg_msg))
-    return alg_msg;
-  DagCollective* coll = new WilkeHalvingReduce(this, root, dst, src, nelems, type_size, tag, fxn, cq_id, comm);
-  return startCollective(coll);
+  return startCollectiveOp(Collective::reduce, dst, src, root, nelems, type_size, tag, cq_id, fxn, comm,
+      [&]{ return new WilkeHalvingReduce(this, root, dst, src, nelems, type_size, tag, fxn, cq_id, comm); });
 }
 
 CollectiveDoneMessage*
@@ -721,11 +729,8 @@ CollectiveEngine::bcast(int root, void *buf, int nelems, int type_size, int tag,
   if (msg) return msg;
 
   if (!comm) comm = global_domain_;
-  CollectiveDoneMessage* alg_msg;
-  if (startAlgOverride(Collective::bcast, buf, buf, root, nelems, type_size, tag, cq_id, nullptr, comm, &alg_msg))
-    return alg_msg;
-  DagCollective* coll = new BinaryTreeBcastCollective(this, root, buf, nelems, type_size, tag, cq_id, comm);
-  return startCollective(coll);
+  return startCollectiveOp(Collective::bcast, buf, buf, root, nelems, type_size, tag, cq_id, nullptr, comm,
+      [&]{ return new BinaryTreeBcastCollective(this, root, buf, nelems, type_size, tag, cq_id, comm); });
 }
 
 CollectiveDoneMessage*
@@ -750,11 +755,8 @@ CollectiveEngine::gather(int root, void *dst, void *src, int nelems, int type_si
   if (msg) return msg;
 
   if (!comm) comm = global_domain_;
-  CollectiveDoneMessage* alg_msg;
-  if (startAlgOverride(Collective::gather, dst, src, root, nelems, type_size, tag, cq_id, nullptr, comm, &alg_msg))
-    return alg_msg;
-  DagCollective* coll = new BtreeGather(this, root, dst, src, nelems, type_size, tag, cq_id, comm);
-  return startCollective(coll);
+  return startCollectiveOp(Collective::gather, dst, src, root, nelems, type_size, tag, cq_id, nullptr, comm,
+      [&]{ return new BtreeGather(this, root, dst, src, nelems, type_size, tag, cq_id, comm); });
 }
 
 CollectiveDoneMessage*
@@ -765,11 +767,8 @@ CollectiveEngine::scatter(int root, void *dst, void *src, int nelems, int type_s
   if (msg) return msg;
 
   if (!comm) comm = global_domain_;
-  CollectiveDoneMessage* alg_msg;
-  if (startAlgOverride(Collective::scatter, dst, src, root, nelems, type_size, tag, cq_id, nullptr, comm, &alg_msg))
-    return alg_msg;
-  DagCollective* coll = new BtreeScatter(this, root, dst, src, nelems, type_size, tag, cq_id, comm);
-  return startCollective(coll);
+  return startCollectiveOp(Collective::scatter, dst, src, root, nelems, type_size, tag, cq_id, nullptr, comm,
+      [&]{ return new BtreeScatter(this, root, dst, src, nelems, type_size, tag, cq_id, comm); });
 }
 
 CollectiveDoneMessage*

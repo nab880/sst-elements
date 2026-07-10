@@ -60,6 +60,7 @@ Questions? Contact sst-macro-help@sandia.gov
 #include <iris/sumi/options.h>
 #include <iris/sumi/communicator_fwd.h>
 
+#include <functional>
 #include <unordered_map>
 #include <queue>
 
@@ -537,14 +538,16 @@ class CollectiveEngine
   // env > ""), resolved once at construction. Empty means "use built-in".
   std::string engineAlgName(Collective::type_t ty) const;
 
-  // If a user algorithm is selected for op `ty` (see engineAlgName), build it
-  // from the registry, start it, and write the result (possibly nullptr, if
-  // the collective hasn't completed synchronously) to *msg; returns true.
-  // Returns false when no override is set, so callers fall through to the
-  // built-in default; *msg is untouched in that case.
-  bool startAlgOverride(Collective::type_t ty,
+  // Start collective op `ty`. If a user algorithm is selected for the op (see
+  // engineAlgName), build it from the registry and start it — the override is
+  // a flat single-DAG choice that always wins, even when startCollective()
+  // returns nullptr because the collective is still in flight (the common
+  // async, multi-rank case). Otherwise start the built-in default collective
+  // constructed by makeDefault.
+  CollectiveDoneMessage* startCollectiveOp(Collective::type_t ty,
       void* dst, void* src, int root, int nelems, int type_size, int tag,
-      int cq_id, reduce_fxn fxn, Communicator* comm, CollectiveDoneMessage** msg);
+      int cq_id, reduce_fxn fxn, Communicator* comm,
+      const std::function<Collective*()>& makeDefault);
 
  private:
   Transport* tport_;

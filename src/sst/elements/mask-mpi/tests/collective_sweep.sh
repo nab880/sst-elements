@@ -28,6 +28,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 export PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}"
 
+# The engine falls back to SUMI_<OP>_ALG env vars when the <op>_alg param is
+# unset, so a stale export would silently replace the "<default>" baseline.
+# Clear any inherited ones to keep the sweep hermetic.
+for v in $(env | sed -n 's/^\(SUMI_[A-Z_]*_ALG\)=.*/\1/p'); do unset "$v"; done
+
 SST="${SST:-sst}"
 ALGS="${ALGS:-ring recdouble}"
 NRANKS_LIST="${NRANKS_LIST:-2 4 7 8 16}"

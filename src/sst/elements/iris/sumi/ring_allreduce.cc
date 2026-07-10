@@ -61,9 +61,10 @@ RingAllreduceActor::initDag()
   }
 
   // The message-id codec (Action::messageId) is only invertible while the round
-  // index stays below max_round; the ring uses 2*(N-1) rounds. Past that the
-  // round bleeds into the partner field and silently corrupts message matching.
-  if (2 * (N - 1) >= static_cast<int>(Action::max_round)){
+  // index stays below max_round; the ring uses 2*(N-1) rounds, so the largest
+  // index is 2*(N-1)-1. Past max_round the round bleeds into the partner field
+  // and silently corrupts message matching.
+  if (2 * (N - 1) > static_cast<int>(Action::max_round)){
     sst_hg_abort_printf("ring allreduce needs %d rounds but Action::max_round "
                         "is %u; raise max_round for nproc=%d",
                         2 * (N - 1), Action::max_round, N);
