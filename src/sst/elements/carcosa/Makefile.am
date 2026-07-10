@@ -67,6 +67,8 @@ libcarcosa_la_SOURCES =                     \
     components/pingPongAgent.h              \
     components/fourStateAgent.cc            \
     components/fourStateAgent.h             \
+    components/framePipelineDriver.cc       \
+    components/framePipelineDriver.h        \
     components/regressionTestComponents.cc  \
     components/regressionTestComponents.h   \
     components/vlaRegions.h                 \
@@ -132,6 +134,11 @@ EXTRA_DIST = \
     tests/testEccPoissonDistribution.py           \
     tests/testEccJedecDistribution.py             \
     tests/testEccResidentDistribution.py          \
+    tests/framePipelineCommon.py                  \
+    tests/testFramePipelineClean.py               \
+    tests/testFramePipelineCorrupt.py             \
+    tests/testFramePipelineFallback.py            \
+    tests/testFramePipelineMissingGolden.py       \
     tests/testStateGateRegionNoOverlap.py         \
     tests/testStateGateRegionOverlap.py           \
     tests/testActionScorerTaxonomy.py             \
