@@ -83,6 +83,21 @@ libcarcosa_la_SOURCES =                     \
     examples/MmioControl/mmioControlExample.cc \
     examples/MmioControl/mmioControlExample.h
 
+# Optional balar ring bridge: compiled into libcarcosa only when GPGPU-Sim/balar
+# is available (SST_CARCOSA_HAVE_BALAR, set by configure.m4 -> HAVE_BALAR_BRIDGE).
+# Header-only dependency on balar's packet ABI, so only the CUDA include path is
+# added here (no GPGPU-Sim libs). A checkout with no balar/ builds libcarcosa
+# unchanged with the bridge compiled out.
+if SST_CARCOSA_HAVE_BALAR
+libcarcosa_la_SOURCES += \
+    components/balarRingBridge.cc \
+    components/balarRingBridge.h
+# HAVE_BALAR_BRIDGE is passed on the command line (like balar's own -DHAVE_CUDA=1
+# in CUDA_CPPFLAGS) rather than via sst_element_config.h, which element sources do
+# not include. CUDA_CPPFLAGS carries the CUDA include path for balar's packet headers.
+AM_CPPFLAGS += $(CUDA_CPPFLAGS) -DHAVE_BALAR_BRIDGE=1
+endif
+
 EXTRA_DIST = \
     hyades.h                                      \
     tests/pingpong.c                              \
