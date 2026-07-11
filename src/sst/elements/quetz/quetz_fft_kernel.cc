@@ -58,6 +58,16 @@ uint64_t FFTKernel::inputBytes(const KernelArgs& args, std::string& err)
             + std::to_string(n);
         return 0;
     }
+    // Bound N before sizing the DMA. The power-of-two test above passes for
+    // huge values (e.g. 2^32), which would both bad_alloc the input buffer and
+    // silently truncate in compute()'s uint32_t re-derivation. The ceiling
+    // keeps N well under 2^32 so that (uint32_t)args.arg2 is exact.
+    if (n > kMaxKernelInputBytes / sizeof(QuetzCf)) {
+        err = "FFT N (REG_ARG2) exceeds the kernel input ceiling ("
+            + std::to_string(kMaxKernelInputBytes / sizeof(QuetzCf))
+            + " points), got " + std::to_string(n);
+        return 0;
+    }
     return n * sizeof(QuetzCf);   /* 8 bytes per complex point */
 }
 

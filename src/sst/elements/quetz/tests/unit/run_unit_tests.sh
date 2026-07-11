@@ -43,6 +43,7 @@ compile test_decoder_aarch64.cc test_decoder_aarch64
 compile test_decoder_generic.cc test_decoder_generic
 compile test_region_table.cc test_region_table
 compile test_mem_issue_split.cc test_mem_issue_split
+compile test_balar_flush_range.cc test_balar_flush_range
 compile test_quetz_config.cc test_quetz_config
 compile test_command_buffer.cc test_command_buffer
 compile test_config_manager.cc test_config_manager \
@@ -58,6 +59,7 @@ TESTS=(
     test_decoder_generic
     test_region_table
     test_mem_issue_split
+    test_balar_flush_range
     test_quetz_config
     test_command_buffer
     test_config_manager

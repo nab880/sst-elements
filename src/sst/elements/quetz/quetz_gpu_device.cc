@@ -52,6 +52,7 @@ QuetzGpuDevice::QuetzGpuDevice(ComponentId_t id, Params& params)
       op_phase_(OpPhase::IDLE),
       op_in_bytes_(0),
       op_dma_outstanding_(0),
+      op_next_dma_off_(0),
       op_doorbell_resp_(nullptr),
       stat_kernels_launched_(nullptr),
       stat_busy_cycles_(nullptr),
@@ -274,7 +275,7 @@ void QuetzGpuDevice::ackIrq(uint64_t consume) {
 }
 
 void QuetzGpuDevice::retireIfReady(uint64_t now_clk) {
-    if (busy_until_clk_ == 0 || now_clk <= busy_until_clk_)
+    if (busy_until_clk_ == 0 || now_clk < busy_until_clk_)
         return;
 
     // kernel op: the "BUSY" window models compute time; when it ends the result
@@ -564,21 +565,29 @@ void QuetzGpuDevice::opStartDma() {
     op_in_.assign(op_in_bytes_, 0);
     op_req_off_.clear();
     op_dma_outstanding_ = 0;
+    op_next_dma_off_ = 0;
     op_phase_ = OpPhase::READING;
 
     out.verbose(CALL_INFO, 2, 0,
         "%s: doorbell — DMA-reading %" PRIu64 " bytes from 0x%" PRIx64 "\n",
         getName().c_str(), op_in_bytes_, op_args_.src_addr);
 
-    for (uint64_t off = 0; off < op_in_bytes_; off += kOpDmaChunk) {
+    opIssueReadWindow();
+    updatePrimaryHold(false);
+}
+
+void QuetzGpuDevice::opIssueReadWindow() {
+    while (op_next_dma_off_ < op_in_bytes_ &&
+           op_dma_outstanding_ < kMaxOpDmaOutstanding) {
+        uint64_t off = op_next_dma_off_;
         uint64_t n = op_in_bytes_ - off;
         if (n > kOpDmaChunk) n = kOpDmaChunk;
         auto* rd = new StandardMem::Read(op_args_.src_addr + off, (size_t)n);
         op_req_off_[rd->getID()] = off;
+        op_next_dma_off_ += n;
         op_dma_outstanding_++;
         mem_iface_->send(rd);
     }
-    updatePrimaryHold(false);
 }
 
 void QuetzGpuDevice::opOnReadResp(StandardMem::ReadResp* resp) {
@@ -591,7 +600,9 @@ void QuetzGpuDevice::opOnReadResp(StandardMem::ReadResp* resp) {
     op_req_off_.erase(it);
     for (size_t i = 0; i < resp->data.size() && off + i < op_in_bytes_; i++)
         op_in_[off + i] = resp->data[i];
-    if (--op_dma_outstanding_ == 0)
+    --op_dma_outstanding_;
+    opIssueReadWindow();
+    if (op_dma_outstanding_ == 0 && op_next_dma_off_ == op_in_bytes_)
         opComputeAndStartBusy();
 }
 
@@ -627,24 +638,34 @@ void QuetzGpuDevice::opBeginWriteback() {
     }
     op_phase_ = OpPhase::WRITING;
     op_dma_outstanding_ = 0;
+    op_next_dma_off_ = 0;
     out.verbose(CALL_INFO, 2, 0,
         "%s: DMA-writing %zu bytes to 0x%" PRIx64 "\n",
         getName().c_str(), op_out_.size(), op_args_.dst_addr);
-    for (uint64_t off = 0; off < op_out_.size(); off += kOpDmaChunk) {
+    opIssueWriteWindow();
+    updatePrimaryHold(false);
+}
+
+void QuetzGpuDevice::opIssueWriteWindow() {
+    while (op_next_dma_off_ < op_out_.size() &&
+           op_dma_outstanding_ < kMaxOpDmaOutstanding) {
+        uint64_t off = op_next_dma_off_;
         uint64_t n = op_out_.size() - off;
         if (n > kOpDmaChunk) n = kOpDmaChunk;
         std::vector<uint8_t> chunk(op_out_.begin() + off,
                                    op_out_.begin() + off + n);
         auto* wr = new StandardMem::Write(op_args_.dst_addr + off, (size_t)n, chunk);
+        op_next_dma_off_ += n;
         op_dma_outstanding_++;
         mem_iface_->send(wr);
     }
-    updatePrimaryHold(false);
 }
 
 void QuetzGpuDevice::opOnWriteResp(StandardMem::WriteResp* ) {
     if (op_dma_outstanding_ == 0) return;
-    if (--op_dma_outstanding_ == 0)
+    --op_dma_outstanding_;
+    opIssueWriteWindow();
+    if (op_dma_outstanding_ == 0 && op_next_dma_off_ == op_out_.size())
         opFinish();
 }
 

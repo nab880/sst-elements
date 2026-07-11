@@ -27,6 +27,15 @@ uint64_t ScaleOffsetKernel::inputBytes(const KernelArgs& args, std::string& err)
         err = "sample count (REG_ARG2) must be nonzero";
         return 0;
     }
+    // Bound before the *2 so a guest arg2 can neither wrap the product (which
+    // would size in[] tiny while compute() still loops i < arg2 -> heap OOB)
+    // nor request a buffer big enough to bad_alloc the sim.
+    if (args.arg2 > kMaxKernelInputBytes / 2) {
+        err = "sample count (REG_ARG2) exceeds the kernel input ceiling ("
+            + std::to_string(kMaxKernelInputBytes / 2) + " samples), got "
+            + std::to_string(args.arg2);
+        return 0;
+    }
     return args.arg2 * 2;   /* int16 per sample */
 }
 

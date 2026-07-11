@@ -11,8 +11,10 @@
 
 #include <sst_config.h>
 #include "quetz_balar_accelerator_port.h"
+#include "quetz_balar_flush_range.h"
 
 #include <inttypes.h>
+#include <limits>
 
 using namespace SST;
 using namespace SST::Interfaces;
@@ -232,13 +234,26 @@ void BalarAcceleratorPort::issueDoorbellFlushes(uint32_t vcpu,
     const uint64_t flush_bytes = flush_enabled_ ? packet_flush_bytes_ : 0;
     const uint64_t scratch = accelDataToU64(req->data);
     const uint64_t line_size = host_->cacheLineSize();
-    const uint64_t first_line = (scratch / line_size) * line_size;
-    const uint64_t end = scratch + flush_bytes;
+    BalarFlushRange range;
+    if (!computeBalarFlushRange(scratch, flush_bytes, line_size, range)) {
+        out_.fatal(CALL_INFO, -1,
+            "vCPU %" PRIu32 ": invalid doorbell flush range: scratch=0x%016"
+            PRIx64 " flush_bytes=%" PRIu64 " line_size=%" PRIu64
+            " (address arithmetic overflow or zero line size).\n",
+            vcpu, scratch, flush_bytes, line_size);
+    }
+    if (range.line_count > std::numeric_limits<uint32_t>::max()) {
+        out_.fatal(CALL_INFO, -1,
+            "vCPU %" PRIu32 ": doorbell flush range requires %" PRIu64
+            " lines, exceeding the supported maximum of %" PRIu32 ".\n",
+            vcpu, range.line_count,
+            std::numeric_limits<uint32_t>::max());
+    }
 
     out_.verbose(CALL_INFO, 1, 0,
         "vCPU %" PRIu32 ": doorbell scratch=0x%016" PRIx64
         " flush_range=[0x%016" PRIx64 ",0x%016" PRIx64 ") line_size=%" PRIu64 "\n",
-        vcpu, scratch, first_line, end, line_size);
+        vcpu, scratch, range.first_line, range.end, line_size);
 
     FlushCtx ctx{};
     ctx.vcpu = vcpu;
@@ -248,12 +263,23 @@ void BalarAcceleratorPort::issueDoorbellFlushes(uint32_t vcpu,
     ctx.is_async = is_async;
     ctx.pre_acked = pre_acked;
 
-    for (uint64_t line = first_line; line < end; line += line_size) {
+    uint64_t line = range.first_line;
+    for (uint64_t i = 0; i < range.line_count; ++i) {
         auto* flush = new StandardMem::FlushAddr(line, line_size, true, 1);
         flush_to_vcpu_[flush->getID()] = vcpu;
         ctx.remaining++;
         host_->recordDoorbellFlush(vcpu);
         host_->sendMem(vcpu, flush);
+
+        if (i + 1 < range.line_count) {
+            if (line > std::numeric_limits<uint64_t>::max() - line_size) {
+                out_.fatal(CALL_INFO, -1,
+                    "vCPU %" PRIu32 ": doorbell flush line progression "
+                    "overflows after address 0x%016" PRIx64 ".\n",
+                    vcpu, line);
+            }
+            line += line_size;
+        }
     }
 
     if (ctx.remaining == 0) {

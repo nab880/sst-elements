@@ -34,6 +34,7 @@ libquetz_la_SOURCES = \
     quetz_accelerator_port.h \
     quetz_balar_accelerator_port.cc \
     quetz_balar_accelerator_port.h \
+    quetz_balar_flush_range.h \
     quetz_frontend.h \
     quetz_qemu_frontend.cc \
     quetz_qemu_frontend.h \
@@ -296,6 +297,7 @@ EXTRA_DIST =	GETTING-STARTED.md \
 	tests/unit/test_scale_offset.cc \
 	tests/unit/test_ipc_layout.cc \
 	tests/unit/test_mem_issue_split.cc \
+	tests/unit/test_balar_flush_range.cc \
 	tests/unit/test_quetz_config.cc \
 	tests/unit/test_region_table.cc \
 	tests/unit/test_smoke.cc \

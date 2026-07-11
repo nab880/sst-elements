@@ -166,7 +166,9 @@ protected:
 
     // --- kernel-slot op: DMA state machine around the plugged compute ---------
     void opStartDma();            // on doorbell: begin DMA-read of the input
+    void opIssueReadWindow();     // keep a bounded set of reads in flight
     void opOnReadResp(Interfaces::StandardMem::ReadResp* resp);
+    void opIssueWriteWindow();    // keep a bounded set of writes in flight
     void opOnWriteResp(Interfaces::StandardMem::WriteResp* resp);
     void opComputeAndStartBusy(); // input fully read: compute, then go BUSY
     void opBeginWriteback();      // busy done: DMA-write the result
@@ -219,12 +221,14 @@ protected:
     std::vector<uint8_t> op_out_;                    // kernel output bytes
     uint64_t op_in_bytes_;
     uint64_t op_dma_outstanding_;                    // in-flight mem requests
+    uint64_t op_next_dma_off_;                       // next byte not yet issued
     // held doorbell response for the whole op (released at opFinish)
     Interfaces::StandardMem::Request* op_doorbell_resp_;
     // map mem request id -> byte offset into op_in_ (for read reassembly)
     std::unordered_map<Interfaces::StandardMem::Request::id_t, uint64_t> op_req_off_;
 
     static constexpr uint64_t kOpDmaChunk = 64;      // bytes per DMA request
+    static constexpr uint64_t kMaxOpDmaOutstanding = 64;
 
     Statistic<uint64_t>* stat_kernels_launched_;
     Statistic<uint64_t>* stat_busy_cycles_;

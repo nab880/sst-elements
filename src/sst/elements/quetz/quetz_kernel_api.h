@@ -21,6 +21,14 @@
 namespace SST {
 namespace Quetz {
 
+// Ceiling on the bytes a kernel may DMA-read for one op. The op arguments are
+// guest-programmed registers, so inputBytes() must bound them: without a cap a
+// hostile/buggy arg2 either overflows the byte-count multiply (wraps small ->
+// heap OOB in compute) or requests a multi-GB buffer (bad_alloc aborts the
+// sim). 256 MiB is far larger than any realistic sample/point buffer while
+// keeping every derived count well under 2^32.
+static constexpr uint64_t kMaxKernelInputBytes = 256ull << 20;
+
 // Guest-programmed operand registers, captured by QuetzGpuDevice at doorbell
 // time (see the REG_ARG* map in quetz_gpu_device.h).
 struct KernelArgs {
