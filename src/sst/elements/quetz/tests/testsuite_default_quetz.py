@@ -2239,6 +2239,11 @@ class testcase_quetz_sysmode(SSTTestCase):
         self.assertIn("pll lock poll: satisfied after", raw)
         self.assertIn("TESTFINISH[0]", raw)
         self.assertTrue(os.path.getsize(os.environ["QUETZ_BSP_LOG"]) > 0)
+        with open(errfile, "r") as stream:
+            raw += "\n" + stream.read()
+        self.assertIn("width mismatch", raw,
+            "profile/access width mismatch should be reported loudly instead "
+            "of silently behaving as an unknown RAZ/WI register")
 
     # -------------------------------------------------------------------------
     def test_quetz_coldfire_accel_scale(self):
@@ -2611,7 +2616,12 @@ class testcase_quetz_sysmode(SSTTestCase):
         depends on. Same functional assertions as the V2 run."""
         self._coldfire_irq_template("coldfire_irq_cfv4e", "-cpu cfv4e")
 
-    def _coldfire_irq_template(self, testname, cpu_flag):
+    def test_quetz_coldfire_irq_fast_poll(self):
+        """The documented level contract remains correct with a non-default
+        reverse-mailbox poll period."""
+        self._coldfire_irq_template("coldfire_irq_fast_poll", "", 1000)
+
+    def _coldfire_irq_template(self, testname, cpu_flag, irq_poll_ns=None):
         test_path = self.get_testsuite_dir()
         sst_prefix, sst_bindir, sst_libexec = sst_paths()
 
@@ -2659,6 +2669,8 @@ class testcase_quetz_sysmode(SSTTestCase):
         os.environ["QUETZ_SENSOR_IRQ_LINE"] = "31"
         os.environ["QUETZ_SENSOR_PACE_BYTES"]  = "128"
         os.environ["QUETZ_SENSOR_PACE_PERIOD"] = "5ms"
+        if irq_poll_ns is not None:
+            os.environ["QUETZ_IRQ_POLL_NS"] = str(irq_poll_ns)
         enable_mmio_payload_delivery()
 
         sdlfile     = os.path.join(test_path, "sysmode",
@@ -2678,6 +2690,7 @@ class testcase_quetz_sysmode(SSTTestCase):
             os.environ.pop("QUETZ_SENSOR_FILE", None)
             os.environ.pop("QUETZ_SENSOR_PACE_BYTES", None)
             os.environ.pop("QUETZ_SENSOR_PACE_PERIOD", None)
+            os.environ.pop("QUETZ_IRQ_POLL_NS", None)
 
         raw = ""
         if os.path.exists(sst_outfile):

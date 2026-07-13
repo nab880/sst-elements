@@ -4,10 +4,11 @@
  * window_big_endian + data_big_endian). Same firmware binary is run under
  * three SDL configurations (see expanded_coldfire_tests.py):
  *
- *   1. default (window_big_endian=0):    documents the pre-existing LE
+ *   1. explicit legacy LE (window_big_endian=0): documents the pre-existing
  *      sub-word aliasing -- byte-write hi-then-lo (the natural m68k /
  *      big-endian convention), word-read comes back BYTE-SWAPPED.
- *   2. opt-in (window_big_endian=1, kernel data_big_endian=1):  byte-write
+ *   2. ColdFire default (window_big_endian=1, kernel data_big_endian=1):
+ *      byte-write
  *      hi-then-lo, word-read comes back CORRECT, and the ScaleOffsetKernel
  *      round-trip (identity transform) also comes back CORRECT.
  *   3. mismatched (window_big_endian=1, kernel data_big_endian=0): the CPU

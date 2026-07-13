@@ -226,6 +226,7 @@ def make_sysmode_env(sst_prefix, sst_libexec, qemu_bin, exe_abs,
     os.environ.pop("QUETZ_BSP_DISCOVER", None)
     os.environ.pop("QUETZ_BSP_TARGET", None)
     os.environ.pop("QUETZ_BSP_LOG", None)
+    os.environ.pop("QUETZ_IRQ_POLL_NS", None)
     os.environ["QUETZ_EXE"] = exe_abs
     os.environ["QUETZ_QEMU"] = qemu_bin
     os.environ["QUETZ_PLUGIN"] = os.path.join(sst_libexec, "libqemu_sst_plugin.so")

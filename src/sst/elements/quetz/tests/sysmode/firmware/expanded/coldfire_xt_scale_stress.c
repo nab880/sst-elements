@@ -12,9 +12,8 @@
  * mailbox -> device DMA-read -> compute -> DMA-write -> CPU byte-read --
  * exercised at scale.
  *
- * Run under both LE (default) and BE (QUETZ_WIN_BIG_ENDIAN=1 + kernel
- * data_big_endian=1) to also double as a larger-scale confirmation of the
- * BE byte-lane fix (finding #2) than the single-sample be_alias probe.
+ * The ColdFire deck defaults to BE window/kernel layout. The test can still
+ * be run with QUETZ_WIN_BIG_ENDIAN=0 to pin the legacy LE layout.
  *
  * SDL: sysmode/basic_quetz_gpu_compute_coldfire.py (QUETZ_KERNEL=
  * quetz.ScaleOffsetKernel).

@@ -53,11 +53,9 @@ public:
         { "pace_period",
           "(UnitAlgebra/string) Refill interval for pace_bytes", "100us" },
         { "irq_line",
-          "(int) Machine interrupt-controller input asserted by every paced "
-          "refill that delivers bytes (data ready) and lowered on a "
-          "REG_IRQ_ACK write; a consumer that acks mid-drain and sleeps is "
-          "re-woken by the next refill. Drain to REG_EOS before the final "
-          "sleep — nothing re-asserts after the last refill. Requires pacing "
+          "(int) Machine interrupt-controller input asserted while paced data "
+          "is available. ACK leaves it high while STATUS > 0; draining the "
+          "last available bytes lowers it. Requires pacing "
           "(pace_bytes > 0) and the 'irq' port linked to a QuetzCPU "
           "irq_link_%d port. -1 = disabled.", "-1" },
         { "irq_vcpu",
@@ -109,7 +107,7 @@ public:
     static constexpr uint64_t REG_CTRL   = 0x18;  // W: 1 = rewind to start
     static constexpr uint64_t REG_EOS    = 0x20;  // R: 1 = stream fully consumed
     // Data-ready IRQ (irq_line >= 0): R = 1 while the line is raised;
-    // W nonzero = ack (lowers the line).
+    // W nonzero = ack (line stays high while STATUS > 0).
     static constexpr uint64_t REG_IRQ_ACK = 0x28;
 
 protected:

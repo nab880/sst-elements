@@ -19,15 +19,11 @@ creates it from QUETZ_SST_WIN_START/END, which MUST be exported alongside the
 MMIO vars) and delivered synchronously through the CPU's mmio interface onto the
 NoC; the plugin drops those accesses from the trace ring.
 
-Window byte layout: the mailbox carries numeric values, and by default SST
-serializes them little-endian — same-size (u32-in/u32-out) access round-trips
-exactly on the big-endian guest with no byte swapping (what
-coldfire_gpu_fft_offload.c relies on), but SUB-WORD ALIASING (byte-write then
-word-read of the same window word) behaves little-endian, unlike real ColdFire
-memory. Export QUETZ_WIN_BIG_ENDIAN=1 to store window bytes MSB-first instead
-(window_big_endian on the CPU + data_big_endian on the GPU device, which
-pushes it into its kernel, kept in lockstep here): byte-level layout then
-matches BE hardware, and numeric u32 round-trips still hold.
+Window byte layout defaults to big-endian in this ColdFire deck: the CPU uses
+`window_big_endian=1` and the GPU uses matching `data_big_endian=1`, so mixed-
+size aliases match real m68k memory. Set QUETZ_WIN_BIG_ENDIAN=0 only to test the
+generic legacy little-endian layout. Numeric same-size round-trips work in
+either mode.
 
 Env: QUETZ_EXE, QUETZ_QEMU(=qemu-system-m68k), QUETZ_QEMU_ARGS, QUETZ_LOADER,
 QUETZ_MMIO_START/END, QUETZ_SST_WIN_START/END, QUETZ_FFT_LATENCY_COEFF,
@@ -86,7 +82,7 @@ win_size   = win_end - win_start + 1
 # flags MUST agree or the kernel reads byte-swapped values; QUETZ_KERNEL_BIG_ENDIAN
 # is an independent override (default: matches win_be) for deliberately
 # testing that mismatched-flags failure mode.
-win_be     = os.environ.get("QUETZ_WIN_BIG_ENDIAN", "0") == "1"
+win_be     = os.environ.get("QUETZ_WIN_BIG_ENDIAN", "1") == "1"
 kernel_be  = os.environ.get("QUETZ_KERNEL_BIG_ENDIAN",
                             "1" if win_be else "0") == "1"
 uart_addr  = _parse_addr(os.environ.get("QUETZ_UART_ADDR", "0xfc060000"))
@@ -176,7 +172,8 @@ gpu.addParams({
     "base_addr": mmio_start,
     "mmio_size": 0x400 if (sensor_file or sink_file)
                  else (mmio_end - mmio_start + 1),
-    "clock": "1GHz",
+    "clock": os.environ.get("QUETZ_GPU_CLOCK", "1GHz"),
+    "kernel_latency": int(os.environ.get("QUETZ_GPU_LATENCY", "5000")),
     # Required when a kernel is loaded; override only to probe the device's
     # ctor-time misconfiguration guard (kernel + doorbell_blocking=0 fatals).
     "doorbell_blocking": int(os.environ.get("QUETZ_DOORBELL_BLOCKING", "1")),
@@ -196,6 +193,10 @@ gpu_kernel = gpu.setSubComponent("kernel", kernel_name)
 if kernel_name == "quetz.FFTKernel":
     gpu_kernel.addParams({
         "fft_latency_coeff": int(os.environ.get("QUETZ_FFT_LATENCY_COEFF", "20")),
+    })
+elif kernel_name == "quetz.ScaleOffsetKernel":
+    gpu_kernel.addParams({
+        "latency_coeff": int(os.environ.get("QUETZ_SCALE_LATENCY_COEFF", "4")),
     })
 gpu_mmio_if = gpu.setSubComponent("iface", "memHierarchy.standardInterface")
 gpu_mmio_nic = gpu_mmio_if.setSubComponent("lowlink", "memHierarchy.MemNIC")

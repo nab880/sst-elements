@@ -3,20 +3,13 @@
  * data-ready IRQ re-assertion (review-coldfire-stack-correctness.md finding
  * #1b). coldfire_irq_demo.c's sensor ISR always fully drains STATUS to zero
  * before sleeping again, which never exercises "ack while data remains."
- * This firmware deliberately pops only ONE word per wake (far less than one
- * paced refill delivers) and waits SOLELY on the IRQ counter (never
- * rechecking STATUS in the sleep condition) — a legitimate driver pattern on
- * genuinely level-triggered hardware, where "more data still pending" is
- * expected to keep the line asserted and therefore keep generating wakeups.
+ * This firmware deliberately pops only ONE word per ISR (far less than one
+ * paced refill delivers). A genuinely level-triggered device must remain
+ * asserted after the early ACK and re-enter until STATUS reaches zero.
  *
- * Before the fix (raise gated on avail_ 0->nonzero edge only), avail_ never
- * returns to exactly zero once the first refill lands ahead of consumption,
- * so no further IRQ is ever delivered after the first ack and this hangs —
- * the SST run ends on its own once the CPU and GPU have nothing left to do,
- * and the report/PASS lines below never print. After the fix (every refill
- * that delivers bytes re-asserts), each period's refill wakes the guest
- * again regardless of leftover avail_, so draining proceeds one word per
- * wake as designed.
+ * Before the true-level fix, ACK lowered the line with bytes still pending;
+ * progress then depended on another paced refill. After the fix, the line
+ * remains high while avail_ > 0 and falls automatically on the final pop.
  *
  * SDL: sysmode/basic_quetz_coldfire_system.py
  *   (QUETZ_SENSOR_IRQ_LINE=31, QUETZ_SENSOR_PACE_BYTES=32 i.e. 8 words/period
@@ -33,15 +26,23 @@
 #define NEED_WAKES        4u
 
 static volatile uint32_t g_sensor_irqs;
+static volatile uint32_t g_before[NEED_WAKES];
+static volatile uint32_t g_after[NEED_WAKES];
 
 __attribute__((interrupt_handler))
 static void isr_sensor(void)
 {
-    /* Ack + guarded settle (coldfire_intc.h): a paced refill can re-raise
-     * between the ack and the bridge's next poll — that re-assert is a
-     * genuinely new wakeup the ISR must return for. */
+    uint32_t slot = g_sensor_irqs;
+    uint32_t before = mmio_read32(SENSOR_STATUS);
+    if (before != 0)
+        (void)mmio_read32(SENSOR_DATA);       /* exactly one word per ISR */
+    uint32_t after = mmio_read32(SENSOR_STATUS);
+    if (slot < NEED_WAKES) {
+        g_before[slot] = before;
+        g_after[slot] = after;
+    }
+    g_sensor_irqs = slot + 1;
     cf_isr_ack_settle(IRQ_LINE_SENSOR, SENSOR_IRQ_ACK);
-    g_sensor_irqs++;
 }
 
 void kernel_main(void)
@@ -54,27 +55,15 @@ void kernel_main(void)
     cf_irq_install(IRQ_LINE_SENSOR, isr_sensor);
     cf_intc_enable(IRQ_LINE_SENSOR, 3);
 
-    uint32_t seen = 0;
+    cf_wait_until(g_sensor_irqs >= NEED_WAKES);
+
     uint32_t nonempty_after_pop = 0;
-
     for (uint32_t i = 0; i < NEED_WAKES; i++) {
-        /* Wait purely on the IRQ counter -- no STATUS re-check in the
-         * condition. On real level-triggered hardware (and the fixed
-         * device) this is safe: if data remains, the line stays high and
-         * a later refill re-asserts it. */
-        cf_wait_until(g_sensor_irqs != seen);
-        seen = g_sensor_irqs;
-
-        uint32_t before = mmio_read32(SENSOR_STATUS);
-        (void)mmio_read32(SENSOR_DATA);        /* pop exactly one word */
-        uint32_t after = mmio_read32(SENSOR_STATUS);
-
         uart_puts("wake "); uart_put_u32_dec(i);
-        uart_puts(": avail_before="); uart_put_u32_dec(before);
-        uart_puts(" avail_after="); uart_put_u32_dec(after);
+        uart_puts(": avail_before="); uart_put_u32_dec(g_before[i]);
+        uart_puts(" avail_after="); uart_put_u32_dec(g_after[i]);
         uart_putc('\n');
-
-        if (after > 0)
+        if (g_after[i] > 0)
             nonempty_after_pop++;
     }
 
@@ -82,10 +71,7 @@ void kernel_main(void)
     uart_puts(" nonempty_after_pop="); uart_put_u32_dec(nonempty_after_pop);
     uart_putc('\n');
 
-    /* Passing requires NEED_WAKES independent wakeups (proving re-assertion
-     * across multiple refills, not just the initial edge) AND that most of
-     * them left data behind (proving the wakeups happened while avail_ was
-     * still nonzero -- the exact precondition finding #1b describes). */
+    /* Most early ACKs must leave data behind while IRQ delivery continues. */
     int pass = (g_sensor_irqs >= NEED_WAKES) && (nonempty_after_pop >= NEED_WAKES - 1);
     uart_puts(pass ? "STREAM ACK-EARLY PASS\n" : "STREAM ACK-EARLY FAIL\n");
     testdev_done(pass ? TESTDEV_PASS : TESTDEV_FAIL);

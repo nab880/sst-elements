@@ -252,13 +252,15 @@ swapping. Two consequences to know:
   access a register at one size; mixed-size access to the same register is
   not meaningful (devices count it under `bad_offset`/`wrong_direction`
   statistics).
-- **The SST-backed memory window** (`QUETZ_SST_WIN_START/END`) stores those
-  values **little-endian by default**. Same-size access (write u32, read the
+- **The SST-backed memory window** (`QUETZ_SST_WIN_START/END`) uses the
+  component's legacy **little-endian default**. The shipped ColdFire compute
+  deck overrides it to big-endian. Same-size access (write u32, read the
   same u32) is exact on a BE guest, but *sub-word aliasing* — writing a word
   and reading its bytes, or `memcpy`ing bytes and reading words — behaves LE,
   the opposite of real big-endian memory. If your firmware does that (real
-  driver code staging descriptors or strings byte-wise usually does), export
-  `QUETZ_WIN_BIG_ENDIAN=1` (compute deck) or set `window_big_endian=1` on the
+  driver code staging descriptors or strings byte-wise usually does), keep
+  `QUETZ_WIN_BIG_ENDIAN=1` in the ColdFire compute deck or set
+  `window_big_endian=1` on the
   CPU **and** `data_big_endian=1` on the `QuetzGpuDevice` (the device pushes
   it into whatever kernel it loads — kernels take no endianness param):
   the window bytes are then stored MSB-first and byte-level layout matches BE
@@ -371,9 +373,8 @@ timer interrupts, just program the INTC as on hardware (scaffold below).
 synchronous (guest-initiated), so completion used to be poll-only; devices
 now drive real interrupt-controller lines through a reverse shared-memory
 mailbox the patched QEMU bridge polls (~10 µs of virtual time, functional
-latency — never assert timing against it). Level semantics: the device
-raises its line on the event of interest and holds it until your ISR writes
-the device's `REG_IRQ_ACK`.
+latency — never assert timing against it). Devices must hold a line until its
+level condition clears; transient pulses shorter than a poll are unsupported.
 
 - `quetz.QuetzGpuDevice`: `irq_line=N` raises line N when an op retires
   (both latency-only and kernel-compute flows, including zero-latency
@@ -383,11 +384,10 @@ the device's `REG_IRQ_ACK`.
   the event count reaches zero. Retires while the line is already raised
   do not re-send an SST IRQ (the level is already 1) but do increment the
   count — batching several doorbells before servicing the ISR is safe.
-- `quetz.QuetzStreamDevice`: `irq_line=N` re-asserts on **every paced
-  refill that delivers bytes** (not only the first 0→nonzero edge); ack at
-  `REG_IRQ_ACK` (0x28). Requires `pace_bytes > 0`. If the guest acks while
-  `STATUS > 0` and no further refills will arrive (stream fully budgeted),
-  poll `STATUS` — do not sleep IRQ-only after the last refill.
+- `quetz.QuetzStreamDevice`: `irq_line=N` is high while paced `STATUS > 0`
+  and lowers automatically when DATA drains the available count to zero.
+  An ACK at `REG_IRQ_ACK` (0x28) cannot lower the line while data remains.
+  Requires `pace_bytes > 0`.
 
 Wiring (see `basic_quetz_coldfire_system.py` with `QUETZ_GPU_IRQ_LINE` /
 `QUETZ_SENSOR_IRQ_LINE` for a worked example):
@@ -416,8 +416,8 @@ ack the device first, then spin on `cf_intc_pending(line)` until the lower
 propagates (one bridge poll tick) so RTE doesn't re-enter on the stale
 level — but guard the spin with the device's own line state (read back via
 its IRQ_ACK register): if the device still holds or re-raises the line (the
-GPU keeps it raised while unconsumed completion events remain; a paced
-stream refill can re-assert between your ack and the bridge's next poll),
+GPU keeps it raised while unconsumed completion events remain; the stream
+keeps it raised while STATUS is nonzero),
 the IPR bit is legitimately set and the ISR must return so RTE re-takes the
 IRQ — an unguarded `while (cf_intc_pending(line));` deadlocks there.
 `firmware/coldfire_irq_demo.c` (+ `test_quetz_coldfire_irq`) is the

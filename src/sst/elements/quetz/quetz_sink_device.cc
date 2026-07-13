@@ -24,6 +24,7 @@ QuetzSinkDevice::QuetzSinkDevice(ComponentId_t id, Params& params)
       base_addr_(params.find<uint64_t>("base_addr", 0)),
       mmio_size_(params.find<uint64_t>("mmio_size", 0x100)),
       max_bytes_(params.find<uint64_t>("max_bytes", 0)),
+      flushed_bytes_(0),
       accepted_(0),
       dropped_(0),
       handlers_(nullptr),
@@ -83,18 +84,32 @@ void QuetzSinkDevice::finish() {
     writeFile(false);
 }
 
-// Rewrite the capture file from the accumulated bytes. The whole capture is
-// rewritten on every flush (not appended) so CTRL truncate + repush works and
-// the file always mirrors captured_ exactly.
+// Append only the suffix not persisted by an earlier flush. CTRL truncate
+// resets both the file and the persisted-prefix cursor.
 void QuetzSinkDevice::writeFile(bool truncate_only) {
-    std::ofstream f(sink_file_, std::ios::binary | std::ios::trunc);
+    std::ios::openmode mode = std::ios::binary |
+        (truncate_only ? std::ios::trunc : std::ios::app);
+    std::ofstream f(sink_file_, mode);
     if (!f.is_open()) {
         out.fatal(CALL_INFO, -1, "%s: cannot write sink_file '%s'.\n",
             getName().c_str(), sink_file_.c_str());
     }
-    if (!truncate_only && !captured_.empty())
-        f.write(reinterpret_cast<const char*>(captured_.data()),
-                (std::streamsize)captured_.size());
+    if (truncate_only) {
+        flushed_bytes_ = 0;
+        return;
+    }
+    if (flushed_bytes_ > captured_.size())
+        out.fatal(CALL_INFO, -1, "%s: sink flush cursor exceeds capture.\n",
+            getName().c_str());
+    size_t pending = captured_.size() - flushed_bytes_;
+    if (pending) {
+        f.write(reinterpret_cast<const char*>(captured_.data() + flushed_bytes_),
+                (std::streamsize)pending);
+        if (!f)
+            out.fatal(CALL_INFO, -1, "%s: failed writing sink_file '%s'.\n",
+                getName().c_str(), sink_file_.c_str());
+        flushed_bytes_ = captured_.size();
+    }
 }
 
 void QuetzSinkDevice::handleEvent(StandardMem::Request* req) {

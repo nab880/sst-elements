@@ -115,6 +115,10 @@ static void sst_mmio_bridge_irq_init(SstMmioBridgeState *s, Error **errp)
                    "IRQ mailbox size %u", s->irq_count, QUETZ_MAX_IRQ_LINES);
         return;
     }
+    if (s->irq_poll_ns == 0) {
+        error_setg(errp, "sst-mmio-bridge: irq-poll-ns must be greater than 0");
+        return;
+    }
 
     intc = object_resolve_path_type("", intc_type, &ambiguous);
     if (!intc || ambiguous) {

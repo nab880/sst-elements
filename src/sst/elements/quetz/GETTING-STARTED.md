@@ -267,9 +267,9 @@ Timing is functional, not cycle-accurate — assert on program behavior
 (PASS/FAIL, transcript content), not on instruction counts or cycle timing.
 
 If you later wire an **accelerator with DMA buffers** on a big-endian guest,
-read SIMULATING-YOUR-SYSTEM.md § Endianness contract — the default SST
-window layout is not byte-identical to real BE RAM for mixed-size access;
-set `QUETZ_WIN_BIG_ENDIAN=1` and matching kernel flags when you need that.
+read SIMULATING-YOUR-SYSTEM.md § Endianness contract. The ColdFire compute
+deck now defaults the SST window and kernel to matching big-endian layout;
+custom decks must set both flags together.
 
 ## Where to go next
 

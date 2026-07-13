@@ -23,6 +23,14 @@ for name in coldfire_xt_irq_burst coldfire_xt_stream_ack_early \
     echo "  -> ${name}"
 done
 
+echo "=== expanded: kernel overflow ceilings ==="
+$M68K_CC $M68K_FLAGS -DOVERFLOW_N=0x08000001u \
+    ../coldfire_startup.S coldfire_xt_kernel_overflow.c \
+    -o coldfire_xt_scale_overflow
+$M68K_CC $M68K_FLAGS -DOVERFLOW_N=0x04000000u \
+    ../coldfire_startup.S coldfire_xt_kernel_overflow.c \
+    -o coldfire_xt_fft_overflow
+
 echo ""
 echo "Expanded firmware built successfully."
 ls -lh coldfire_xt_*  2>/dev/null | grep -v '\.c$'

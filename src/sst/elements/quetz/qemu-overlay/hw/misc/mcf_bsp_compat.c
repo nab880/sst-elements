@@ -46,6 +46,7 @@ typedef struct McfBspRegister {
     GArray *read_sequence;       /* uint64_t entries; last value is sticky */
     size_t read_sequence_pos;
     GArray *triggers;            /* McfBspTrigger entries */
+    bool width_mismatch_reported;
 } McfBspRegister;
 
 typedef struct McfBspBlock {
@@ -221,6 +222,21 @@ static McfBspRegister *find_register_offset(McfBspBlock *block,
     return NULL;
 }
 
+static void report_width_mismatch(McfBspBlock *block, uint64_t offset,
+                                  unsigned width)
+{
+    McfBspRegister *reg = find_register_offset(block, offset);
+
+    if (!reg || reg->width_mismatch_reported) {
+        return;
+    }
+    reg->width_mismatch_reported = true;
+    warn_report("mcf-bsp-compat: width mismatch for %s.%s at 0x%" PRIx64
+                ": profile width=%u, guest width=%u; access remains RAZ/WI",
+                block->name, reg->name, block->base + offset,
+                reg->width, width);
+}
+
 static void bsp_log_access(McfBspBlock *block, const char *op,
                            uint64_t offset, unsigned size, uint64_t value,
                            bool known)
@@ -246,6 +262,9 @@ static uint64_t bsp_read(void *opaque, hwaddr offset, unsigned size)
     McfBspRegister *reg = find_register(block, offset, size);
     uint64_t value = 0;
 
+    if (!reg) {
+        report_width_mismatch(block, offset, size);
+    }
     if (reg) {
         value = reg->value;
         if (reg->read_sequence && reg->read_sequence->len) {
@@ -275,6 +294,7 @@ static void bsp_write(void *opaque, hwaddr offset, uint64_t input,
     input &= mask;
     bsp_log_access(block, "write", offset, size, input, reg != NULL);
     if (!reg) {
+        report_width_mismatch(block, offset, size);
         return;
     }
 

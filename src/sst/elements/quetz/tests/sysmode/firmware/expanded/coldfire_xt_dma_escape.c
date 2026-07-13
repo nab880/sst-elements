@@ -18,7 +18,7 @@
  *   5. valid 64-sample scale=2/offset=100   -> must still work; KERNEL_ID=1
  *
  * SDL: sysmode/basic_quetz_gpu_compute_coldfire.py
- *   (QUETZ_KERNEL=quetz.ScaleOffsetKernel, default LE window).
+ *   (QUETZ_KERNEL=quetz.ScaleOffsetKernel, default BE window).
  */
 
 #include <stdint.h>

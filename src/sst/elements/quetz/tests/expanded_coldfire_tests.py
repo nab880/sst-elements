@@ -1,10 +1,8 @@
 # -*- coding: utf-8 -*-
 """
 expanded_coldfire_tests.py — completeness/robustness sweep for the ColdFire
-(mcf5208evb) stack. NOT part of the default gated suite: the SST harness
-only auto-discovers testsuite_*.py, and this file is deliberately named so
-it is never picked up by a plain `sst-test-elements` run. Invoke it
-explicitly:
+(mcf5208evb) stack. The SST harness only auto-discovers testsuite_*.py, so CI
+and `make check-quetz-integration` invoke this gated companion explicitly:
 
     export PATH=/opt/sst/bin:$PATH LD_LIBRARY_PATH=/opt/sst/lib SST_HOME=/opt/sst
     cd .../quetz/tests
@@ -26,10 +24,10 @@ review-coldfire-stack-correctness.md:
                                     multiple retires before an ack (finding 1a)
   test_xt_irq_zero_latency       - zero-latency completions must still raise
                                     the completion IRQ (startKernel latency==0)
-  test_xt_stream_irq_ack_early   - stream data-ready IRQ re-assertion when a
-                                    consumer acks while data remains (finding 1b)
-  test_xt_be_alias_default       - default (LE) window byte layout: documents
-                                    the pre-existing sub-word aliasing (finding 2)
+  test_xt_stream_irq_ack_early   - true-level stream IRQ remains asserted when
+                                    a consumer acks while data remains
+  test_xt_be_alias_default       - explicit legacy LE window byte layout;
+                                    documents pre-existing sub-word aliasing
   test_xt_be_alias_opt_in        - window_big_endian=1 + matching kernel flag:
                                     byte layout matches real BE hardware
   test_xt_be_alias_mismatched    - window_big_endian=1 but kernel flag left at
@@ -39,6 +37,9 @@ review-coldfire-stack-correctness.md:
   test_xt_dma_window_escape      - guest-programmed kernel-op buffers outside
                                     the SST window are rejected non-fatally
                                     (dma_range_start/end), never a sim abort
+  test_xt_kernel_dma_zero_latency - zero-latency kernel DMA reaches writeback
+  test_xt_kernel_overflow_reject - ScaleOffset and FFT input ceilings reject
+                                    over-limit arg2 values
   test_xt_fft_offload_be_window  - QUETZ_WIN_BIG_ENDIAN=1 FFT offload stays
                                     bit-exact (gates the finding-2 opt-in path)
   test_xt_accel_scale_be_window  - QUETZ_WIN_BIG_ENDIAN=1 scale/offset stays
@@ -55,10 +56,8 @@ review-coldfire-stack-correctness.md:
                                     NOT-yet-fixed guardrail from the original
                                     review's finding #7)
 
-These are exploratory: some are expected to demonstrate CURRENT, KNOWN
-limitations (the default LE aliasing, the mismatched-flags footgun) rather
-than failures to fix. Read each assertion's comment before treating a
-failure as a regression.
+Some tests deliberately pin supported legacy/misconfiguration behavior (the
+explicit LE alias case and mismatched flags), but every test must pass.
 """
 
 from sst_unittest import *
@@ -226,13 +225,9 @@ class testcase_expanded_coldfire(SSTTestCase):
 
     # -------------------------------------------------------------------------
     def test_xt_stream_irq_ack_early(self):
-        """Stream data-ready IRQ re-assertion: consumer pops 1 word per wake
-        (far less than one paced refill delivers) and waits purely on the IRQ
-        counter, never re-checking STATUS. Pre-fix (raise gated on the
-        avail_==0 edge only), avail_ never returns to zero after the first
-        refill outpaces consumption, so no further IRQ ever arrives and this
-        hangs after the first wake. Post-fix, every refill that delivers
-        bytes re-asserts regardless of leftover avail_."""
+        """True-level stream IRQ: the ISR pops one word, then ACKs while most
+        of the refill remains. The line must stay high and re-enter without
+        waiting for another paced refill."""
         test_path = self.get_testsuite_dir()
         sst_prefix, sst_bindir, sst_libexec, qemu_bin = self._qemu_system_m68k()
         exe_abs = self._expanded_fw(test_path, "coldfire_xt_stream_ack_early")
@@ -270,9 +265,7 @@ class testcase_expanded_coldfire(SSTTestCase):
         raw = self._read(sst_outfile) + "\n" + self._read(sst_errfile)
         self.assertNotIn("FATAL", raw)
         self.assertIn("STREAM ACK-EARLY PASS", raw,
-            "guest never observed enough independent wakeups while data "
-            "remained pending — the stream re-assert fix may have regressed "
-            "(pre-fix this hangs after the first wake and this line never prints)")
+            "guest did not re-enter while stream data remained pending")
         self.assertIn("TESTFINISH[0]", raw)
 
         m = re.search(r"sensor_irqs=(\d+)", raw)
@@ -336,7 +329,7 @@ class testcase_expanded_coldfire(SSTTestCase):
         self.assertNotIn("FATAL", raw)
         self.assertIn("TESTFINISH[0]", raw)
         self.assertIn("word_read=0x00003412", raw,
-            "default LE window packing should byte-swap a BE-natural "
+            "explicit legacy LE window packing should byte-swap a BE-natural "
             "byte-write-then-word-read (0x1234 written hi,lo -> 0x3412 read)")
         # Value-changing kernel probe: everything is consistently LE end to
         # end, so the kernel sees 0x3412, adds 0xCC, and the guest's LE
@@ -395,7 +388,7 @@ class testcase_expanded_coldfire(SSTTestCase):
         """512 synthetic samples (16x the existing accel_scale test's fixture
         size) with forced INT16_MIN/MAX/0/-1 plus a full-range ramp, run
         through the chunked kernel-DMA path (kOpDmaChunk=64B -> 16 chunks
-        each direction) under the default (LE) window. Integration-level
+        each direction) under the ColdFire default (BE) window. Integration-level
         confirmation beyond the host unit tests that already cover the pure
         math."""
         test_path = self.get_testsuite_dir()
@@ -515,6 +508,49 @@ class testcase_expanded_coldfire(SSTTestCase):
         # The dst-straddle op is only caught at writeback, after compute
         # counted it as launched — so 2 launches (it + the valid op).
         self.assertEqual(stat_sum(raw, "gpu.kernels_launched", 0), 2)
+
+    # -------------------------------------------------------------------------
+    def test_xt_kernel_dma_zero_latency(self):
+        """A real kernel op with zero kernel and device fallback latency must
+        enter DMA writeback immediately instead of storing the idle sentinel
+        in busy_until_clk_."""
+        test_path = self.get_testsuite_dir()
+        exe_abs = self._main_fw(test_path, "coldfire_accel_scale")
+        raw = self._compute_deck_run(
+            exe_abs, "kernel_dma_zero_latency",
+            extra_env={"QUETZ_KERNEL": "quetz.ScaleOffsetKernel",
+                       "QUETZ_SCALE_LATENCY_COEFF": "0",
+                       "QUETZ_GPU_LATENCY": "0",
+                       "QUETZ_GPU_CLOCK": "1Hz"})
+
+        self.assertNotIn("FATAL", raw)
+        self.assertIn("accel scale correct_samples=64/64", raw,
+            "zero-latency kernel DMA did not reach writeback")
+        self.assertIn("TESTFINISH[0]", raw)
+        self.assertEqual(stat_sum(raw, "gpu.kernels_launched", 0), 1)
+        self.assertEqual(stat_sum(raw, "gpu.busy_cycles", 0), 0)
+
+    # -------------------------------------------------------------------------
+    def test_xt_kernel_overflow_reject(self):
+        """Both kernel implementations reject an arg2 just beyond their input
+        ceiling before allocation, multiplication, or DMA."""
+        test_path = self.get_testsuite_dir()
+        cases = (
+            ("scale", "coldfire_xt_scale_overflow",
+             "quetz.ScaleOffsetKernel"),
+            ("fft", "coldfire_xt_fft_overflow", "quetz.FFTKernel"),
+        )
+        for label, firmware, kernel in cases:
+            with self.subTest(kernel=label):
+                raw = self._compute_deck_run(
+                    self._expanded_fw(test_path, firmware),
+                    "kernel_overflow_" + label,
+                    extra_env={"QUETZ_KERNEL": kernel})
+                self.assertNotIn("FATAL", raw)
+                self.assertIn("KERNEL OVERFLOW REJECT PASS", raw)
+                self.assertIn("TESTFINISH[0]", raw)
+                self.assertEqual(stat_sum(raw, "gpu.ops_rejected", 0), 1)
+                self.assertEqual(stat_sum(raw, "gpu.kernels_launched", 0), 0)
 
     # -------------------------------------------------------------------------
     def test_xt_fft_offload_be_window(self):

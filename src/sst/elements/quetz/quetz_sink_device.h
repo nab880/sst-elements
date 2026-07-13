@@ -118,6 +118,7 @@ protected:
 
     std::string          sink_file_;
     std::vector<uint8_t> captured_;
+    size_t                flushed_bytes_; // prefix already persisted to sink_file_
     uint64_t             accepted_;   // bytes accepted (== captured_.size())
     uint64_t             dropped_;
 

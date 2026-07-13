@@ -1,8 +1,0 @@
---- a/linux-user/qemu-options.def
-+++ b/linux-user/qemu-options.def
-@@ -1,3 +1,4 @@
- DEF("log", 0, QEMU_OPTION_log, \
-     "-d item1[,item2,...]  enable logging of specified items\n", \
-     QEMU_ARCH_ALL)
-+DEF("sst-mmio-range", 0, QEMU_OPTION_sst_mmio_range, \
-+    "-sst-mmio-range SPEC  Quetz synchronous MMIO (shmname=,base=,size=)\n", QEMU_ARCH_ALL)

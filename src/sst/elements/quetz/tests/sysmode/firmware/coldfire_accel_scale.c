@@ -1,7 +1,7 @@
 /*
  * coldfire_accel_scale.c — device-computed saturating int16 scale/offset
- * (quetz.ScaleOffsetKernel), ColdFire m68k. Samples are packed two per u32 store
- * so SST's LE value-serialization yields the kernel's LE s16 stream on the BE core.
+ * (quetz.ScaleOffsetKernel), ColdFire m68k. Samples are packed two per u32 store;
+ * matching CPU/kernel endianness makes the numeric round-trip exact.
  * SDL: sysmode/basic_quetz_gpu_compute_coldfire.py.
  */
 
@@ -35,7 +35,7 @@ void kernel_main(void)
     uart_init();
     uart_puts("ColdFire accel scale/offset (device-computed, m68k)\n");
 
-    /* fill the input batch, two s16 per u32 (LE stream via value semantics) */
+    /* fill the input batch, two s16 per numeric u32 */
     for (uint32_t i = 0; i < N_SAMPLES; i += 2) {
         uint32_t w = (uint32_t)(uint16_t)sample(i)
                    | ((uint32_t)(uint16_t)sample(i + 1) << 16);

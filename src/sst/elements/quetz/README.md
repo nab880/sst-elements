@@ -413,9 +413,10 @@ map a second bridge aperture whose contents live in the SST memory
 hierarchy (directory + MemController), not QEMU RAM.  Use it when a device
 DMA and the guest must see the same bytes — e.g. kernel-compute buffers
 (ARG0/ARG1 point into the window).  Same-size word round-trips are exact
-on any guest endianness, but *sub-word aliasing* in the window defaults to
-little-endian byte layout — see SIMULATING-YOUR-SYSTEM.md § Endianness
-contract for `window_big_endian` / `data_big_endian`.
+on any guest endianness. The component's legacy default uses little-endian
+sub-word layout; the shipped ColdFire compute deck overrides it to big-endian.
+See SIMULATING-YOUR-SYSTEM.md § Endianness contract for
+`window_big_endian` / `data_big_endian`.
 
 **System mode is single-vCPU.**  `vcpu_count` must be `1` when
 `system_mode=1`: every `sst-mmio-bridge` aperture is wired to mailbox slot
@@ -492,19 +493,17 @@ SIMULATING-YOUR-SYSTEM.md § Adding your own kernel):
 
 | kernel | data | ARG2 | ARG3 | latency param |
 |---|---|---|---|---|
-| `quetz.FFTKernel` | LE float32 cfloat[N], radix-2 | N | — | `fft_latency_coeff` (default 20) × N·log₂N |
-| `quetz.ScaleOffsetKernel` | LE s16[N], sat16(s·scale+offset) | N | scale \| offset<<16 | `latency_coeff` (default 4) × N |
+| `quetz.FFTKernel` | configured-endian float32 cfloat[N], radix-2 | N | — | `fft_latency_coeff` (default 20) × N·log₂N |
+| `quetz.ScaleOffsetKernel` | configured-endian s16[N], sat16(s·scale+offset) | N | scale \| offset<<16 | `latency_coeff` (default 4) × N |
 
 ### `quetz.QuetzStreamDevice` — recorded-data feed (stimulus in)
 
 Replays a binary fixture file (`stream_file`) through a FIFO register
 interface — sensors, telemetry, CAN logs, any recorded byte stream.
 Optionally paced: with `pace_bytes`/`pace_period` set, STATUS fills over
-simulated time and firmware polling/timeout logic gets exercised; every
-paced refill that delivers bytes can raise (or re-assert) a data-ready IRQ
-(`irq_line`). Poll `STATUS` when data is already visible and no further
-refills are coming — see SIMULATING-YOUR-SYSTEM.md § Interrupt-driven
-devices.
+simulated time and firmware polling/timeout logic gets exercised. With
+`irq_line` set, data-ready is a true level: high while STATUS is nonzero and
+low after the final available bytes are drained.
 
 Register map (`quetz_stream_device.h`):
 
@@ -515,7 +514,7 @@ Register map (`quetz_stream_device.h`):
 | 0x10 | SEQ | R | bytes consumed so far |
 | 0x18 | CTRL | W | 1 = rewind (paced: restarts the refill budget) |
 | 0x20 | EOS | R | 1 = stream fully consumed |
-| 0x28 | IRQ_ACK | R/W | R: data-ready line raised; W nonzero: ack |
+| 0x28 | IRQ_ACK | R/W | R: data-ready line raised; W nonzero: ack (stays high while STATUS > 0) |
 
 Stats: `data_reads`, `bytes_delivered`, `status_polls`, `underruns`,
 `not_ready_reads`, `paced_refills`, `rewinds`, `irqs_raised`,
@@ -569,9 +568,9 @@ QEMU-native device IRQs (UART, timers, FEC) vector normally with no quetz
 involvement.  SST-side devices raise guest interrupts through a reverse
 shared-memory mailbox (`quetz_ipc_types.h`: one seqlock slot per vCPU row ×
 machine line) that the patched QEMU bridge polls on a virtual-time timer
-and applies to the machine's interrupt controller.  Level semantics: a
-device raises its line on the event of interest and holds it until the
-guest writes the device's `IRQ_ACK` register.  Latency is functional
+and applies to the machine's interrupt controller. Devices hold each line
+until its level condition clears; transient edge pulses are unsupported.
+Latency is functional
 (~`QUETZ_IRQ_POLL_NS`, default 10 µs of virtual time) — never assert
 timing against it.
 

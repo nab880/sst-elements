@@ -121,11 +121,8 @@ QuetzStreamDevice::QuetzStreamDevice(ComponentId_t id, Params& params)
 void QuetzStreamDevice::init(unsigned int phase) { iface_->init(phase); }
 void QuetzStreamDevice::setup() { iface_->setup(); }
 
-// Raise the data-ready IRQ line (level semantics: it stays raised until the
-// guest writes REG_IRQ_ACK). Refills while already raised do not re-send —
-// the level is already 1 — but every refill that delivers bytes re-asserts
-// after an ack, so a consumer that acked mid-drain and slept is woken by the
-// next refill rather than sleeping forever (see tickPace).
+// Raise the data-ready IRQ line. The line tracks avail_ as a true level: it is
+// high while bytes remain and low once the consumer drains them all.
 void QuetzStreamDevice::raiseDataReadyIrq() {
     if (irq_line_ < 0 || irq_pending_)
         return;
@@ -140,6 +137,16 @@ void QuetzStreamDevice::raiseDataReadyIrq() {
 void QuetzStreamDevice::ackIrq() {
     if (irq_line_ < 0 || !irq_pending_)
         return;
+
+    // ACK cannot clear a level whose condition is still true. Leaving the
+    // line high makes an early-acking guest re-enter until it drains avail_.
+    if (avail_ > 0) {
+        out.verbose(CALL_INFO, 2, 0,
+            "%s: data-ready IRQ acked with avail=%" PRIu64
+            " — line stays raised\n", getName().c_str(), avail_);
+        return;
+    }
+
     irq_pending_ = false;
     irq_link_->send(new QuetzIrqEvent(irq_vcpu_, (uint32_t)irq_line_, 0));
     out.verbose(CALL_INFO, 2, 0,
@@ -154,13 +161,7 @@ bool QuetzStreamDevice::tickPace(SST::Cycle_t) {
         budget_given_ += take;
         avail_        += take;
         stat_paced_refills_->addData(1);
-        // Assert on EVERY refill that adds bytes, not only the 0->nonzero
-        // edge: a guest that popped some bytes, acked, and went back to sleep
-        // (avail_ still > 0) must be woken by the next refill. Gating on
-        // "was empty" here lost that wakeup. raiseDataReadyIrq() is a no-op
-        // while the line is still raised. A consumer must still drain to
-        // REG_EOS before its final sleep — after the last refill no further
-        // assertion can come.
+        // raiseDataReadyIrq() is a no-op while the level is already high.
         if (take > 0)
             raiseDataReadyIrq();
     }
@@ -199,6 +200,10 @@ void QuetzStreamDevice::mmioHandlers::handle(StandardMem::Read* read) {
                 }
                 dev->avail_ -= want;
                 dev->stat_bytes_delivered_->addData(n);
+                // Data-ready is a level, so draining the final available byte
+                // clears it without requiring a separate device ACK.
+                if (dev->avail_ == 0)
+                    dev->ackIrq();
             }
         }
     } else if (offset == REG_SEQ) {
@@ -239,12 +244,16 @@ void QuetzStreamDevice::mmioHandlers::handle(StandardMem::Write* write) {
             // running); unpaced: everything is immediately available again.
             dev->budget_given_ = dev->pace_bytes_ ? 0 : dev->stream_.size();
             dev->avail_        = dev->budget_given_;
+            if (dev->avail_ == 0)
+                dev->ackIrq();
+            else
+                dev->raiseDataReadyIrq();
             dev->stat_rewinds_->addData(1);
             out->verbose(CALL_INFO, 2, 0, "%s: stream rewound\n",
                 dev->getName().c_str());
         }
     } else if (offset == REG_IRQ_ACK) {
-        // W1C-style ack: any nonzero value lowers the data-ready IRQ line.
+        // An ACK lowers only when no data remains; data-ready is level-driven.
         uint64_t value = 0;
         for (int i = (int)write->data.size() - 1; i >= 0; i--) {
             value <<= 8;

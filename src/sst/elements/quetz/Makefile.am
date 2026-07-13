@@ -160,6 +160,7 @@ check-quetz-unit:
 
 check-quetz-integration:
 	@"$${SST_HOME:-/opt/sst}/bin/sst-test-elements" -p $(abs_srcdir)/tests/testsuite_default_quetz.py
+	@"$${SST_HOME:-/opt/sst}/bin/sst-test-elements" -p $(abs_srcdir)/tests/expanded_coldfire_tests.py
 
 # ---------------------------------------------------------------------------
 # Distribution: test suite, SDL decks, firmware, gold files, and docs, so a
@@ -177,11 +178,6 @@ EXTRA_DIST =	GETTING-STARTED.md \
 	qemu-overlay/include/quetz/quetz_ipc_types.h \
 	qemu-overlay/linux-user/sst_mmio.c \
 	qemu-overlay/linux-user/sst_mmio.h \
-	qemu-overlay/patches/hw-misc-meson.patch \
-	qemu-overlay/patches/linux-user-main.patch \
-	qemu-overlay/patches/linux-user-meson.patch \
-	qemu-overlay/patches/linux-user-signal.patch \
-	qemu-overlay/patches/qemu-options.def.patch \
 	qemu-overlay/quetz_ipc_client.c \
 	SIMULATING-YOUR-SYSTEM.md \
 	TESTING.md \
@@ -257,6 +253,16 @@ EXTRA_DIST =	GETTING-STARTED.md \
 	tests/sysmode/firmware/coldfire_uart.h \
 	tests/sysmode/firmware/coldfire_v4_fpu \
 	tests/sysmode/firmware/coldfire_v4_fpu.c \
+	tests/sysmode/firmware/expanded/build.sh \
+	tests/sysmode/firmware/expanded/coldfire_xt_be_alias.c \
+	tests/sysmode/firmware/expanded/coldfire_xt_dma_escape.c \
+	tests/sysmode/firmware/expanded/coldfire_xt_doorbell_flood.c \
+	tests/sysmode/firmware/expanded/coldfire_xt_irq_burst.c \
+	tests/sysmode/firmware/expanded/coldfire_xt_irq_zero_latency.c \
+	tests/sysmode/firmware/expanded/coldfire_xt_kernel_overflow.c \
+	tests/sysmode/firmware/expanded/coldfire_xt_scale_stress.c \
+	tests/sysmode/firmware/expanded/coldfire_xt_stream_ack_early.c \
+	tests/sysmode/firmware/expanded/coldfire_xt_wild_access.c \
 	tests/sysmode/firmware/cuda_runtime_types_firmware.h \
 	tests/sysmode/firmware/fft_firmware_data_256.h \
 	tests/sysmode/firmware/fft_synth_compute.h \
@@ -296,6 +302,7 @@ EXTRA_DIST =	GETTING-STARTED.md \
 	tests/sysmode/small/riscv64_virt_hello/sst.stdout.gold \
 	tests/sysmode/small/uart_echo/sst.stdout.gold \
 	tests/testsuite_default_quetz.py \
+	tests/expanded_coldfire_tests.py \
 	tools/check_nmea.py \
 	tools/bsp_profile.py \
 	tools/dump_stream.py \

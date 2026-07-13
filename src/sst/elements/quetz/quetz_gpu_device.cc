@@ -620,6 +620,19 @@ void QuetzGpuDevice::opComputeAndStartBusy() {
     if (latency == 0)
         latency = kernel_latency ? kernel_latency : kernel_latency_;
     stat_kernels_launched_->addData(1);
+
+    // busy_until_clk_ == 0 is the idle sentinel. If DMA completes before the
+    // first device tick and every latency source resolves to zero, storing
+    // gpu_clk_ + latency would leave the sentinel at zero and retireIfReady()
+    // would never start writeback.
+    if (latency == 0) {
+        out.verbose(CALL_INFO, 2, 0,
+            "%s: kernel computed (%zu -> %zu bytes), zero-latency writeback\n",
+            getName().c_str(), op_in_.size(), op_out_.size());
+        opBeginWriteback();
+        return;
+    }
+
     busy_until_clk_ = gpu_clk_ + latency;
     out.verbose(CALL_INFO, 2, 0,
         "%s: kernel computed (%zu -> %zu bytes), BUSY %" PRIu64

@@ -315,12 +315,12 @@ diffs the sink capture byte-exactly against a host-computed expectation,
 and `test_quetz_coldfire_irq` covers SST-device IRQ injection end to end
 (INTC programming, stop/wake, device ack).
 
-### Optional robustness suite (`expanded_coldfire_tests.py`)
+### Expanded ColdFire regression suite (`expanded_coldfire_tests.py`)
 
-Not part of the default harness (`sst-test-elements` only auto-discovers
-`testsuite_*.py`). Invoke explicitly when validating IRQ event counting,
-BE window layout, DMA-range rejection, or other corners exercised by the
-expanded firmware under `tests/sysmode/firmware/expanded/`:
+`sst-test-elements` does not auto-discover this filename, so the Docker CI
+runner and `make check-quetz-integration` invoke it explicitly after the main
+suite. It gates IRQ event counting, both window layouts, DMA rejection, kernel
+overflow/zero-latency paths, and the other expanded firmware corners:
 
 ```bash
 docker run --rm -v "$(pwd)/sst-elements:/src/sst-elements" raptor-quetz-test \
@@ -331,8 +331,7 @@ docker run --rm -v "$(pwd)/sst-elements:/src/sst-elements" raptor-quetz-test \
 
 Build expanded firmware first:
 `cd tests/sysmode/firmware/expanded && M68K_CC=m68k-linux-gnu-gcc ./build.sh`.
-See the module docstring for what each test asserts (some document known
-limitations rather than regressions).
+See the module docstring for what each test asserts.
 
 ---
 
