@@ -2,10 +2,10 @@
 
 This is the guide for the primary quetz use case: you have code for an
 embedded board — a ColdFire-class CPU with a UART console, an accelerator,
-a GPS receiver, sensors — and you need to **prove it works without the
-physical hardware**. Functional fidelity, not cycle accuracy: the guest
-executes real instructions under QEMU; devices return real data; timing is
-approximate.
+a GPS receiver, sensors — and you need to test its **basic functional
+correctness without the physical hardware**. The guest executes real
+instructions under QEMU and modeled devices return functional data, but this
+does not prove behavior for unmodeled hardware or timing.
 
 The worked example throughout is the shipped **`coldfire_system`** demo:
 
@@ -30,21 +30,45 @@ The worked example throughout is the shipped **`coldfire_system`** demo:
 - Recorded-data replay in (stdin/UART, stream device, paced feeds) and
   byte-exact capture out (sink device, UART transcript).
 
-**Does not work yet:**
+**Works with an explicit compatibility profile:**
 
-- **Unmodified board BSPs.** QEMU's `mcf5208evb` reads all *unmodeled* SoC
-  space (PLL, SCM, WDT, GPIO, chip selects, I2C, …) as zero and ignores
-  writes — measured across every BSP-init range by the committed
-  `bsp_torture` probe catalogue. So real board-support init does **not
-  crash**: it **hangs on status polls** (e.g. the PLL lock bit never sets)
-  or **silently loses configuration writes** (GPIO readback returns 0).
-  Port your app + drivers instead of the BSP: find the status-poll loops
-  and read-back checks in the init path and shim those; every other init
-  write is harmless RAZ/WI. Narrow stub registers with scriptable values
-  can be added behind the MMIO window when a real BSP names them.
+- **Private MCF5208 BSP initialization.** Discovery mode logs accesses across
+  QEMU's otherwise-unmodeled SCM, bus, chip-select, eDMA, I²C, QSPI, timer,
+  EPORT, watchdog, PLL, WTM, and GPIO ranges. The analyzer reports likely
+  polling loops and failed write/readback checks from the ELF alone.
+- A reviewed JSON profile can add sparse 8/16/32-bit register storage,
+  fixed status bits, read sequences, W1C/W1S behavior, and immediate
+  same-block write relationships. This is sufficient for many BSPs to finish
+  initialization and enter the application.
+- The feature is opt-in. With no BSP option, the `bsp_torture` baseline
+  remains QEMU's original read-as-zero/write-ignored behavior.
+
+**Still outside the model:**
+
+- PLL frequency and lock timing; watchdog expiry/reset; GPIO stimulus,
+  muxing, and pin interrupts; I²C/QSPI transactions; eDMA movement; external
+  FlexBus devices; and hardware-accurate reset sequencing. A profile may
+  describe initialization-visible state, not these data paths.
 - **Cycle accuracy.** Timing is approximate everywhere (trace-driven memory
-  path, functional device latency, wall-clock-coupled IRQ delivery). Never
-  assert timing; assert function.
+  path, functional device latency, IRQ delivery). Never assert timing; assert
+  function.
+
+### Running a private BSP
+
+```sh
+# Diagnose initialization from the private ELF. A timeout is expected if it polls.
+./quetz-docker/quetz-run --firmware my_debug_app.elf \
+  --bsp-discover --timeout 30 --out artifacts/discovery
+
+# After reviewing the generated skeleton against the exact hardware:
+./quetz-docker/quetz-run --firmware my_debug_app.elf \
+  --bsp-profile my-board.json --out artifacts/profiled
+```
+
+Discovery produces raw and source-enriched JSONL traces, a diagnosis report,
+and a deliberately inert profile skeleton. The complete workflow, artifact
+contract, JSON schema, allowed register map, and modeling boundary are in
+[BSP-COMPATIBILITY.md](BSP-COMPATIBILITY.md).
 
 ## Supported parts
 
@@ -59,7 +83,7 @@ parts are supported by *relocation*, not by new machine models:
 | UART programming model | usually nothing — the MCF UART block is common across the family | none |
 | INTC source numbering | `QUETZ_*_IRQ_LINE` env + `coldfire_intc.h` line constants | trivial |
 | core ISA (V2 vs V4/V4e, MAC/EMAC, FPU) | compiler flags + `-cpu cfv4e` in `QUETZ_QEMU_ARGS` — **assessed, CI-gated** (see below) | small |
-| on-chip peripherals we don't model | stream/sink/stub devices in the MMIO window (§ Where peripherals come from) | small |
+| on-chip peripherals we don't model | BSP compatibility profile for init; stream/sink/dedicated devices for application behavior | small to large |
 | a genuinely different SoC | a new QEMU machine model | expensive — scoped separately |
 
 Demo firmware is built with `-mcpu=5208`; anything ISA_A+-compatible runs
@@ -80,13 +104,16 @@ The target is a **ColdFire V4** core (V4/V4e with EMAC and FPU). The
   SST-device IRQ injection — `test_quetz_coldfire_irq_cfv4e`. Isolate the
   INTC register accesses in your driver; silicon offsets may differ from
   the 5208 block.
-- **The BSP-honesty table is unchanged** under `-cpu cfv4e`
-  (`bsp_torture`: still blanket RAZ/WI, no faults).
+- **The no-profile BSP baseline is unchanged** under `-cpu cfv4e`
+  (`bsp_torture`: still blanket RAZ/WI, no faults). Compatibility profiles
+  are currently targeted at the MCF5208 register map even when `cfv4e`
+  supplies the core ISA.
 
-On-chip peripherals the reference vehicle doesn't model read as RAZ/WI —
-validate the *data path* with stream/sink devices, or ask for
-polled-status stubs; the memory map is integrator-defined, so relocate via
-the table above. QEMU's `cfv4e` does not model the V4 **MMU** (freestanding
+On-chip peripherals the reference vehicle doesn't model read as RAZ/WI
+without a compatibility profile. Use profiles only for initialization-visible
+state; validate the *data path* with stream/sink devices or a dedicated model.
+The memory map is integrator-defined, so relocate via the table above.
+QEMU's `cfv4e` does not model the V4 **MMU** (freestanding
 / flat-supervisor firmware — this whole flow — is unaffected; MMU-on OS
 validation is out of scope), and it implements ISA_A/B + FPU + EMAC —
 `-mcpu=5475` output is the verified configuration.
@@ -101,8 +128,8 @@ docker build --target runtime -t quetz-sim -f quetz-docker/Dockerfile .
 cat artifacts/transcript.txt artifacts/result.txt
 ```
 
-`quetz-run` runs the shipped demo (freestanding firmware — see the note it
-prints about board BSPs), and leaves `transcript.txt` (guest serial),
+`quetz-run` runs the shipped demo (freestanding firmware — see the BSP
+scope note it prints), and leaves `transcript.txt` (guest serial),
 `stats.csv`, `sst.log`, and `result.txt` in `--out`. Exit code: 0 = the
 guest's sentinel reported PASS, 2 = FAIL, 1 = error/timeout — drop it
 straight into CI. Swap in your own pieces with `--firmware my_app.elf`,

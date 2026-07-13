@@ -69,8 +69,8 @@ PASS: guest sentinel reported PASS
 ```
 
 If you see `PASS` here, your Docker setup is good and everything below will
-work. (`quetz-run` also prints a one-time note about board-BSP support — see
-[What works, what doesn't](#what-works-what-doesnt).)
+work. `quetz-run` also prints the BSP compatibility scope; see
+[Running a private BSP](#step-4--run-a-private-bsp).
 
 ## Step 3 — build and run *your* ColdFire V4 code
 
@@ -175,6 +175,40 @@ FPU instructions under QEMU+SST, reporting PASS back out — the same pattern
 you'll use for real driver/application code, just swap in your own `.c` file
 (and any extra sources on the compile line).
 
+## Step 4 — run a private BSP
+
+You do not need the BSP source. Start with the application ELF, preferably
+unstripped and compiled with debug information:
+
+```sh
+./quetz-docker/quetz-run --image quetz-sim \
+  --firmware /path/to/application.elf \
+  --bsp-discover --timeout 30 \
+  --out artifacts/bsp-discovery
+```
+
+The first run may time out because native QEMU returns zero for unmodeled PLL,
+GPIO, watchdog, chip-select, I²C, and related registers. The timeout is still
+useful: Quetz writes `bsp-report.txt`, an enriched MMIO trace, and
+`bsp-profile.generated.json`.
+
+Review the generated register shapes against the processor manual and board
+configuration. The skeleton is intentionally inert—it does not guess status
+bits. Then rerun with the reviewed profile:
+
+```sh
+./quetz-docker/quetz-run --image quetz-sim \
+  --firmware /path/to/application.elf \
+  --bsp-profile /path/to/my-board.json \
+  --out artifacts/bsp-profiled
+```
+
+This can make BSP initialization functionally complete and let you test the
+application that follows it. It does not reproduce PLL timing, watchdog
+expiry, GPIO stimulus, I²C/QSPI transfers, DMA, or external-bus behavior.
+See [BSP-COMPATIBILITY.md](BSP-COMPATIBILITY.md) for the artifact guide,
+profile schema, allowed register blocks, and troubleshooting.
+
 ## Understanding the output
 
 Every `quetz-run` invocation writes to `--out` (default `./artifacts`):
@@ -223,13 +257,11 @@ peripherals (UARTs, timers); SST-side MMIO devices (an accelerator, a
 sensor-stream device, a data sink) if your workload needs them; both V2
 (`-mcpu=5208`) and V4/V4e (`-mcpu=5475` + `-cpu cfv4e`) codegen.
 
-**Doesn't work yet:** unmodified board BSP init code. QEMU's `mcf5208evb`
-machine reads unmodeled SoC registers (PLL, GPIO, chip selects, etc.) as zero
-and ignores writes to them — so stock BSP bring-up doesn't crash, it **hangs
-on a status-poll loop** (e.g. waiting for a PLL lock bit that never sets).
-Port your application + driver code onto the provided scaffold instead of
-running an unmodified BSP; see `SIMULATING-YOUR-SYSTEM.md` for the porting
-pattern.
+**Private BSPs:** without a profile, unmodeled SoC registers remain
+read-as-zero/write-ignored and initialization may hang. Discovery plus a
+reviewed compatibility profile can supply the minimum functional register
+behavior needed to reach the application. Peripheral data paths still need a
+QEMU-native device, an SST MMIO component, or a dedicated new model.
 
 Timing is functional, not cycle-accurate — assert on program behavior
 (PASS/FAIL, transcript content), not on instruction counts or cycle timing.
@@ -248,6 +280,9 @@ out). For more:
   full guide: wiring a UART + sensor-stream + accelerator system, adding your
   own accelerator kernel or MMIO device, interrupt-driven devices, anatomy of
   a deck (SDL). Includes ColdFire V4 assessment notes (`-cpu cfv4e`).
+- **[BSP-COMPATIBILITY.md](BSP-COMPATIBILITY.md)** — run a private BSP
+  binary, diagnose its initialization accesses, and write a reviewed
+  functional register profile.
 - **[tests/sysmode/README-coldfire-demo.md](tests/sysmode/README-coldfire-demo.md)**
   — the ColdFire↔GPU (balar) offload demo, and the 32-bit-big-endian vs
   64-bit-little-endian marshalling issues that come up if your V4 code talks
@@ -266,7 +301,8 @@ out). For more:
 - Verified: shipped demo (Step 2), the V4 FPU/EMAC/ISA_B smoke test
   (`coldfire_v4_fpu`, compiled `-mcpu=5475`, run `-cpu cfv4e`), a from-scratch
   custom firmware compiled and run through the exact Step 3 commands above,
-  and the "forgot `-cpu cfv4e`" hang.
+  the "forgot `-cpu cfv4e`" hang, BSP discovery, and a profiled PLL/GPIO
+  compatibility run.
 - Linux: not yet run against this workspace. The image is a plain
   `ubuntu:24.04` base with no CUDA/GPU dependency for this target, so it
   should build and run the same way — if you try it and something differs,

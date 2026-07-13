@@ -45,9 +45,9 @@ This script:
 In a clean run you should see **all integration tests passing** (matrix
 usermode/sysmode tests, the invariant checks, and the ColdFire
 embedded-system tests: full system demo, paced variant, device-computed
-kernels, sink loop, IRQ demo, BSP-survival probe). Balar-dependent and
-missing-toolchain tests skip cleanly. As of 2026-07 the arm64 container
-runs 52 tests: 42 pass, 10 skip, 0 fail. Unit tests run first via
+kernels, sink loop, IRQ demo, BSP baseline, and profiled BSP compatibility).
+Balar-dependent and missing-toolchain tests skip cleanly. As of 2026-07 the
+arm64 container runs 53 tests: 43 pass, 10 skip, 0 fail. Unit tests run first via
 `check-quetz-unit`, and the script ends with the `quetz-run` packaging
 smoke.
 
@@ -280,7 +280,32 @@ Integration tests skip microbenchmark cases if the ELF is missing.
 | `test_quetz_wide_split` | Cache-line split stats not incremented |
 | `test_quetz_sysmode_filtered_only` | `filtered` region still forwards to memHierarchy |
 | `test_quetz_sysmode_uart_capture` | UART THR bytes not captured in stdout |
-| `test_quetz_coldfire_bsp_torture` | QEMU stops being RAZ/WI over unmodeled mcf5208 SoC space (the BSP-honesty contract) |
+| `test_quetz_coldfire_bsp_torture` | No-profile QEMU stops being RAZ/WI over unmodeled MCF5208 SoC space |
+| `test_quetz_coldfire_bsp_compat_profile` | Opt-in profile fails to supply PLL lock and GPIO readback, or leaks into the baseline |
+
+### BSP compatibility tests
+
+The two BSP integration tests intentionally assert opposite modes:
+
+- `test_quetz_coldfire_bsp_torture` runs without compatibility options and
+  preserves native QEMU behavior.
+- `test_quetz_coldfire_bsp_compat_profile` applies the starter profile and
+  checks functional PLL status and GPIO latch/readback.
+
+The Python unit test `tests/unit/test_bsp_profile.py` checks trace analysis
+and inert skeleton generation. For an end-to-end packaging smoke:
+
+```bash
+./quetz-docker/quetz-run --image raptor-quetz-test \
+  --firmware sst-elements/src/sst/elements/quetz/tests/sysmode/firmware/bsp_torture \
+  --bsp-discover --timeout 5 --out artifacts/bsp-smoke
+```
+
+The probe bounds its PLL loop at 10,000 reads and then completes. Discovery
+is correct when `bsp-report.txt` identifies that repeated PLL read and the
+GPIO write/readback mismatch, while `bsp-profile.generated.json` remains
+inert. See [BSP-COMPATIBILITY.md](BSP-COMPATIBILITY.md) for the user-facing
+contract.
 
 The ColdFire embedded-system tests are functional end-to-end gates rather
 than single invariants: `test_quetz_coldfire_system` (+`_paced`) covers the
@@ -376,6 +401,7 @@ Quetz `configure` must find `qemu-plugin.h` and a plugin-capable QEMU. The Docke
 ## Related docs
 
 - [GETTING-STARTED.md](GETTING-STARTED.md) — Docker-only on-ramp for your own ColdFire V4 firmware
+- [BSP-COMPATIBILITY.md](BSP-COMPATIBILITY.md) — private-BSP discovery, profile schema, and modeling limits
 - [README.md](README.md) — full component reference: parameters, devices, system mode, IRQ injection, env vars
 - [SIMULATING-YOUR-SYSTEM.md](SIMULATING-YOUR-SYSTEM.md) — the embedded-system tutorial (limits and supported parts up front)
 - [QUETZ_OUTLINE.md](QUETZ_OUTLINE.md) — architecture and source map

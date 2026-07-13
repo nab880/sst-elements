@@ -147,6 +147,45 @@ pid_t QemuLauncher::spawn(const QuetzConfig& cfg,
         argv_strs.push_back(dev);
     }
 
+    // Optional ColdFire BSP-initialization compatibility device.  The device
+    // lives in QEMU (rather than SST) because its read values steer guest
+    // control flow before the trace reaches Quetz.  It overlays only sparse,
+    // otherwise-unmodeled MCF5208 register blocks.
+    const char* bsp_profile  = getenv("QUETZ_BSP_PROFILE");
+    const char* bsp_discover = getenv("QUETZ_BSP_DISCOVER");
+    const char* bsp_target   = getenv("QUETZ_BSP_TARGET");
+    const char* bsp_log      = getenv("QUETZ_BSP_LOG");
+    bool use_bsp = (bsp_profile && bsp_profile[0]) ||
+                   (bsp_discover && bsp_discover[0] == '1');
+    if (use_bsp) {
+        if (!cfg.system_mode)
+            output_->fatal(CALL_INFO, -1,
+                "BSP compatibility is supported only in system mode.\n");
+        auto reject_comma = [this](const char* label, const char* value) {
+            if (value && strchr(value, ','))
+                output_->fatal(CALL_INFO, -1,
+                    "%s may not contain ',' (QEMU device property separator): %s\n",
+                    label, value);
+        };
+        reject_comma("QUETZ_BSP_PROFILE", bsp_profile);
+        reject_comma("QUETZ_BSP_LOG", bsp_log);
+
+        std::string dev = "mcf-bsp-compat,target=";
+        dev += (bsp_target && bsp_target[0]) ? bsp_target : "mcf5208";
+        if (bsp_profile && bsp_profile[0]) {
+            dev += ",profile=";
+            dev += bsp_profile;
+        }
+        if (bsp_discover && bsp_discover[0] == '1')
+            dev += ",discover=on";
+        if (bsp_log && bsp_log[0]) {
+            dev += ",log=";
+            dev += bsp_log;
+        }
+        argv_strs.push_back("-device");
+        argv_strs.push_back(dev);
+    }
+
     if (cfg.system_mode && !cfg.system_mode_loader.empty())
         argv_strs.push_back(cfg.system_mode_loader);
     argv_strs.push_back(cfg.executable);

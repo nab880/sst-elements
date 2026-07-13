@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "target": "mcf5208",
+  "blocks": [
+    {
+      "name": "fbcs",
+      "base": "0xfc008000",
+      "size": "0x4000",
+      "registers": [
+        { "name": "CSAR0", "offset": "0x0", "width": 4, "reset": "0x0", "writable_mask": "0xffffffff" },
+        { "name": "CSMR0", "offset": "0x4", "width": 4, "reset": "0x0", "writable_mask": "0xffffffff" },
+        { "name": "CSCR0", "offset": "0x8", "width": 4, "reset": "0x0", "writable_mask": "0xffffffff" }
+      ]
+    },
+    {
+      "name": "i2c",
+      "base": "0xfc058000",
+      "size": "0x4000",
+      "registers": [
+        { "name": "I2ADR", "offset": "0x0", "width": 1, "reset": "0x0", "writable_mask": "0xfe" },
+        { "name": "I2FDR", "offset": "0x4", "width": 1, "reset": "0x0", "writable_mask": "0x3f" },
+        { "name": "I2CR", "offset": "0x8", "width": 1, "reset": "0x0", "writable_mask": "0xfc" },
+        { "name": "I2SR", "offset": "0xc", "width": 1, "reset": "0x81", "writable_mask": "0x0", "w1c": "0x12" }
+      ]
+    },
+    {
+      "name": "watchdog",
+      "base": "0xfc08c000",
+      "size": "0x4000",
+      "registers": [
+        { "name": "WCR", "offset": "0x0", "width": 2, "reset": "0x0", "writable_mask": "0xffff" },
+        { "name": "WSR", "offset": "0x2", "width": 2, "reset": "0x0", "writable_mask": "0xffff" }
+      ]
+    },
+    {
+      "name": "pll",
+      "base": "0xfc090000",
+      "size": "0x4000",
+      "registers": [
+        {
+          "name": "PCR",
+          "offset": "0x0",
+          "width": 4,
+          "reset": "0x0",
+          "writable_mask": "0xffffffff",
+          "on_write": [
+            { "mask": "0x0", "equals": "0x0", "target": "0x4", "set": "0x1" }
+          ]
+        },
+        { "name": "PSR", "offset": "0x4", "width": 4, "reset": "0x1", "writable_mask": "0x0" }
+      ]
+    },
+    {
+      "name": "gpio",
+      "base": "0xfc0a4000",
+      "size": "0x4000",
+      "registers": [
+        { "name": "PODR0", "offset": "0x0", "width": 1, "reset": "0x0", "writable_mask": "0xff" }
+      ]
+    }
+  ]
+}

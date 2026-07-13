@@ -550,7 +550,10 @@ Reset vector → startup.S → C firmware
 - Interrupt controllers (not timing-accurate in Quetz)
 - `-bios none` / `-kernel` loading
 
-**Quetz’s role:** Time the **memory hierarchy** for whatever loads/stores the plugin exports; **not** to replace platform devices.
+**Quetz’s role:** Time the **memory hierarchy** for whatever loads/stores the
+plugin exports; **not** to replace platform devices. The QEMU overlay also
+provides an opt-in functional MCF5208 BSP register-compatibility layer,
+separate from SST timing.
 
 ### 5.4 Firmware build flow
 
@@ -570,7 +573,7 @@ at addresses QEMU expects.
 | No fence/IO ordering | Weak memory effects not modeled beyond what memHierarchy provides |
 | Semihosting | ARM test exits via QEMU magic, not Quetz EXIT command |
 | Multi-core firmware | Limited tests; halt quorum handles EXIT per vCPU |
-| Board BSP init | Unmodeled SoC space is RAZ/WI: init hangs on status polls / silently loses writes — see SIMULATING-YOUR-SYSTEM.md § What works today |
+| Board BSP init | Native baseline is RAZ/WI. Discovery plus a reviewed MCF5208 compatibility profile can satisfy basic initialization, but not peripheral timing or data paths — see BSP-COMPATIBILITY.md |
 
 ---
 
@@ -712,13 +715,19 @@ quetz/
 │   ├── decoder_riscv.*                # RISC-V + RVC classifiers
 │   ├── decoder_aarch64.*              # AArch64 classifier
 │   └── decoder_generic.*              # Size-based fallback
+├── qemu-overlay/                       # Quetz QEMU sources and pinned patches
+│   ├── apply-qemu-overlay.sh           # Apply overlay to upstream QEMU
+│   ├── hw/misc/mcf_bsp_compat.c        # Profile-driven MCF5208 BSP registers
+│   └── hw/misc/sst_mmio_bridge.c       # Synchronous SST MMIO bridge
+├── profiles/mcf5208-init.json          # Example BSP compatibility profile
 ├── configure.m4 / Makefile.am
+├── BSP-COMPATIBILITY.md                # Private-BSP discovery/profile guide
 ├── GETTING-STARTED.md                 # Docker-only ColdFire V4 on-ramp
 ├── README.md                          # Reference (components, devices, env vars)
 ├── SIMULATING-YOUR-SYSTEM.md          # Embedded-system tutorial (limits first)
 ├── TESTING.md                         # Build + test workflow
 ├── QUETZ_OUTLINE.md                   # this file
-├── tools/                             # Fixture converters, serial feeder, stream dump
+├── tools/                             # Fixture tools + BSP trace/profile analyzer
 └── tests/
     ├── unit/                          # doctest units (decoders, IPC layout, kernels, ...)
     ├── usermode/                      # user-mode SDL + golds
@@ -727,4 +736,5 @@ quetz/
 
 ---
 
-*See `README.md`, `GETTING-STARTED.md`, and in-tree tests for current behavior.*
+*See `README.md`, `GETTING-STARTED.md`, `BSP-COMPATIBILITY.md`, and
+in-tree tests for current behavior.*

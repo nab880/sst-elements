@@ -11,7 +11,8 @@ mcf5208evb guest with a UART console, a data-stream peripheral, and an
 accelerator, ending the simulation PASS/FAIL via the TestFinisher sentinel.
 
 Read first: SIMULATING-YOUR-SYSTEM.md — especially what works today vs what
-doesn't (freestanding firmware yes; unmodified board BSPs not yet) and the
+doesn't (freestanding firmware and reviewed BSP profiles yes; peripheral
+timing/data paths only when explicitly modeled) and the
 supported-parts note. Docs for every register map: the quetz README.
 """
 

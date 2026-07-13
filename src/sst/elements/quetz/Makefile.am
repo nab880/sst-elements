@@ -166,8 +166,23 @@ check-quetz-integration:
 # make-dist tarball can run the quetz tests (mirrors the balar convention).
 # ---------------------------------------------------------------------------
 EXTRA_DIST =	GETTING-STARTED.md \
+	BSP-COMPATIBILITY.md \
 	QUETZ_OUTLINE.md \
 	README.md \
+	profiles/mcf5208-init.json \
+	qemu-overlay/apply-qemu-overlay.sh \
+	qemu-overlay/hw/misc/mcf_bsp_compat.c \
+	qemu-overlay/hw/misc/sst_mmio_bridge.c \
+	qemu-overlay/include/quetz/quetz_ipc_client.h \
+	qemu-overlay/include/quetz/quetz_ipc_types.h \
+	qemu-overlay/linux-user/sst_mmio.c \
+	qemu-overlay/linux-user/sst_mmio.h \
+	qemu-overlay/patches/hw-misc-meson.patch \
+	qemu-overlay/patches/linux-user-main.patch \
+	qemu-overlay/patches/linux-user-meson.patch \
+	qemu-overlay/patches/linux-user-signal.patch \
+	qemu-overlay/patches/qemu-options.def.patch \
+	qemu-overlay/quetz_ipc_client.c \
 	SIMULATING-YOUR-SYSTEM.md \
 	TESTING.md \
 	tests/.gitignore \
@@ -282,6 +297,7 @@ EXTRA_DIST =	GETTING-STARTED.md \
 	tests/sysmode/small/uart_echo/sst.stdout.gold \
 	tests/testsuite_default_quetz.py \
 	tools/check_nmea.py \
+	tools/bsp_profile.py \
 	tools/dump_stream.py \
 	tools/make_stream.py \
 	tools/serial_feeder.py \
@@ -298,6 +314,7 @@ EXTRA_DIST =	GETTING-STARTED.md \
 	tests/unit/test_ipc_layout.cc \
 	tests/unit/test_mem_issue_split.cc \
 	tests/unit/test_balar_flush_range.cc \
+	tests/unit/test_bsp_profile.py \
 	tests/unit/test_quetz_config.cc \
 	tests/unit/test_region_table.cc \
 	tests/unit/test_smoke.cc \

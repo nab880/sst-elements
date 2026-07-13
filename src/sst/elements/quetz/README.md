@@ -14,6 +14,10 @@ New here and just want to run your own ColdFire firmware? Start with
 [GETTING-STARTED.md](GETTING-STARTED.md) — a Docker-only walkthrough, no
 host SST/QEMU install needed.
 
+Using a private board BSP? See
+[BSP-COMPATIBILITY.md](BSP-COMPATIBILITY.md) for the discovery and reviewed
+register-profile workflow.
+
 ---
 
 ## How it works
@@ -55,11 +59,12 @@ Full detail in [SIMULATING-YOUR-SYSTEM.md](SIMULATING-YOUR-SYSTEM.md)
   instructions and devices return real data; all timing (memory path,
   device latency, IRQ delivery) is approximate. Assert function, never
   timing.
-- **Freestanding firmware or ported app + drivers — not board BSPs.**
-  QEMU's `mcf5208evb` reads unmodeled SoC space (PLL, SCM, WDT, GPIO, …)
-  as zero and ignores writes, so unmodified BSP init **hangs on status
-  polls and silently loses config writes** (it does not crash). Port the
-  application and its drivers onto the shipped startup scaffold instead.
+- **Freestanding firmware, or a profiled private BSP.** Native QEMU reads
+  unmodeled MCF5208 registers as zero and ignores writes. Quetz can discover
+  the exact register shapes used by a BSP binary and apply a reviewed,
+  opt-in compatibility profile for initialization. This validates basic
+  program behavior, not peripheral timing or physical I/O. See
+  [BSP-COMPATIBILITY.md](BSP-COMPATIBILITY.md).
 - **One ColdFire machine.** `mcf5208evb` is the reference vehicle;
   other family parts map onto it via linker script + deck env (memory
   map, UART base, INTC lines). ColdFire V4 targets are assessed and
@@ -417,6 +422,23 @@ contract for `window_big_endian` / `data_big_endian`.
 0, so SMP guests would race the sync-MMIO path. Use user mode for
 multi-threaded workloads.
 
+**Private BSP compatibility.** In discovery mode, QEMU's
+`mcf-bsp-compat` device logs accesses to otherwise-unmodeled MCF5208 blocks
+while preserving read-as-zero/write-ignored behavior. The postprocessor
+identifies likely poll loops and write/readback mismatches and creates an
+inert profile skeleton. A reviewed version-1 profile can then provide sparse
+register state, status values, read sequences, W1C/W1S behavior, and simple
+same-block write triggers.
+
+Use `quetz-run --bsp-discover` and `--bsp-profile FILE`; the native QEMU
+baseline is unchanged when neither option is present. Profiles cannot
+overlap QEMU-native devices and do not model timing, transfers, pin
+stimulus, DMA, or watchdog reset. The complete workflow and schema are in
+[BSP-COMPATIBILITY.md](BSP-COMPATIBILITY.md).
+
+The Quetz-specific QEMU sources and patches live in `qemu-overlay/`; the
+Docker build copies that directory into the pinned upstream QEMU source tree.
+
 ---
 
 ## MMIO device components
@@ -607,6 +629,10 @@ The component contract is its SST params; these env vars configure the
 | `QUETZ_IRQ_LINES` | >0 enables bridge IRQ polling for lines [0, n) |
 | `QUETZ_IRQ_POLL_NS` | Bridge IRQ poll period in virtual-time ns (default 10000) |
 | `QUETZ_IRQ_INTC_TYPE` | QOM type of the interrupt controller (default `mcf-intc`) |
+| `QUETZ_BSP_DISCOVER=1` | Map and log supported unmodeled MCF5208 register blocks (system mode only) |
+| `QUETZ_BSP_PROFILE` | Version-1 BSP compatibility profile path (system mode only) |
+| `QUETZ_BSP_TARGET` | BSP profile target; currently `mcf5208` |
+| `QUETZ_BSP_LOG` | Raw BSP MMIO JSONL output path |
 
 Everything else `QUETZ_*` (e.g. `QUETZ_EXE`, `QUETZ_QEMU`,
 `QUETZ_SENSOR_FILE`, `QUETZ_SINK_FILE`, `QUETZ_GPU_IRQ_LINE`,

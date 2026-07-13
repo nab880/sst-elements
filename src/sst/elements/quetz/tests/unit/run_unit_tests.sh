@@ -73,3 +73,6 @@ for t in "${TESTS[@]}"; do
     "${BUILD_DIR}/${t}"
 done
 echo "=== All Quetz unit tests passed ==="
+
+echo "=== BSP profile tool tests ==="
+python3 "${UNIT_DIR}/test_bsp_profile.py"

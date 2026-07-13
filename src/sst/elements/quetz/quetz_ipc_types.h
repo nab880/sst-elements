@@ -96,7 +96,7 @@ static constexpr unsigned QUETZ_MAX_MMIO_VCORES = 256;
 // raised for as long as unconsumed work exists and lower it only when the
 // guest has acked everything (see QuetzGpuDevice::ackIrq's event counting) —
 // under that discipline the collapsed observation is always the correct one.
-// Keep in sync with quetz-docker/qemu-overlay/include/quetz/quetz_ipc_types.h.
+// Keep in sync with qemu-overlay/include/quetz/quetz_ipc_types.h.
 static constexpr unsigned QUETZ_MAX_IRQ_LINES = 64;
 
 struct QuetzIrqSlot {

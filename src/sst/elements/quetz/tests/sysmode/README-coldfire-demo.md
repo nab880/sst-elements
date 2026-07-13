@@ -205,7 +205,7 @@ is unchanged (`correct=256/256`); RISC-V is unaffected — a guest still on the
 spin build simply ignores the extra wake (no-op on a word no one waits on).
 
 > **Rebuild note.** The wait lives in the QEMU bridge
-> (`quetz-docker/qemu-overlay/quetz_ipc_client.c`), so the futex path needs
+> (`sst-elements/src/sst/elements/quetz/qemu-overlay/quetz_ipc_client.c`), so the futex path needs
 > `qemu-system-*` rebuilt from the overlay; the wake lives in `quetz_mmio_sync.h`
 > (rebuilt with the quetz element).
 

@@ -41,7 +41,7 @@ TEST_CASE("QuetzSharedData layout") {
 }
 
 // The IRQ mailbox layout is shared with the QEMU overlay's C mirror
-// (quetz-docker/qemu-overlay/include/quetz/quetz_ipc_types.h) — these pins
+// (qemu-overlay/include/quetz/quetz_ipc_types.h) — these pins
 // catch a drift between the two copies.
 TEST_CASE("QuetzIrqSlot layout") {
     using SST::Quetz::QuetzIrqSlot;

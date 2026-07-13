@@ -2134,7 +2134,7 @@ class testcase_quetz_sysmode(SSTTestCase):
         status polls and silently lose config writes rather than crash. This
         test pins that behavior; if a QEMU bump starts faulting or returning
         live values in these ranges, the BSP-honesty docs and mitigations
-        need revisiting (see the porting guidance in SIMULATING-YOUR-SYSTEM.md)."""
+        need revisiting (see BSP-COMPATIBILITY.md)."""
         test_path = self.get_testsuite_dir()
         sst_prefix, sst_bindir, sst_libexec = sst_paths()
 
@@ -2192,6 +2192,53 @@ class testcase_quetz_sysmode(SSTTestCase):
             "status-poll behavior changed (a poll that used to hang now exits)")
         self.assertIn("TESTFINISH[0]", raw,
             "TestFinisher sentinel not triggered; sim may have hung")
+
+    # -------------------------------------------------------------------------
+    def test_quetz_coldfire_bsp_compat_profile(self):
+        """An opt-in profile can satisfy BSP polls/readback without source edits."""
+        test_path = self.get_testsuite_dir()
+        sst_prefix, sst_bindir, sst_libexec = sst_paths()
+
+        import shutil
+        qemu_bin = os.path.join(sst_bindir, "qemu-system-m68k")
+        if not os.path.exists(qemu_bin):
+            qemu_bin = shutil.which("qemu-system-m68k") or qemu_bin
+        if not os.path.exists(qemu_bin):
+            self.skipTest("qemu-system-m68k not found")
+        exe_abs = os.path.join(test_path, "sysmode/firmware/bsp_torture")
+        profile = os.path.normpath(os.path.join(
+            test_path, "../profiles/mcf5208-init.json"))
+        if not os.path.exists(exe_abs):
+            self.skipTest("bsp_torture firmware not found")
+
+        outdir = os.path.join(self.get_test_output_run_dir(),
+                              "quetz_sysmode_tests", "bsp_compat")
+        os.makedirs(outdir, exist_ok=True)
+        make_sysmode_env(sst_prefix, sst_libexec, qemu_bin, exe_abs,
+                         "-machine mcf5208evb -display none -serial stdio -m 128M",
+                         "-kernel", 0x40000000, 0x47FFFFFF,
+                         [("uart0", 0xFC060000, 0xFC0600FF, "uart", {"tx_offset": 12}),
+                          ("finish", 0x80000000, 0x80000003, "testfinish"),
+                          ("ips", 0xFC000000, 0xFCFFFFFF, "filtered"),
+                          ("low", 0x00000000, 0x3FFFFFFF, "filtered"),
+                          ("high", 0x48000000, 0xFBFFFFFF, "filtered")])
+        os.environ["QUETZ_BSP_PROFILE"] = profile
+        os.environ["QUETZ_BSP_TARGET"] = "mcf5208"
+        os.environ["QUETZ_BSP_LOG"] = os.path.join(outdir, "bsp-mmio.jsonl")
+
+        sdlfile = os.path.join(test_path, "sysmode", "basic_quetz_sysmode.py")
+        outfile = os.path.join(outdir, "bsp_compat.out")
+        errfile = os.path.join(outdir, "bsp_compat.err")
+        self.run_sst(sdlfile, outfile, errfile,
+                     mpi_out_files=os.path.join(outdir, "bsp_compat.testfile"),
+                     set_cwd=outdir, timeout_sec=180)
+        with open(outfile, "r") as stream:
+            raw = stream.read()
+        self.assertNotIn("FATAL", raw)
+        self.assertIn("gpio write/readback: wrote 5a, read=0x0000005a (stored)", raw)
+        self.assertIn("pll lock poll: satisfied after", raw)
+        self.assertIn("TESTFINISH[0]", raw)
+        self.assertTrue(os.path.getsize(os.environ["QUETZ_BSP_LOG"]) > 0)
 
     # -------------------------------------------------------------------------
     def test_quetz_coldfire_accel_scale(self):
@@ -2867,7 +2914,8 @@ class testcase_quetz_p6_usermode(SSTTestCase):
             blob = ""
         if "sst-mmio-range" not in blob:
             self.skipTest("{} lacks -sst-mmio-range (rebuild via "
-                          "qemu-overlay/apply-qemu-overlay.sh); skipping".format(target))
+                          "sst-elements/src/sst/elements/quetz/qemu-overlay/"
+                          "apply-qemu-overlay.sh); skipping".format(target))
 
     def _common_env(self, qemu_bin, exe_abs):
         sst_prefix, _, sst_libexec = sst_paths()
