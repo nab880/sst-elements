@@ -144,13 +144,18 @@ static void wait_slot(QuetzSharedData *sd, unsigned vcpu, uint64_t *out)
      * if ready != 0; the 1ms timeout is a safety re-poll so a missed wake
      * self-heals instead of hanging. The futex word lives in cross-process shmem. */
     uint32_t *ready = (uint32_t *)&sd->mmio_slot[vcpu].ready;
-    while (*ready == 0) {
+    /* Acquire-load pairs with the producer's release-store of `ready` (SST
+     * postResponse), so observing ready!=0 happens-before reading `value`.
+     * A plain load lets the value read float above the flag on weak-memory
+     * hosts (e.g. ARM), yielding a stale MMIO result; x86-TSO hides it. */
+    while (__atomic_load_n(ready, __ATOMIC_ACQUIRE) == 0) {
         struct timespec ts = { 0, 1000000 };
         syscall(SYS_futex, ready, FUTEX_WAIT, 0, &ts, NULL, 0);
     }
     *out = sd->mmio_slot[vcpu].value;
-    sd->mmio_slot[vcpu].ready = 0;
-    __sync_synchronize();
+    /* Release-store the clear so the producer only reuses the slot after our
+     * value read above has completed. */
+    __atomic_store_n(ready, 0u, __ATOMIC_RELEASE);
 }
 
 uint64_t quetz_ipc_mmio_read(QuetzIpcClient *client, unsigned vcpu,

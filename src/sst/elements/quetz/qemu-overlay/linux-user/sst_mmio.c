@@ -155,7 +155,12 @@ static int decode_ldst(uint32_t insn, int *is_store, unsigned *size,
 static int m68k_ea_extlen(unsigned mode, unsigned reg)
 {
     switch (mode) {
-    case 2: case 3: case 4: return 0;   /* (An), (An)+, -(An)        */
+    case 2: return 0;                   /* (An)                      */
+    /* (An)+ / -(An) also carry no extension words, but servicing them means
+     * writing the incremented/decremented An back — which the fault handler
+     * does not do (it only advances PC). Rejecting here makes such an access
+     * fall through to the normal SEGV path instead of silently corrupting An. */
+    case 3: case 4: return -1;          /* (An)+, -(An): unsupported */
     case 5: return 2;                   /* (d16,An)                  */
     case 6: return 2;                   /* (d8,An,Xn) brief ext      */
     case 7:
