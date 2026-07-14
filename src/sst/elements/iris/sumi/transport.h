@@ -60,6 +60,7 @@ Questions? Contact sst-macro-help@sandia.gov
 #include <iris/sumi/options.h>
 #include <iris/sumi/communicator_fwd.h>
 
+#include <functional>
 #include <unordered_map>
 #include <queue>
 
@@ -533,6 +534,21 @@ class CollectiveEngine
 
   CollectiveDoneMessage* deliverPending(Collective* coll, int tag, Collective::type_t ty);
 
+  // Name of the algorithm selected for op `ty` (Python param > SUMI_<OP>_ALG
+  // env > ""), resolved once at construction. Empty means "use built-in".
+  std::string engineAlgName(Collective::type_t ty) const;
+
+  // Start collective op `ty`. If a user algorithm is selected for the op (see
+  // engineAlgName), build it from the registry and start it — the override is
+  // a flat single-DAG choice that always wins, even when startCollective()
+  // returns nullptr because the collective is still in flight (the common
+  // async, multi-rank case). Otherwise start the built-in default collective
+  // constructed by makeDefault.
+  CollectiveDoneMessage* startCollectiveOp(Collective::type_t ty,
+      void* dst, void* src, int root, int nelems, int type_size, int tag,
+      int cq_id, reduce_fxn fxn, Communicator* comm,
+      const std::function<Collective*()>& makeDefault);
+
  private:
   Transport* tport_;
 
@@ -559,6 +575,9 @@ class CollectiveEngine
 
   std::string alltoall_type_;
   std::string allgather_type_;
+
+  // Per-op user-selected algorithm names (see engineAlgName).
+  spkt_enum_map<Collective::type_t, std::string> alg_names_;
 
   int rdma_header_qos_;
   int rdma_get_qos_;

@@ -2,7 +2,7 @@
 #
 #
 
-ext_LTLIBRARIES = libmask_mpi.la libsendrecv.la libreduce.la liballtoall.la liballgather.la libhalo3d26.la
+ext_LTLIBRARIES = libmask_mpi.la libsendrecv.la libreduce.la liballreduce.la liballtoall.la liballgather.la libhalo3d26.la
 extdir = $(pkglibdir)/ext
 
 AM_CPPFLAGS += -I$(top_srcdir)/src/sst/elements
@@ -80,6 +80,7 @@ library_include_HEADERS = \
 
 libsendrecv_la_SOURCES = tests/sendrecv.cc
 libreduce_la_SOURCES = tests/reduce.cc
+liballreduce_la_SOURCES = tests/allreduce.cc
 liballtoall_la_SOURCES = tests/alltoall.cc
 liballgather_la_SOURCES = tests/allgather.cc
 libhalo3d26_la_SOURCES = skeletons/halo3d-26.cc
@@ -88,11 +89,13 @@ EXTRA_DIST = \
  tests/testsuite_default_mask_mpi.py \
  tests/platform_file_mask_mpi_test.py \
  tests/test_reduce.py \
+ tests/test_allreduce.py \
  tests/test_sendrecv.py \
  tests/test_alltoall.py \
  tests/test_allgather.py \
  tests/test_halo3d26.py \
  tests/refFiles/test_reduce.out \
+ tests/refFiles/test_allreduce.out \
  tests/refFiles/test_sendrecv.out \
  tests/refFiles/test_alltoall.out \
  tests/refFiles/test_allgather.out \
@@ -101,6 +104,7 @@ EXTRA_DIST = \
 libmask_mpi_la_LDFLAGS = -module -avoid-version
 libsendrecv_la_LDFLAGS = -module -avoid-version
 libreduce_la_LDFLAGS = -module -avoid-version
+liballreduce_la_LDFLAGS = -module -avoid-version
 liballtoall_la_LDFLAGS = -module -avoid-version
 liballgather_la_LDFLAGS = -module -avoid-version
 libhalo3d26_la_LDFLAGS = -module -avoid-version
