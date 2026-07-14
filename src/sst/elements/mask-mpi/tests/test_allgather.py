@@ -28,6 +28,7 @@ if __name__ == "__main__":
         "verbose" : "0",
         "app1.name" : "allgather",
         "app1.exe_library_name" : "allgather",
+        "app1.allgather_alg" : "ring",
         "app1.dependencies" : ["sumi", ],
         "app1.libraries" : ["computelibrary:ComputeLibrary",
                             "mask_mpi:MpiApi",],

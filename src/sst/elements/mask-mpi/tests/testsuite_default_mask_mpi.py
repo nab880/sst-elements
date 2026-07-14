@@ -29,6 +29,34 @@ class testcase_mask_mpi(SSTTestCase):
     def test_allreduce(self):
         self.mask_mpi_template("test_allreduce")
 
+    def test_ring_allreduce(self):
+        self.mask_mpi_template("test_ring_allreduce")
+
+    def test_bad_collective_alg_param(self):
+        test_path = self.get_testsuite_dir()
+        outdir = self.get_test_output_run_dir()
+        outfile = os.path.join(outdir, "test_bad_collective_alg_param.out")
+        errfile = os.path.join(outdir, "test_bad_collective_alg_param.err")
+        old_alg = os.environ.get("ALG")
+        old_param = os.environ.get("ALG_PARAM")
+        os.environ["ALG"] = "ring"
+        os.environ["ALG_PARAM"] = "allredcue_alg"
+        try:
+            self.run_sst(os.path.join(test_path, "test_allreduce.py"),
+                         outfile, errfile, set_cwd=test_path, expected_rc=1)
+        finally:
+            if old_alg is None:
+                os.environ.pop("ALG", None)
+            else:
+                os.environ["ALG"] = old_alg
+            if old_param is None:
+                os.environ.pop("ALG_PARAM", None)
+            else:
+                os.environ["ALG_PARAM"] = old_param
+        with open(errfile) as error_file:
+            self.assertIn("unknown collective algorithm parameter "
+                          "'allredcue_alg'", error_file.read())
+
     def test_alltoall(self):
         self.mask_mpi_template("test_alltoall")
 

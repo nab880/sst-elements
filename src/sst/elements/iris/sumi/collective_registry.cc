@@ -14,29 +14,18 @@
 // distribution.
 
 #include <iris/sumi/collective_registry.h>
-#include <map>
-#include <utility>
+#include <sst/core/factory.h>
 
 namespace SST::Iris::sumi {
 
 namespace {
-using RegistryKey = std::pair<Collective::type_t, std::string>;
-using RegistryMap = std::map<RegistryKey, CollectiveFactory>;
-
-// Function-local static: single table shared across every translation unit and
-// across a dlopen'd plugin resolved RTLD_GLOBAL into libsumi.
-RegistryMap& registry()
+std::string eliName(Collective::type_t ty, const std::string& name)
 {
-  static RegistryMap the_registry;
-  return the_registry;
+  auto dot = name.find('.');
+  std::string lib = dot == std::string::npos ? "iris" : name.substr(0, dot);
+  std::string alg = dot == std::string::npos ? name : name.substr(dot + 1);
+  return lib + "." + Collective::tostr(ty) + "." + alg;
 }
-}
-
-void
-CollectiveRegistry::reg(Collective::type_t ty, const std::string& name,
-                        CollectiveFactory factory)
-{
-  registry()[RegistryKey(ty, name)] = std::move(factory);
 }
 
 Collective*
@@ -44,16 +33,18 @@ CollectiveRegistry::make(Collective::type_t ty, const std::string& name,
                          const CollectiveFactoryArgs& args)
 {
   if (name.empty()) return nullptr;
-  auto it = registry().find(RegistryKey(ty, name));
-  if (it == registry().end()) return nullptr;
-  return it->second(args);
+  auto type = eliName(ty, name);
+  auto* factory = SST::Factory::getFactory();
+  if (!factory->isSubComponentLoadableUsingAPI<Collective>(type)) return nullptr;
+  return factory->Create<Collective>(type, args);
 }
 
 bool
 CollectiveRegistry::has(Collective::type_t ty, const std::string& name)
 {
   if (name.empty()) return false;
-  return registry().count(RegistryKey(ty, name)) != 0;
+  return SST::Factory::getFactory()
+      ->isSubComponentLoadableUsingAPI<Collective>(eliName(ty, name));
 }
 
 }

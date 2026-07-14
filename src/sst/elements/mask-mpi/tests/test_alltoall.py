@@ -28,6 +28,7 @@ if __name__ == "__main__":
         "verbose" : "0",
         "app1.name" : "alltoall",
         "app1.exe_library_name" : "alltoall",
+        "app1.alltoall_alg" : "direct",
         "app1.dependencies" : ["sumi", ],
         "app1.libraries" : ["computelibrary:ComputeLibrary",
                             "mask_mpi:MpiApi",],

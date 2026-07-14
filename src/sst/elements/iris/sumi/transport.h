@@ -538,6 +538,10 @@ class CollectiveEngine
   // env > ""), resolved once at construction. Empty means "use built-in".
   std::string engineAlgName(Collective::type_t ty) const;
 
+  Collective* makeRegisteredCollective(Collective::type_t ty,
+      void* dst, void* src, int root, int nelems, int type_size, int tag,
+      int cq_id, reduce_fxn fxn, Communicator* comm, const char* fallback_alg);
+
   // Start collective op `ty`. If a user algorithm is selected for the op (see
   // engineAlgName), build it from the registry and start it — the override is
   // a flat single-DAG choice that always wins, even when startCollective()
@@ -573,11 +577,12 @@ class CollectiveEngine
 
   int system_collective_tag_;
 
-  std::string alltoall_type_;
-  std::string allgather_type_;
-
   // Per-op user-selected algorithm names (see engineAlgName).
   spkt_enum_map<Collective::type_t, std::string> alg_names_;
+
+  // One-shot flag for the allreduce() warning that a selected algorithm
+  // overrides the SMP-hierarchical composition.
+  bool warned_smp_alg_override_;
 
   int rdma_header_qos_;
   int rdma_get_qos_;

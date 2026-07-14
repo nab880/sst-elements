@@ -86,20 +86,6 @@ class HgNIC(TemplateBase):
         nic.addGlobalParamSet("params_%s"%self._instance_name)
         return nic
 
-# Params selecting a per-op collective algorithm (e.g. app1.allreduce_alg).
-# Must match the alg_keys table in iris/sumi/sim_transport.cc: a param_key
-# listed there but missing here is silently dropped by addParam before it
-# reaches the engine (TemplateBase.addParam swallows the KeyError).
-_collective_alg_params = [
-    "allreduce_alg",
-    "reduce_alg",
-    "bcast_alg",
-    "reduce_scatter_alg",
-    "scan_alg",
-    "gather_alg",
-    "scatter_alg",
-]
-
 class HgOS(TemplateBase):
 
     def __init__(self):
@@ -127,8 +113,14 @@ class HgOS(TemplateBase):
                                            "use_put_window",
                                            "compute_library_access_width",
                                            "compute_library_loop_overhead",
-                                          ] + _collective_alg_params,
+                                           # Forward deprecated names so C++ can
+                                           # report their replacements.
+                                           "allgather",
+                                           "alltoall",
+                                          ],
                                           "app1.")
+        self._declareFormattedParamsWithUserPrefix(
+            "params", "app1", [r"\w+_alg$"], "app1.")
         self._subscribeToPlatformParamSet("operating_system")
 
     def build(self,comp,slot):

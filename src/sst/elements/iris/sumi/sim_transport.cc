@@ -47,6 +47,8 @@
 #include <mercury/operating_system/process/app.h>
 #include <mercury/operating_system/launch/app_launcher.h>
 
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 using SST::Hg::TimeDelta;
@@ -473,21 +475,22 @@ SimTransport::freeWorkspace(void *buf, uint64_t /*size*/)
 }
 
 namespace {
-// Single source of truth for the registry-selectable ops: each op's Python
-// param key and env-var key. The ctor resolves algorithm names from this
-// table and startCollectiveOp's error message cites it. pymercury.py (HgOS)
-// must declare every param_key listed here — a key missing there is silently
-// dropped by addParam before it ever reaches the engine.
+// Registry-selectable operations and their configuration keys.
 struct AlgKeys {
   Collective::type_t type;
   const char* param_key;
   const char* env_key;
 };
 constexpr AlgKeys alg_keys[] = {
+  { Collective::allgather,      "allgather_alg",      "SUMI_ALLGATHER_ALG" },
   { Collective::allreduce,      "allreduce_alg",      "SUMI_ALLREDUCE_ALG" },
+  { Collective::alltoall,       "alltoall_alg",       "SUMI_ALLTOALL_ALG" },
   { Collective::reduce,         "reduce_alg",         "SUMI_REDUCE_ALG" },
   { Collective::bcast,          "bcast_alg",          "SUMI_BCAST_ALG" },
-  { Collective::reduce_scatter, "reduce_scatter_alg", "SUMI_REDUCE_SCATTER_ALG" },
+  // reduce_scatter is deliberately absent: no algorithm is registered yet
+  // (the built-in HalvingReduceScatter is an abort stub), so advertising a
+  // key would offer a param whose every value aborts. Restore the row when
+  // a real implementation registers itself.
   { Collective::scan,           "scan_alg",           "SUMI_SCAN_ALG" },
   { Collective::gather,         "gather_alg",         "SUMI_GATHER_ALG" },
   { Collective::scatter,        "scatter_alg",        "SUMI_SCATTER_ALG" },
@@ -500,6 +503,31 @@ const AlgKeys* algKeysFor(Collective::type_t ty)
   return nullptr;
 }
 
+const AlgKeys* algKeysForParam(const std::string& param)
+{
+  for (const auto& k : alg_keys)
+    if (param == k.param_key) return &k;
+  return nullptr;
+}
+
+void validateAlgParams(SST::Params& params)
+{
+  for (const auto& key : params.getKeys()){
+    bool is_alg = key.size() >= 4 &&
+                  key.compare(key.size() - 4, 4, "_alg") == 0;
+    if (is_alg && !algKeysForParam(key)){
+      std::string supported;
+      for (const auto& k : alg_keys){
+        if (!supported.empty()) supported += ", ";
+        supported += k.param_key;
+      }
+      sst_hg_abort_printf("unknown collective algorithm parameter '%s'; "
+                          "supported parameters: %s",
+                          key.c_str(), supported.c_str());
+    }
+  }
+}
+
 // Resolve an op's algorithm name: Python param wins, else SUMI_<OP>_ALG env,
 // else empty ("use built-in default").
 std::string resolveAlgName(SST::Params& params, const char* param_key,
@@ -507,7 +535,7 @@ std::string resolveAlgName(SST::Params& params, const char* param_key,
 {
   std::string v = params.find<std::string>(param_key, "");
   if (!v.empty()) return v;
-  const char* e = getenv(env_key);
+  const char* e = std::getenv(env_key);
   if (e && *e) return std::string(e);
   return std::string();
 }
@@ -529,13 +557,21 @@ CollectiveEngine::CollectiveEngine(SST::Params& params, Transport *tport) :
   global_domain_(nullptr),
   eager_cutoff_(512),
   use_put_protocol_(false),
-  system_collective_tag_(-1) //negative tags reserved for special system work
+  system_collective_tag_(-1), //negative tags reserved for special system work
+  warned_smp_alg_override_(false)
 {
   global_domain_ = new GlobalCommunicator(tport);
   eager_cutoff_ = params.find<int>("eager_cutoff", 512);
   use_put_protocol_ = params.find<bool>("use_put_protocol", false);
-  alltoall_type_ = params.find<std::string>("alltoall", "bruck");
-  allgather_type_ = params.find<std::string>("allgather", "bruck");
+  validateAlgParams(params);
+  if (params.contains("allgather")){
+    sst_hg_abort_printf("parameter 'allgather' is no longer supported; "
+                        "use 'allgather_alg' instead");
+  }
+  if (params.contains("alltoall")){
+    sst_hg_abort_printf("parameter 'alltoall' is no longer supported; "
+                        "use 'alltoall_alg' instead");
+  }
 
   // Per-op algorithm selection for the registry-driven ops. Param "<op>_alg"
   // (e.g. allreduce_alg=ring) wins over env SUMI_<OP>_ALG; empty => built-in.
@@ -561,6 +597,28 @@ CollectiveEngine::engineAlgName(Collective::type_t ty) const
   return it == alg_names_.end() ? std::string() : it->second;
 }
 
+Collective*
+CollectiveEngine::makeRegisteredCollective(Collective::type_t ty,
+    void* dst, void* src, int root, int nelems, int type_size, int tag,
+    int cq_id, reduce_fxn fxn, Communicator* comm, const char* fallback_alg)
+{
+  std::string alg = engineAlgName(ty);
+  if (alg.empty() && fallback_alg) alg = fallback_alg;
+  if (alg.empty()) {
+    sst_hg_abort_printf("no algorithm selected for collective '%s'",
+                        Collective::tostr(ty));
+  }
+  auto args = makeArgs(this, dst, src, root, nelems, type_size, tag, cq_id, fxn, comm);
+  Collective* c = CollectiveRegistry::make(ty, alg, args);
+  if (!c){
+    const AlgKeys* keys = algKeysFor(ty);
+    sst_hg_abort_printf("unknown %s algorithm '%s' (param %s / env %s)",
+                        Collective::tostr(ty), alg.c_str(),
+                        keys ? keys->param_key : "?", keys ? keys->env_key : "?");
+  }
+  return c;
+}
+
 CollectiveDoneMessage*
 CollectiveEngine::startCollectiveOp(Collective::type_t ty,
     void* dst, void* src, int root, int nelems, int type_size, int tag,
@@ -569,14 +627,8 @@ CollectiveEngine::startCollectiveOp(Collective::type_t ty,
 {
   std::string alg = engineAlgName(ty);
   if (!alg.empty()){
-    auto args = makeArgs(this, dst, src, root, nelems, type_size, tag, cq_id, fxn, comm);
-    Collective* c = CollectiveRegistry::make(ty, alg, args);
-    if (!c){
-      const AlgKeys* keys = algKeysFor(ty);
-      sst_hg_abort_printf("unknown %s algorithm '%s' (param %s / env %s)",
-                          Collective::tostr(ty), alg.c_str(),
-                          keys ? keys->param_key : "?", keys ? keys->env_key : "?");
-    }
+    Collective* c = makeRegisteredCollective(ty, dst, src, root, nelems,
+        type_size, tag, cq_id, fxn, comm, nullptr);
     // Override selected: this is a flat single-DAG choice that always wins,
     // even when startCollective() returns nullptr because the collective is
     // still in flight (the common async, multi-rank case) — we must not fall
@@ -646,7 +698,17 @@ CollectiveEngine::allreduce(void* dst, void *src, int nelems, int type_size, int
   if (!comm) comm = global_domain_;
 
   // A user-selected algorithm is a flat single-DAG choice: it overrides the
-  // SMP-hierarchical composition below.
+  // SMP-hierarchical composition below. Warn once (rank 0) so a study on an
+  // smp-optimized platform is not silently flattened.
+  if (comm->smpComm() && !warned_smp_alg_override_ &&
+      !engineAlgName(Collective::allreduce).empty()){
+    warned_smp_alg_override_ = true;
+    if (tport_->rank() == 0){
+      fprintf(stderr, "warning: allreduce_alg=%s overrides the SMP-hierarchical "
+              "allreduce composition; running a flat DAG over all %d ranks\n",
+              engineAlgName(Collective::allreduce).c_str(), comm->nproc());
+    }
+  }
   return startCollectiveOp(Collective::allreduce, dst, src, 0, nelems, type_size, tag, cq_id, fxn, comm,
       [&]() -> Collective* {
     if (!comm->smpComm()){
@@ -802,21 +864,12 @@ CollectiveEngine::alltoall(void *dst, void *src, int nelems, int type_size, int 
 
     BtreeGather* intra = new BtreeGather(this, 0, intraDst, src, smpSize*nelems,
                                          type_size, intra_tag, cq_id, comm->smpComm());
-    DagCollective* prev;
+    Collective* prev;
     if (comm->ownerComm()){
       int inter_tag = 2<<28 | tag;
-      AllToAllCollective* inter;
-      if (alltoall_type_ == "bruck") {
-        inter = (AllToAllCollective*) new BruckAlltoallCollective(this, dst, intraDst,
-                                                             smpSize*nelems, type_size, inter_tag, cq_id, comm->ownerComm());
-      }
-      else if (alltoall_type_ == "direct") {
-        inter = (AllToAllCollective*) new DirectAlltoallCollective(this, dst, intraDst, smpSize*nelems,
-                                                              type_size, inter_tag, cq_id, comm->ownerComm());
-      }
-      else {
-        sst_hg_abort_printf("unrecognized alltoall type");
-      }
+      Collective* inter = makeRegisteredCollective(Collective::alltoall,
+          dst, intraDst, 0, smpSize*nelems, type_size, inter_tag, cq_id,
+          nullptr, comm->ownerComm(), "bruck");
       intra->setSubsequent(inter);
       prev = inter;
     } else {
@@ -831,20 +884,10 @@ CollectiveEngine::alltoall(void *dst, void *src, int nelems, int type_size, int 
     bcast->setSubsequent(final);
     return startCollective(intra);
   } else {
-    AllToAllCollective* coll;
-    if (alltoall_type_ == "bruck") {
-      coll = (AllToAllCollective*) new BruckAlltoallCollective(this, dst, src, nelems, type_size, tag, cq_id, comm);
-    }
-    else if (alltoall_type_ == "direct") {
-      coll = (AllToAllCollective*) new DirectAlltoallCollective(this, dst, src, nelems,
-                                                            type_size, tag, cq_id, comm);
-    }
-    else {
-      sst_hg_abort_printf("unrecognized alltoall type");
-    }
+    Collective* coll = makeRegisteredCollective(Collective::alltoall,
+        dst, src, 0, nelems, type_size, tag, cq_id, nullptr, comm, "bruck");
     return startCollective(coll);
   }
-  return nullptr;
 }
 
 CollectiveDoneMessage*
@@ -874,34 +917,16 @@ CollectiveEngine::allgather(void *dst, void *src, int nelems, int type_size, int
 
     int intra_tag = 1<<28 | tag;
 
-    AllgatherCollective* intra;
-    if (allgather_type_ == "bruck") {
-      intra = (AllgatherCollective*) new BruckAllgatherCollective(this, intraDst, src, nelems, type_size,
-                                                                intra_tag, cq_id, comm->smpComm());
-    }
-    else if (allgather_type_ == "ring") {
-      intra = (AllgatherCollective*) new RingAllgatherCollective(this, intraDst, src, nelems, type_size,
-                                                                intra_tag, cq_id, comm->smpComm());
-    }
-    else {
-      sst_hg_abort_printf("unrecognized allgather type");
-    }
+    Collective* intra = makeRegisteredCollective(Collective::allgather,
+        intraDst, src, 0, nelems, type_size, intra_tag, cq_id, nullptr,
+        comm->smpComm(), "bruck");
 
-    DagCollective* prev;
+    Collective* prev;
     if (comm->ownerComm()){
       int inter_tag = 2<<28 | tag;
-      AllgatherCollective* inter;
-      if (allgather_type_ == "bruck") {
-        intra = (AllgatherCollective*) new BruckAllgatherCollective(this, dst, intraDst, smpSize*nelems, type_size,
-                                                                  inter_tag, cq_id, comm->ownerComm());
-      }
-      else if (allgather_type_ == "ring") {
-        intra = (AllgatherCollective*) new RingAllgatherCollective(this, dst, intraDst, smpSize*nelems, type_size,
-                                                                 inter_tag, cq_id, comm->ownerComm());
-      }
-      else {
-        sst_hg_abort_printf("unrecognized allgather type");
-      }
+      Collective* inter = makeRegisteredCollective(Collective::allgather,
+          dst, intraDst, 0, smpSize*nelems, type_size, inter_tag, cq_id,
+          nullptr, comm->ownerComm(), "bruck");
       intra->setSubsequent(inter);
       prev = inter;
     } else {
@@ -916,19 +941,10 @@ CollectiveEngine::allgather(void *dst, void *src, int nelems, int type_size, int
     return startCollective(intra);
   }
   else {
-    AllgatherCollective* coll;
-    if (allgather_type_ == "bruck") {
-      coll = (AllgatherCollective*) new BruckAllgatherCollective(this, dst, src, nelems, type_size, tag, cq_id, comm);
-    }
-    else if (allgather_type_ == "ring") {
-      coll = (AllgatherCollective*) new RingAllgatherCollective(this, dst, src, nelems, type_size, tag, cq_id, comm);
-    }
-    else {
-      sst_hg_abort_printf("unrecognized allgather type");
-    }
+    Collective* coll = makeRegisteredCollective(Collective::allgather,
+        dst, src, 0, nelems, type_size, tag, cq_id, nullptr, comm, "bruck");
     return startCollective(coll);
   }
-  return nullptr;
 }
 
 CollectiveDoneMessage*

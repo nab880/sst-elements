@@ -26,9 +26,8 @@ namespace SST::Iris::sumi {
 void
 RingAllreduceActor::finalizeBuffers()
 {
-  long buffer_size = static_cast<long>(nelems_) * type_size_; // widen before multiply, matches initBuffers
+  long buffer_size = static_cast<long>(nelems_) * type_size_;
   my_api_->freeWorkspace(recv_buffer_, buffer_size);
-  //send buffer aliases the result buffer
 }
 
 void
@@ -36,13 +35,10 @@ RingAllreduceActor::initBuffers()
 {
   void* dst = result_buffer_;
   void* src = send_buffer_;
-  long size = static_cast<long>(nelems_) * type_size_; // matches finalizeBuffers
+  long size = static_cast<long>(nelems_) * type_size_;
 
-  result_buffer_ = dst;
-  //work in place in the result buffer; copy src in first if distinct
   if (src != dst)
     my_api_->memcopy(dst, src, size);
-  //a temporary recv buffer to land each neighbour chunk before reduce/copy
   recv_buffer_ = my_api_->allocateWorkspace(size, src);
   send_buffer_ = result_buffer_;
 }
@@ -60,17 +56,13 @@ RingAllreduceActor::initDag()
     return;
   }
 
-  // The message-id codec (Action::messageId) is only invertible while the round
-  // index stays below max_round; the ring uses 2*(N-1) rounds, so the largest
-  // index is 2*(N-1)-1. Past max_round the round bleeds into the partner field
-  // and silently corrupts message matching.
   if (2 * (N - 1) > static_cast<int>(Action::max_round)){
     sst_hg_abort_printf("ring allreduce needs %d rounds but Action::max_round "
                         "is %u; raise max_round for nproc=%d",
                         2 * (N - 1), Action::max_round, N);
   }
 
-  // One chunk per rank; spread remainder over the first rem chunks.
+  // Spread remainder elements over the first chunks.
   std::vector<int> off(N), cnt(N);
   int base = nelems_ / N, rem = nelems_ % N, o = 0;
   for (int c = 0; c < N; ++c){
@@ -130,9 +122,9 @@ RingAllreduceActor::bufferAction(void *dst_buffer, void *msg_buffer, Action* ac)
 {
   int rnd = num_total_rounds_ ? (ac->round % num_total_rounds_) : 0;
   if (rnd < num_reducing_rounds_){
-    (fxn_)(dst_buffer, msg_buffer, ac->nelems);  // reduce-scatter
+    (fxn_)(dst_buffer, msg_buffer, ac->nelems);
   } else {
-    my_api_->memcopy(dst_buffer, msg_buffer, ac->nelems * type_size_); // all-gather
+    my_api_->memcopy(dst_buffer, msg_buffer, ac->nelems * type_size_);
   }
 }
 
