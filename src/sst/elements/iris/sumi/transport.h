@@ -278,6 +278,11 @@ class Transport {
     return engine_;
   }
 
+  // Ranks co-located on this node (empty unless smp_optimize found neighbors).
+  const std::set<int>& smpNeighbors() const {
+    return smp_neighbors_;
+  }
+
   virtual void logMessageDelay(Message *msg, uint64_t size, int stage,
                                SST::Hg::TimeDelta sync_delay, SST::Hg::TimeDelta active_delay,
                                SST::Hg::TimeDelta time_since_quiesce = SST::Hg::TimeDelta());
@@ -540,14 +545,11 @@ class CollectiveEngine
 
   Collective* makeRegisteredCollective(Collective::type_t ty,
       void* dst, void* src, int root, int nelems, int type_size, int tag,
-      int cq_id, reduce_fxn fxn, Communicator* comm, const char* fallback_alg);
+      int cq_id, reduce_fxn fxn, Communicator* comm,
+      const std::string& selected_alg, const char* fallback_alg,
+      const char* param_key = nullptr, const char* env_key = nullptr);
 
-  // Start collective op `ty`. If a user algorithm is selected for the op (see
-  // engineAlgName), build it from the registry and start it — the override is
-  // a flat single-DAG choice that always wins, even when startCollective()
-  // returns nullptr because the collective is still in flight (the common
-  // async, multi-rank case). Otherwise start the built-in default collective
-  // constructed by makeDefault.
+  // Start the selected registry implementation or the built-in default.
   CollectiveDoneMessage* startCollectiveOp(Collective::type_t ty,
       void* dst, void* src, int root, int nelems, int type_size, int tag,
       int cq_id, reduce_fxn fxn, Communicator* comm,
@@ -580,9 +582,12 @@ class CollectiveEngine
   // Per-op user-selected algorithm names (see engineAlgName).
   spkt_enum_map<Collective::type_t, std::string> alg_names_;
 
-  // One-shot flag for the allreduce() warning that a selected algorithm
-  // overrides the SMP-hierarchical composition.
-  bool warned_smp_alg_override_;
+  enum class AllreduceHierarchy { automatic, hierarchical, flat };
+  AllreduceHierarchy allreduce_hierarchy_;
+  bool warned_no_smp_hierarchy_;
+  std::string allreduce_intra_alg_;
+  std::string allreduce_inter_alg_;
+  std::string allreduce_bcast_alg_;
 
   int rdma_header_qos_;
   int rdma_get_qos_;

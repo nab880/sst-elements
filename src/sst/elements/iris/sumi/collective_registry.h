@@ -49,13 +49,13 @@ class CollectiveRegistry {
 };
 
 #define SUMI_REGISTER_COLLECTIVE_LIBRARY(TYPE, LIB, NAME, CLASS, ...)           \
-  class _SumiEli_##TYPE##_##CLASS : public CLASS {                              \
+  class SumiEli_##TYPE##_##CLASS : public CLASS {                               \
    public:                                                                       \
     SST_ELI_REGISTER_DERIVED(                                                    \
-      ::SST::Iris::sumi::Collective, _SumiEli_##TYPE##_##CLASS, LIB,            \
+      ::SST::Iris::sumi::Collective, SumiEli_##TYPE##_##CLASS, LIB,             \
       #TYPE "." NAME, SST_ELI_ELEMENT_VERSION(1, 0, 0),                         \
       #CLASS " collective algorithm")                                          \
-    explicit _SumiEli_##TYPE##_##CLASS(                                         \
+    explicit SumiEli_##TYPE##_##CLASS(                                          \
         const ::SST::Iris::sumi::CollectiveFactoryArgs& a)                      \
       : CLASS(__VA_ARGS__) {}                                                    \
   };

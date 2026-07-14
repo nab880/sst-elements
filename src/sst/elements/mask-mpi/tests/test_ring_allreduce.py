@@ -31,8 +31,7 @@ if __name__ == "__main__":
         "app1.dependencies" : ["sumi", ],
         "app1.libraries" : ["computelibrary:ComputeLibrary",
                             "mask_mpi:MpiApi",],
-        # Select the ring all-reduce (default is recursive doubling)
-        "app1.allreduce_alg" : "ring",
+        "app1.collective.allreduce" : "ring",
     })
 
     topo = topoSingle()

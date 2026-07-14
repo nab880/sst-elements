@@ -52,8 +52,8 @@ Questions? Contact sst-macro-help@sandia.gov
 
 // Each rank contributes values[i] = i + rank, so every rank's reduced array
 // holds size*i + size*(size-1)/2. test_ring_allreduce.py selects the ring via
-// app1.allreduce_alg; nelems does not divide evenly by the rank count, which
-// covers remainder chunk sizing.
+// app1.collective.allreduce. nelems does not divide evenly by the rank count,
+// covering remainder chunk sizing.
 int main(int argc, char* argv[])
 {
     MPI_Init(&argc, &argv);

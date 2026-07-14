@@ -46,7 +46,7 @@ Questions? Contact sst-macro-help@sandia.gov
 // each of N elements; the result in every element must be n(n+1)/2. Uses a
 // multi-element buffer so a reduce-scatter's per-rank chunking (and remainder
 // for non-power-of-2 rank counts) is exercised. The algorithm the engine runs
-// is selected via app1.allreduce_alg / SUMI_ALLREDUCE_ALG, so this app both
+// is selected via app1.collective.allreduce / SUMI_ALLREDUCE_ALG, so this app
 // checks correctness and, with a selected algorithm, proves the selection.
 
 #define ssthg_app_name allreduce

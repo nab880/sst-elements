@@ -92,6 +92,7 @@ EXTRA_DIST = \
  tests/test_reduce.py \
  tests/test_allreduce.py \
  tests/test_ring_allreduce.py \
+ tests/test_hierarchical_allreduce.py \
  tests/test_sendrecv.py \
  tests/test_alltoall.py \
  tests/test_allgather.py \
@@ -99,9 +100,16 @@ EXTRA_DIST = \
  tests/refFiles/test_reduce.out \
  tests/refFiles/test_allreduce.out \
  tests/refFiles/test_ring_allreduce.out \
+ tests/refFiles/test_hierarchical_allreduce.out \
+ tests/refFiles/test_hierarchical_allreduce_auto_smp.out \
+ tests/refFiles/test_hierarchical_allreduce_flat_smp.out \
+ tests/refFiles/test_hierarchical_allreduce_one_node.out \
+ tests/refFiles/test_hierarchical_allreduce_no_smp.out \
  tests/refFiles/test_sendrecv.out \
  tests/refFiles/test_alltoall.out \
+ tests/refFiles/test_direct_alltoall.out \
  tests/refFiles/test_allgather.out \
+ tests/refFiles/test_ring_allgather.out \
  tests/refFiles/test_halo3d26.out
 
 libmask_mpi_la_LDFLAGS = -module -avoid-version

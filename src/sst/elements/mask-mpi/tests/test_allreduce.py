@@ -33,12 +33,11 @@ if __name__ == "__main__":
         "app1.libraries" : ["computelibrary:ComputeLibrary",
                             "mask_mpi:MpiApi",],
     }
-    # Optional: select the sumi all-reduce algorithm via the Python param path
-    # (ALG env feeds it here). Empty => built-in default. The env var
-    # SUMI_ALLREDUCE_ALG also works and takes effect when this is unset.
+    # ALG feeds the Python parameter path; SUMI_ALLREDUCE_ALG remains the
+    # environment fallback when the parameter is unset.
     _alg = os.environ.get("ALG", "")
     if _alg:
-        _alg_param = os.environ.get("ALG_PARAM", "allreduce_alg")
+        _alg_param = os.environ.get("ALG_PARAM", "collective.allreduce")
         os_params["app1." + _alg_param] = _alg
     platform.addParamSet("operating_system", os_params)
 

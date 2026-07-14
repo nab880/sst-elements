@@ -24,7 +24,7 @@ namespace SST::Iris::sumi {
 
 // Ring all-reduce: reduce-scatter + all-gather over rank +/- 1.
 // Bandwidth-optimal counterpart to WilkeHalvingAllreduce; select via the
-// allreduce_alg parameter or SUMI_ALLREDUCE_ALG environment variable.
+// collective.allreduce parameter or SUMI_ALLREDUCE_ALG environment variable.
 class RingAllreduceActor :
   public DagCollectiveActor
 {

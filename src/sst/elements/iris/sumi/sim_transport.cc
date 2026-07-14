@@ -252,7 +252,6 @@ void
 SimTransport::init()
 {
   if (smp_optimize_){
-    std::cerr << "smp_optimize_\n";
    engine_->barrier(-1, Message::default_cq);
    engine_->blockUntilNext(Message::default_cq);
 
@@ -476,30 +475,63 @@ SimTransport::freeWorkspace(void *buf, uint64_t /*size*/)
 
 namespace {
 // Registry-selectable operations and their configuration keys.
+enum class AlgTarget {
+  operation,
+  allreduce_intra,
+  allreduce_inter,
+  allreduce_bcast,
+};
 struct AlgKeys {
   Collective::type_t type;
   const char* param_key;
   const char* env_key;
+  AlgTarget target;
 };
 constexpr AlgKeys alg_keys[] = {
-  { Collective::allgather,      "allgather_alg",      "SUMI_ALLGATHER_ALG" },
-  { Collective::allreduce,      "allreduce_alg",      "SUMI_ALLREDUCE_ALG" },
-  { Collective::alltoall,       "alltoall_alg",       "SUMI_ALLTOALL_ALG" },
-  { Collective::reduce,         "reduce_alg",         "SUMI_REDUCE_ALG" },
-  { Collective::bcast,          "bcast_alg",          "SUMI_BCAST_ALG" },
+  { Collective::allgather, "collective.allgather", "SUMI_ALLGATHER_ALG",
+    AlgTarget::operation },
+  { Collective::allreduce, "collective.allreduce", "SUMI_ALLREDUCE_ALG",
+    AlgTarget::operation },
+  { Collective::alltoall, "collective.alltoall", "SUMI_ALLTOALL_ALG",
+    AlgTarget::operation },
+  { Collective::reduce, "collective.reduce", "SUMI_REDUCE_ALG",
+    AlgTarget::operation },
+  { Collective::bcast, "collective.bcast", "SUMI_BCAST_ALG",
+    AlgTarget::operation },
   // reduce_scatter is deliberately absent: no algorithm is registered yet
   // (the built-in HalvingReduceScatter is an abort stub), so advertising a
   // key would offer a param whose every value aborts. Restore the row when
   // a real implementation registers itself.
-  { Collective::scan,           "scan_alg",           "SUMI_SCAN_ALG" },
-  { Collective::gather,         "gather_alg",         "SUMI_GATHER_ALG" },
-  { Collective::scatter,        "scatter_alg",        "SUMI_SCATTER_ALG" },
+  { Collective::scan, "collective.scan", "SUMI_SCAN_ALG",
+    AlgTarget::operation },
+  { Collective::gather, "collective.gather", "SUMI_GATHER_ALG",
+    AlgTarget::operation },
+  { Collective::scatter, "collective.scatter", "SUMI_SCATTER_ALG",
+    AlgTarget::operation },
+  { Collective::allreduce, "collective.allreduce.intra",
+    "SUMI_ALLREDUCE_INTRA_ALG", AlgTarget::allreduce_intra },
+  { Collective::allreduce, "collective.allreduce.inter",
+    "SUMI_ALLREDUCE_INTER_ALG", AlgTarget::allreduce_inter },
+  { Collective::bcast, "collective.allreduce.broadcast",
+    "SUMI_ALLREDUCE_BCAST_ALG", AlgTarget::allreduce_bcast },
+};
+
+constexpr char hierarchy_key[] = "collective.allreduce.hierarchy";
+constexpr char collective_prefix[] = "collective.";
+
+struct LegacyParam {
+  const char* key;
+  const char* replacement;
+};
+constexpr LegacyParam legacy_params[] = {
+  { "allgather", "collective.allgather" },
+  { "alltoall", "collective.alltoall" },
 };
 
 const AlgKeys* algKeysFor(Collective::type_t ty)
 {
   for (const auto& k : alg_keys)
-    if (k.type == ty) return &k;
+    if (k.type == ty && k.target == AlgTarget::operation) return &k;
   return nullptr;
 }
 
@@ -510,26 +542,36 @@ const AlgKeys* algKeysForParam(const std::string& param)
   return nullptr;
 }
 
-void validateAlgParams(SST::Params& params)
+void rejectLegacyParams(SST::Params& params)
 {
-  for (const auto& key : params.getKeys()){
-    bool is_alg = key.size() >= 4 &&
-                  key.compare(key.size() - 4, 4, "_alg") == 0;
-    if (is_alg && !algKeysForParam(key)){
-      std::string supported;
-      for (const auto& k : alg_keys){
-        if (!supported.empty()) supported += ", ";
-        supported += k.param_key;
-      }
-      sst_hg_abort_printf("unknown collective algorithm parameter '%s'; "
-                          "supported parameters: %s",
-                          key.c_str(), supported.c_str());
+  for (const auto& k : legacy_params){
+    if (params.contains(k.key)){
+      sst_hg_abort_printf("parameter \"%s\" has been replaced by \"%s\"",
+                          k.key, k.replacement);
     }
   }
 }
 
-// Resolve an op's algorithm name: Python param wins, else SUMI_<OP>_ALG env,
-// else empty ("use built-in default").
+void validateCollectiveParams(SST::Params& params)
+{
+  for (const auto& key : params.getKeys()){
+    if (key.compare(0, sizeof(collective_prefix) - 1,
+                    collective_prefix) != 0){
+      continue;
+    }
+    if (key == hierarchy_key || algKeysForParam(key)) continue;
+
+    std::string supported = hierarchy_key;
+    for (const auto& k : alg_keys){
+      supported += ", ";
+      supported += k.param_key;
+    }
+    sst_hg_abort_printf("unknown collective parameter '%s'; supported "
+                        "parameters: %s", key.c_str(), supported.c_str());
+  }
+}
+
+// Resolve parameter, then environment; empty means no override.
 std::string resolveAlgName(SST::Params& params, const char* param_key,
                            const char* env_key)
 {
@@ -558,25 +600,45 @@ CollectiveEngine::CollectiveEngine(SST::Params& params, Transport *tport) :
   eager_cutoff_(512),
   use_put_protocol_(false),
   system_collective_tag_(-1), //negative tags reserved for special system work
-  warned_smp_alg_override_(false)
+  allreduce_hierarchy_(AllreduceHierarchy::automatic),
+  warned_no_smp_hierarchy_(false)
 {
   global_domain_ = new GlobalCommunicator(tport);
   eager_cutoff_ = params.find<int>("eager_cutoff", 512);
   use_put_protocol_ = params.find<bool>("use_put_protocol", false);
-  validateAlgParams(params);
-  if (params.contains("allgather")){
-    sst_hg_abort_printf("parameter 'allgather' is no longer supported; "
-                        "use 'allgather_alg' instead");
-  }
-  if (params.contains("alltoall")){
-    sst_hg_abort_printf("parameter 'alltoall' is no longer supported; "
-                        "use 'alltoall_alg' instead");
+  rejectLegacyParams(params);
+  validateCollectiveParams(params);
+
+  std::string hierarchy = params.find<std::string>(hierarchy_key, "auto");
+  if (hierarchy == "auto"){
+    allreduce_hierarchy_ = AllreduceHierarchy::automatic;
+  } else if (hierarchy == "hierarchical"){
+    allreduce_hierarchy_ = AllreduceHierarchy::hierarchical;
+  } else if (hierarchy == "flat"){
+    allreduce_hierarchy_ = AllreduceHierarchy::flat;
+  } else {
+    sst_hg_abort_printf("unknown %s '%s'; expected auto, hierarchical, or flat",
+                        hierarchy_key, hierarchy.c_str());
   }
 
-  // Per-op algorithm selection for the registry-driven ops. Param "<op>_alg"
-  // (e.g. allreduce_alg=ring) wins over env SUMI_<OP>_ALG; empty => built-in.
-  for (const auto& k : alg_keys)
-    alg_names_[k.type] = resolveAlgName(params, k.param_key, k.env_key);
+  // Parameters override their matching environment variables.
+  for (const auto& k : alg_keys){
+    std::string alg = resolveAlgName(params, k.param_key, k.env_key);
+    switch (k.target){
+      case AlgTarget::operation: alg_names_[k.type] = alg; break;
+      case AlgTarget::allreduce_intra: allreduce_intra_alg_ = alg; break;
+      case AlgTarget::allreduce_inter: allreduce_inter_alg_ = alg; break;
+      case AlgTarget::allreduce_bcast: allreduce_bcast_alg_ = alg; break;
+    }
+  }
+
+  if (allreduce_hierarchy_ == AllreduceHierarchy::flat &&
+      (!allreduce_intra_alg_.empty() || !allreduce_inter_alg_.empty() ||
+       !allreduce_bcast_alg_.empty())){
+    sst_hg_abort_printf("%s=flat cannot be combined with "
+                        "collective.allreduce.intra, collective.allreduce.inter, "
+                        "or collective.allreduce.broadcast", hierarchy_key);
+  }
 
   int default_qos = params.find<int>("default_qos", 0);
   rdma_get_qos_ = params.find<int>("collective_rdma_get_qos", default_qos);
@@ -600,9 +662,11 @@ CollectiveEngine::engineAlgName(Collective::type_t ty) const
 Collective*
 CollectiveEngine::makeRegisteredCollective(Collective::type_t ty,
     void* dst, void* src, int root, int nelems, int type_size, int tag,
-    int cq_id, reduce_fxn fxn, Communicator* comm, const char* fallback_alg)
+    int cq_id, reduce_fxn fxn, Communicator* comm,
+    const std::string& selected_alg, const char* fallback_alg,
+    const char* param_key, const char* env_key)
 {
-  std::string alg = engineAlgName(ty);
+  std::string alg = selected_alg;
   if (alg.empty() && fallback_alg) alg = fallback_alg;
   if (alg.empty()) {
     sst_hg_abort_printf("no algorithm selected for collective '%s'",
@@ -614,7 +678,8 @@ CollectiveEngine::makeRegisteredCollective(Collective::type_t ty,
     const AlgKeys* keys = algKeysFor(ty);
     sst_hg_abort_printf("unknown %s algorithm '%s' (param %s / env %s)",
                         Collective::tostr(ty), alg.c_str(),
-                        keys ? keys->param_key : "?", keys ? keys->env_key : "?");
+                        param_key ? param_key : (keys ? keys->param_key : "?"),
+                        env_key ? env_key : (keys ? keys->env_key : "?"));
   }
   return c;
 }
@@ -628,11 +693,7 @@ CollectiveEngine::startCollectiveOp(Collective::type_t ty,
   std::string alg = engineAlgName(ty);
   if (!alg.empty()){
     Collective* c = makeRegisteredCollective(ty, dst, src, root, nelems,
-        type_size, tag, cq_id, fxn, comm, nullptr);
-    // Override selected: this is a flat single-DAG choice that always wins,
-    // even when startCollective() returns nullptr because the collective is
-    // still in flight (the common async, multi-rank case) — we must not fall
-    // through to the built-in default in that case.
+        type_size, tag, cq_id, fxn, comm, alg, nullptr);
     return startCollective(c);
   }
   return startCollective(makeDefault());
@@ -697,53 +758,62 @@ CollectiveEngine::allreduce(void* dst, void *src, int nelems, int type_size, int
 
   if (!comm) comm = global_domain_;
 
-  // A user-selected algorithm is a flat single-DAG choice: it overrides the
-  // SMP-hierarchical composition below. Warn once (rank 0) so a study on an
-  // smp-optimized platform is not silently flattened.
-  if (comm->smpComm() && !warned_smp_alg_override_ &&
-      !engineAlgName(Collective::allreduce).empty()){
-    warned_smp_alg_override_ = true;
-    if (tport_->rank() == 0){
-      fprintf(stderr, "warning: allreduce_alg=%s overrides the SMP-hierarchical "
-              "allreduce composition; running a flat DAG over all %d ranks\n",
-              engineAlgName(Collective::allreduce).c_str(), comm->nproc());
+  // Only warn when SMP can never materialize (no co-located neighbors), not
+  // merely when this comm has no smpComm yet: the MPI init-handshake allreduce
+  // runs before createSmpCommunicator attaches the SMP comm.
+  if (allreduce_hierarchy_ == AllreduceHierarchy::hierarchical &&
+      !comm->smpComm() && tport_->smpNeighbors().empty() &&
+      !warned_no_smp_hierarchy_){
+    warned_no_smp_hierarchy_ = true;
+    if (comm->myCommRank() == 0){
+      fprintf(stderr, "warning: collective.allreduce.hierarchy=hierarchical "
+                      "requested "
+                      "without an SMP communicator; using flat all-reduce\n");
     }
   }
-  return startCollectiveOp(Collective::allreduce, dst, src, 0, nelems, type_size, tag, cq_id, fxn, comm,
-      [&]() -> Collective* {
-    if (!comm->smpComm()){
-      return new WilkeHalvingAllreduce(this, dst, src, nelems, type_size, tag, fxn, cq_id, comm);
-    }
-    //tags are restricted to 28 bits - the front 4 bits are mine for various internal operations
-    int intra_reduce_tag = 1<<28 | tag;
-    auto* intra_reduce = new WilkeHalvingAllreduce(this, dst, src, nelems,
-                                   type_size, intra_reduce_tag, fxn, cq_id, comm->smpComm());
 
-    int root = comm->smpComm()->commToGlobalRank(0);
-    Collective* prev;
-    if (comm->myCommRank() == root){
-      if (!comm->ownerComm()){
-        sst_hg_abort_printf("Bad owner comm configuration - rank 0 in SMP comm should 'own' node");
-      }
-      //I am the owner!
-      int inter_reduce_tag = 2<<28 | tag;
-      auto* inter_reduce = new WilkeHalvingAllreduce(this, dst, dst, nelems,
-                                     type_size, inter_reduce_tag, fxn, cq_id, comm->ownerComm());
+  bool hierarchical = allreduce_hierarchy_ != AllreduceHierarchy::flat &&
+                      comm->smpComm();
+  if (!hierarchical){
+    Collective* flat = makeRegisteredCollective(Collective::allreduce,
+        dst, src, 0, nelems, type_size, tag, cq_id, fxn, comm,
+        engineAlgName(Collective::allreduce), "recdouble");
+    return startCollective(flat);
+  }
 
+  int intra_tag = 1<<28 | tag;
+  Collective* intra = makeRegisteredCollective(Collective::allreduce,
+      dst, src, 0, nelems, type_size, intra_tag, cq_id, fxn,
+      comm->smpComm(), allreduce_intra_alg_, "recdouble",
+      "collective.allreduce.intra", "SUMI_ALLREDUCE_INTRA_ALG");
 
-      intra_reduce->setSubsequent(inter_reduce);
-      prev = inter_reduce;
-    } else {
-      prev = intra_reduce;
-    }
-    auto* intra_bcast = new BinaryTreeBcastCollective(this, root, dst, nelems, type_size, tag,
-                                                      cq_id, comm->smpComm());
-    prev->setSubsequent(intra_bcast);
-    //this should report back as done on the original communicator!
-    auto* coll = new DoNothingCollective(this, tag, cq_id, comm);
-    intra_bcast->setSubsequent(coll);
-    return coll;
-  });
+  Collective* prev = intra;
+  if (comm->ownerComm() && comm->ownerComm()->nproc() > 1){
+    int inter_tag = 2<<28 | tag;
+    std::string inter_alg = allreduce_inter_alg_.empty()
+        ? engineAlgName(Collective::allreduce) : allreduce_inter_alg_;
+    Collective* inter = makeRegisteredCollective(Collective::allreduce,
+        dst, dst, 0, nelems, type_size, inter_tag, cq_id, fxn,
+        comm->ownerComm(), inter_alg, "recdouble",
+        allreduce_inter_alg_.empty() ? nullptr : "collective.allreduce.inter",
+        allreduce_inter_alg_.empty() ? nullptr : "SUMI_ALLREDUCE_INTER_ALG");
+    intra->setSubsequent(inter);
+    prev = inter;
+  }
+
+  int bcast_tag = 3<<28 | tag;
+  std::string bcast_alg = allreduce_bcast_alg_.empty()
+      ? engineAlgName(Collective::bcast) : allreduce_bcast_alg_;
+  Collective* bcast = makeRegisteredCollective(Collective::bcast,
+      dst, dst, 0, nelems, type_size, bcast_tag, cq_id, nullptr,
+      comm->smpComm(), bcast_alg, "btree",
+      allreduce_bcast_alg_.empty() ? nullptr : "collective.allreduce.broadcast",
+      allreduce_bcast_alg_.empty() ? nullptr : "SUMI_ALLREDUCE_BCAST_ALG");
+  prev->setSubsequent(bcast);
+
+  auto* final = new DoNothingCollective(this, tag, cq_id, comm);
+  bcast->setSubsequent(final);
+  return startCollective(intra);
 }
 
 sumi::CollectiveDoneMessage*
@@ -869,7 +939,8 @@ CollectiveEngine::alltoall(void *dst, void *src, int nelems, int type_size, int 
       int inter_tag = 2<<28 | tag;
       Collective* inter = makeRegisteredCollective(Collective::alltoall,
           dst, intraDst, 0, smpSize*nelems, type_size, inter_tag, cq_id,
-          nullptr, comm->ownerComm(), "bruck");
+          nullptr, comm->ownerComm(), engineAlgName(Collective::alltoall),
+          "bruck");
       intra->setSubsequent(inter);
       prev = inter;
     } else {
@@ -885,7 +956,8 @@ CollectiveEngine::alltoall(void *dst, void *src, int nelems, int type_size, int 
     return startCollective(intra);
   } else {
     Collective* coll = makeRegisteredCollective(Collective::alltoall,
-        dst, src, 0, nelems, type_size, tag, cq_id, nullptr, comm, "bruck");
+        dst, src, 0, nelems, type_size, tag, cq_id, nullptr, comm,
+        engineAlgName(Collective::alltoall), "bruck");
     return startCollective(coll);
   }
 }
@@ -919,14 +991,15 @@ CollectiveEngine::allgather(void *dst, void *src, int nelems, int type_size, int
 
     Collective* intra = makeRegisteredCollective(Collective::allgather,
         intraDst, src, 0, nelems, type_size, intra_tag, cq_id, nullptr,
-        comm->smpComm(), "bruck");
+        comm->smpComm(), engineAlgName(Collective::allgather), "bruck");
 
     Collective* prev;
     if (comm->ownerComm()){
       int inter_tag = 2<<28 | tag;
       Collective* inter = makeRegisteredCollective(Collective::allgather,
           dst, intraDst, 0, smpSize*nelems, type_size, inter_tag, cq_id,
-          nullptr, comm->ownerComm(), "bruck");
+          nullptr, comm->ownerComm(), engineAlgName(Collective::allgather),
+          "bruck");
       intra->setSubsequent(inter);
       prev = inter;
     } else {
@@ -942,7 +1015,8 @@ CollectiveEngine::allgather(void *dst, void *src, int nelems, int type_size, int
   }
   else {
     Collective* coll = makeRegisteredCollective(Collective::allgather,
-        dst, src, 0, nelems, type_size, tag, cq_id, nullptr, comm, "bruck");
+        dst, src, 0, nelems, type_size, tag, cq_id, nullptr, comm,
+        engineAlgName(Collective::allgather), "bruck");
     return startCollective(coll);
   }
 }
