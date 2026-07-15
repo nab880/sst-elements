@@ -12,8 +12,7 @@
  * mailbox -> device DMA-read -> compute -> DMA-write -> CPU byte-read --
  * exercised at scale.
  *
- * The ColdFire deck defaults to BE window/kernel layout. The test can still
- * be run with QUETZ_WIN_BIG_ENDIAN=0 to pin the legacy LE layout.
+ * The ColdFire deck and this fixture use the default BE window/kernel layout.
  *
  * SDL: sysmode/basic_quetz_gpu_compute_coldfire.py (QUETZ_KERNEL=
  * quetz.ScaleOffsetKernel).
@@ -57,11 +56,11 @@ void kernel_main(void)
 
     /* Byte-write each sample individually (not packed u32 stores) so this
      * exercises the same byte-granular window path the BE alias probe
-     * checks, at volume. */
+     * checks, at volume. The default ColdFire layout is [hi, lo]. */
     for (uint32_t i = 0; i < N_SAMPLES; i++) {
         uint16_t s = (uint16_t)sample(i);
-        *(volatile uint8_t *)(IN_ADDR + 2 * i + 0) = (uint8_t)(s & 0xFF);
-        *(volatile uint8_t *)(IN_ADDR + 2 * i + 1) = (uint8_t)(s >> 8);
+        *(volatile uint8_t *)(IN_ADDR + 2 * i + 0) = (uint8_t)(s >> 8);
+        *(volatile uint8_t *)(IN_ADDR + 2 * i + 1) = (uint8_t)(s & 0xFF);
     }
 
     mmio_write32(GPU_ARG0, (uint32_t)IN_ADDR);
@@ -73,8 +72,8 @@ void kernel_main(void)
 
     uint32_t correct = 0, sat_hi = 0, sat_lo = 0;
     for (uint32_t i = 0; i < N_SAMPLES; i++) {
-        uint8_t lo = *(volatile uint8_t *)(OUT_ADDR + 2 * i + 0);
-        uint8_t hi = *(volatile uint8_t *)(OUT_ADDR + 2 * i + 1);
+        uint8_t hi = *(volatile uint8_t *)(OUT_ADDR + 2 * i + 0);
+        uint8_t lo = *(volatile uint8_t *)(OUT_ADDR + 2 * i + 1);
         int16_t got = (int16_t)((uint16_t)lo | ((uint16_t)hi << 8));
         int16_t want = expect(sample(i));
         if (got == want)

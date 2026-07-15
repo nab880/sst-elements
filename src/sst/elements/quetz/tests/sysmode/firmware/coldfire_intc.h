@@ -54,6 +54,16 @@ static inline void cf_intc_enable(unsigned line, uint8_t level)
     INTC0_CIMR = (uint8_t)line;
 }
 
+static inline void cf_intc_mask(unsigned line)
+{
+    INTC0_SIMR = (uint8_t)line;
+}
+
+static inline void cf_intc_unmask(unsigned line)
+{
+    INTC0_CIMR = (uint8_t)line;
+}
+
 /* 1 while INTC still sees source `line` asserted (level semantics). */
 static inline uint32_t cf_intc_pending(unsigned line)
 {
@@ -75,6 +85,17 @@ static inline void cf_isr_ack_settle(unsigned line, uint32_t ack_reg)
     *(volatile uint32_t *)ack_reg = 1;
     while (cf_intc_pending(line) && *(volatile uint32_t *)ack_reg == 0)
         ;
+}
+
+/* Re-arm a masked level source after its driver drained the condition in
+ * thread context. The device reports low before the bridge necessarily has
+ * propagated low to the INTC, so wait out that bounded stale-level window
+ * before unmasking; otherwise the old level immediately re-enters the ISR. */
+static inline void cf_intc_rearm_drained(unsigned line, uint32_t ack_reg)
+{
+    while (cf_intc_pending(line) && *(volatile uint32_t *)ack_reg == 0)
+        ;
+    cf_intc_unmask(line);
 }
 
 /* IPL 7: no interrupt below NMI is taken (supervisor mode assumed —

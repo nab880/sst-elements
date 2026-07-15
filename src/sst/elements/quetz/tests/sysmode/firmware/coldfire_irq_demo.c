@@ -24,9 +24,10 @@
 #define IRQ_LINE_SENSOR   31
 
 /* --- ISRs -------------------------------------------------------------------
- * cf_isr_ack_settle (coldfire_intc.h) acks the device then waits for the
- * INTC to see the line drop, guarded by the device's own line state.
- * Counters are the ISR -> main handshake. */
+ * The accelerator can clear its condition in the ISR. Sensor data-ready is a
+ * true level while bytes remain, so its ISR masks the INTC source and lets
+ * main drain the batch before re-arming it. Counters are the ISR -> main
+ * handshake. */
 
 static volatile uint32_t g_accel_irqs;
 static volatile uint32_t g_sensor_irqs;
@@ -41,7 +42,7 @@ static void isr_accel(void)
 __attribute__((interrupt_handler))
 static void isr_sensor(void)
 {
-    cf_isr_ack_settle(IRQ_LINE_SENSOR, SENSOR_IRQ_ACK);
+    cf_intc_mask(IRQ_LINE_SENSOR);
     g_sensor_irqs++;
 }
 
@@ -82,6 +83,7 @@ static int sensor_drain_irq(void)
         if (mmio_read32(SENSOR_STATUS) == 0) {
             if (mmio_read32(SENSOR_EOS))
                 break;                           /* fully drained */
+            cf_intc_rearm_drained(IRQ_LINE_SENSOR, SENSOR_IRQ_ACK);
             uint32_t seen = g_sensor_irqs;
             g_sensor_sleeps++;
             cf_wait_until(g_sensor_irqs != seen ||
