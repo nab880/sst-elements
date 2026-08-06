@@ -26,6 +26,8 @@ libmerlin_la_SOURCES = \
 	target_generator/uniform.h \
 	test/nic.h \
 	test/nic.cc \
+	test/inc_nic.h \
+	test/inc_nic.cc \
 	test/route_test/route_test.h \
 	test/route_test/route_test.cc \
 	test/pt2pt/pt2pt_test.h \
@@ -63,6 +65,8 @@ libmerlin_la_SOURCES = \
 	hr_router/xbar_arb_lru_infx.h \
 	hr_router/xbar_arb_rand.h \
 	hr_router/xbar_arb_rr.h \
+	hr_router/xbar_arb_rr_chiplets.h \
+	hr_router/collective_accel.h \
 	trafficgen/trafficgen.h \
 	trafficgen/trafficgen.cc \
 	inspectors/circuitCounter.h \
@@ -119,6 +123,7 @@ EXTRA_DIST = \
 	tests/dragon_128_test_deferred.py \
 	tests/polarfly_455_test.py \
 	tests/polarstar_504_test.py \
+	tests/fattree_inc_test.py \
 	tests/refFiles/test_merlin_dragon_128_platform_test.out \
 	tests/refFiles/test_merlin_dragon_128_platform_test_cm.out \
 	tests/refFiles/test_merlin_dragon_128_test.out \
@@ -132,7 +137,8 @@ EXTRA_DIST = \
 	tests/refFiles/test_merlin_torus_5_trafficgen.out \
 	tests/refFiles/test_merlin_torus_64_test.out \
 	tests/refFiles/test_merlin_polarfly_455_test.out \
-	tests/refFiles/test_merlin_polarstar_504_test.out
+	tests/refFiles/test_merlin_polarstar_504_test.out \
+	tests/refFiles/test_merlin_fattree_inc_test.out
 
 sstdir = $(includedir)/sst/elements/merlin
 nobase_sst_HEADERS = \

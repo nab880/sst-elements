@@ -70,7 +70,7 @@ public:
         {"oql_track_port",     ""},
         {"oql_track_remote",   ""},
         {"output_arb",         "Arbitration unit to be used for port output", "merlin.arb.output.basic"},
-        {"mtu",                "Maximum transfer unit on network in b or B (can include SI prefix).","2kB"},
+        {"mtu",                "Maximum transfer unit on network in b or B (can include SI prefix).","8KB"},
         {"enable_congestion_management", "Turn on congestion management","false"},
         {"cm_outstanding_threshold", "Threshold for the amount of data outstanding to a host before congestion management can trigger","2*output_buf_size"},
         {"cm_pktsize_threshold", "Minimum size of a packet to be considered part of a stream with regards to congestion management","128B"},

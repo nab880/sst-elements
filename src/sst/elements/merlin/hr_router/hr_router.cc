@@ -206,6 +206,9 @@ hr_router::~hr_router()
     delete [] progress_vcs;
 
     // SST framework manages SubComponent lifecycle — do not delete ports[i], topo, or arb
+    for ( int i = 0 ; i < num_ports ; i++ ) {
+        delete accels[i];
+    }
     delete [] ports;
 }
 
@@ -395,6 +398,13 @@ hr_router::hr_router(ComponentId_t cid, Params& params) :
         std::string port_name("port");
         port_name = port_name + std::to_string(i);
         xbar_stalls[i] = registerStatistic<uint64_t>("xbar_stalls",port_name);
+    }
+
+    // Load optional accelerator subcomponents for INC support.
+    // If no accelerators are configured, INC is simply disabled.
+    accels = new Accelerator*[num_ports];
+    for (int i = 0; i < num_ports; i++) {
+        accels[i] = (Accelerator*) loadUserSubComponent<Accelerator>("accelerator"+to_string(i), ComponentInfo::SHARE_NONE, this, i);
     }
 
     init_vcs();
@@ -713,4 +723,74 @@ hr_router::reportIncomingEvent(internal_router_event* ev)
     if ( dest.first == id ) {
         ports[dest.second]->reportIncomingEvent(ev);
     }
+}
+
+bool
+hr_router::startINC(int port_number, internal_router_event* ire)
+{
+    incEvent* inc_ev = dynamic_cast<incEvent*>(ire->inspectRequest()->inspectPayload());
+    if (inc_ev) {
+        if (topo->isUpPort(port_number)) {
+            int root_port = inc_ev->root_ports[getLevel()];
+            if ( !accels[root_port] ) return false;
+            accels[root_port]->startINC(ire, false);
+        } else {
+            if ( !accels[port_number] ) return false;
+            accels[port_number]->startINC(ire, true);
+        }
+        return true;
+    } else {
+        return false;
+    }
+}
+
+bool
+hr_router::sendINC(int port_number, internal_router_event* ire)
+{
+    // ignore in_port_busy?
+    if (out_port_busy[port_number] > 0 || !ports[port_number]->spaceToSend(0, ire->getFlitCount())) {
+        notifyEvent();
+
+        return false;
+    } else {
+        out_port_busy[port_number] = ire->getFlitCount();
+
+        ports[port_number]->send(ire, 0);
+
+        return true;
+    }
+}
+
+int
+hr_router::getNumPorts()
+{
+    return num_ports;
+}
+
+int
+hr_router::getLevel()
+{
+    return topo->getRtrLevel();
+}
+
+int
+hr_router::getID()
+{
+    return id;
+}
+
+bool
+hr_router::xbarINC(int port_number, Event* ev)
+{
+    if ( !accels[port_number] ) return false;
+    accels[port_number]->handle_compute(ev);
+
+    return true;
+}
+
+int
+hr_router::getInAccelBusy(int port_number)
+{
+    if ( !accels[port_number] ) return 0;
+    return accels[port_number]->getInAccelBusy();
 }

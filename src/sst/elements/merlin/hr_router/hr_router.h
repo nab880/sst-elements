@@ -87,6 +87,7 @@ public:
     SST_ELI_DOCUMENT_SUBCOMPONENT_SLOTS(
         {"topology", "Topology object to control routing", "SST::Merlin::Topology" },
         {"XbarArb", "Crossbar arbitration", "SST::Merlin::XbarArbitration" },
+        {"Accel", "Accelerator", "SST::Merlin::Accelerator" },
         {"portcontrol", "PortControl blocks", "SST::Merlin::PortInterface" }
     )
 
@@ -101,6 +102,7 @@ private:
 
     Topology* topo;
     XbarArbitration* arb;
+    Accelerator** accels;
 
     PortInterface** ports;
     internal_router_event** vc_heads;
@@ -161,6 +163,14 @@ public:
 
     void serialize_order(SST::Core::Serialization::serializer& ser) override;
     ImplementSerializable(SST::Merlin::hr_router)
+
+    bool startINC(int port_number, internal_router_event* ire) override;
+    bool sendINC(int port_number, internal_router_event* ire) override;
+    int getNumPorts() override;
+    int getLevel() override;
+    int getID() override;
+    bool xbarINC(int port_number, Event* ev) override;
+    int getInAccelBusy(int port_number) override;
 };
 
 }

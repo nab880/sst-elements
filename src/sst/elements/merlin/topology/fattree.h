@@ -123,6 +123,9 @@ public:
         }
     }
 
+    int getRtrLevel() override { return rtr_level; }
+    bool isUpPort(int port_number) override { return port_number >= down_ports && up_ports > 0; }
+
 private:
     void route_deterministic(int port, int vc, internal_router_event* ev);
 };

@@ -502,7 +502,7 @@ PortControl::PortControl(ComponentId_t cid, Params& params,  Router* rif, int rt
     }
     cm_outstanding_threshold = (cm_ot / flit_size).getRoundedValue();
 
-    UnitAlgebra mtu = params.find<UnitAlgebra>("mtu", "2kB");
+    UnitAlgebra mtu = params.find<UnitAlgebra>("mtu", "8KB");
     if ( mtu.hasUnits("B") ) mtu *= UnitAlgebra("8b/B");
 
     // Get the serialization time for an mtu
@@ -1068,6 +1068,10 @@ PortControl::handle_input_n2r(Event* ev)
         rtr_event->setCreditReturnVC(vn);
         int curr_vc = rtr_event->getVC();
 
+        if (parent->startINC(port_number, rtr_event)) {
+            break;
+        }
+
 	    input_buf[curr_vc].push(rtr_event);
 	    input_buf_count[curr_vc]++;
 
@@ -1150,6 +1154,10 @@ PortControl::handle_input_r2r(Event* ev)
 
 	    // Need to do the routing
 	    int curr_vc = event->getVC();
+
+        if (parent->startINC(port_number, event)) {
+            break;
+        }
 
 	    input_buf[curr_vc].push(event);
 	    input_buf_count[curr_vc]++;

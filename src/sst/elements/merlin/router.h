@@ -41,6 +41,7 @@ const int UNTIMED_BROADCAST_ADDR = -1;
 class TopologyEvent;
 class CtrlRtrEvent;
 class internal_router_event;
+class incEvent;
 
 class Router : public Component {
 private:
@@ -84,6 +85,14 @@ public:
         SST_SER(vcs_with_data);
     }
     ImplementVirtualSerializable(SST::Merlin::Router)
+
+    virtual bool startINC(int port_number, internal_router_event* ire) = 0;
+    virtual bool sendINC(int port_number, internal_router_event* ire) = 0;
+    virtual int getNumPorts() = 0;
+    virtual int getLevel() = 0;
+    virtual int getID() = 0;
+    virtual bool xbarINC(int port_number, Event* ire) = 0;
+    virtual int getInAccelBusy(int port_number) = 0;
 };
 
 #define MERLIN_ENABLE_TRACE
@@ -568,6 +577,9 @@ public:
     }
     ImplementVirtualSerializable(SST::Merlin::Topology)
 
+    virtual int getRtrLevel() { return 0; }
+    virtual bool isUpPort(int port_number) { return false; }
+
 protected:
     Output &output;
 };
@@ -681,6 +693,59 @@ public:
         SST::SubComponent::serialize_order(ser);
     }
     ImplementVirtualSerializable(SST::Merlin::XbarArbitration)
+};
+
+
+class Accelerator : public SubComponent {
+public:
+
+    SST_ELI_REGISTER_SUBCOMPONENT_API(SST::Merlin::Accelerator, Router*, int)
+
+    Accelerator(ComponentId_t cid) :
+        SubComponent(cid)
+    {}
+    virtual ~Accelerator() {}
+
+    virtual int getInAccelBusy() = 0;
+    virtual void startINC(internal_router_event* ire, bool compute) = 0;
+    virtual void handle_compute(Event* ev) = 0;
+
+};
+
+
+class incEvent : public Event {
+public:
+    int job_id;
+    int data;
+    std::vector<int> next_ports;
+    std::vector<int> root_ports;
+    std::vector<int> up_ports;
+
+    incEvent() {}
+    incEvent(int job_id, int data, std::vector<int> next_ports, std::vector<int> root_ports, std::vector<int> up_ports) : job_id(job_id), data(data), next_ports(next_ports), root_ports(root_ports), up_ports(up_ports) {}
+
+    Event* clone(void) override
+    {
+        return new incEvent(*this);
+    }
+
+    void serialize_order(SST::Core::Serialization::serializer &ser)  override {
+        Event::serialize_order(ser);
+        SST_SER(job_id);
+        SST_SER(data);
+        SST_SER(root_ports);
+        SST_SER(next_ports);
+        SST_SER(up_ports);
+    }
+
+    virtual void print(const std::string& header, Output &out) const  override {
+        out.output("%s incEvent to be delivered at %" PRIu64 " with priority %d.\n",
+                   header.c_str(), getDeliveryTime(), getPriority());
+    }
+
+private:
+
+    ImplementSerializable(SST::Merlin::incEvent);
 };
 
 }
