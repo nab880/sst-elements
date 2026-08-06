@@ -16,6 +16,9 @@ cp "$OVERLAY/hw/misc/mcf_gpio.c" "$QEMU_SRC/hw/misc/mcf_gpio.c"
 cp "$OVERLAY/hw/misc/raptor_gpio_blocks.h" "$QEMU_SRC/hw/misc/raptor_gpio_blocks.h"
 cp "$OVERLAY/quetz_ipc_client.c"        "$QEMU_SRC/hw/misc/quetz_ipc_client.c"
 
+mkdir -p "$QEMU_SRC/hw/m68k"
+cp "$OVERLAY/hw/m68k/raptor.c" "$QEMU_SRC/hw/m68k/raptor.c"
+
 mkdir -p "$QEMU_SRC/include/quetz"
 cp "$OVERLAY/include/quetz/quetz_ipc_client.h" "$QEMU_SRC/include/quetz/"
 cp "$OVERLAY/include/quetz/quetz_ipc_types.h"  "$QEMU_SRC/include/quetz/"
@@ -30,6 +33,67 @@ system_ss.add(files('sst_mmio_bridge.c'))
 system_ss.add(files('quetz_ipc_client.c'))
 EOF
 fi
+
+M68K_MESON="$QEMU_SRC/hw/m68k/meson.build"
+if ! grep -q "files('raptor.c')" "$M68K_MESON"; then
+    cat >> "$M68K_MESON" <<'EOF'
+
+# Quetz Raptor Core2 functional-profile machine
+m68k_ss.add(files('raptor.c'))
+EOF
+fi
+
+# Accept and retain the two ColdFire RAMBAR registers used by the production
+# CRT.  QEMU's cfv4e model otherwise aborts on these architected MOVEC writes.
+QEMU_SRC="$QEMU_SRC" python3 - <<'PY'
+import os
+
+src = os.environ["QEMU_SRC"]
+
+cpu_h = os.path.join(src, "target/m68k/cpu.h")
+text = open(cpu_h).read()
+if "uint32_t rambar1;" not in text:
+    anchor = "    uint32_t rambar0;\n"
+    assert anchor in text, "RAMBAR state anchor missing in target/m68k/cpu.h"
+    text = text.replace(anchor, anchor + "    uint32_t rambar1;\n", 1)
+    open(cpu_h, "w").write(text)
+
+helper = os.path.join(src, "target/m68k/helper.c")
+text = open(helper).read()
+marker = "case M68K_CR_RAMBAR1:"
+if marker not in text:
+    anchor = "    case M68K_CR_VBR:\n        env->vbr = val;\n        break;\n"
+    assert anchor in text, "ColdFire MOVEC anchor missing in target/m68k/helper.c"
+    insert = (
+        "    case M68K_CR_RAMBAR0:\n"
+        "        env->rambar0 = val;\n"
+        "        break;\n"
+        "    case M68K_CR_RAMBAR1:\n"
+        "        env->rambar1 = val;\n"
+        "        break;\n"
+    )
+    text = text.replace(anchor, anchor + insert, 1)
+    open(helper, "w").write(text)
+
+cpu_c = os.path.join(src, "target/m68k/cpu.c")
+text = open(cpu_c).read()
+if "VMSTATE_UINT32_V(env.rambar1" not in text:
+    start = text.index("const VMStateDescription vmstate_cf_spregs")
+    end = text.index("};", start)
+    block = text[start:end]
+    block = block.replace(".version_id = 1", ".version_id = 2", 1)
+    anchor = "        VMSTATE_UINT32(env.rambar0, M68kCPU),\n"
+    assert anchor in block, "RAMBAR migration anchor missing in target/m68k/cpu.c"
+    block = block.replace(
+        anchor,
+        anchor + "        VMSTATE_UINT32_V(env.rambar1, M68kCPU, 2),\n",
+        1,
+    )
+    text = text[:start] + block + text[end:]
+    open(cpu_c, "w").write(text)
+
+print("Raptor RAMBAR overlay applied")
+PY
 if ! grep -q mcf_bsp_compat.c "$HW_MESON"; then
     cat >> "$HW_MESON" <<'EOF'
 system_ss.add(files('mcf_bsp_compat.c'))
@@ -73,6 +137,119 @@ if "qdev_init_gpio_in" not in s:
     s = s.replace(anchor, anchor + ins, 1)
     open(p, "w").write(s)
 print("mcf_intc qdev GPIO overlay applied")
+PY
+
+    # Raptor's BSP programs each ICR as IL[5:3]|IP[2:0].  Keep stock
+    # mcf5208evb's direct numeric-level convention as the default and select
+    # IL/IP decoding only for the dedicated Raptor machine.
+    QEMU_SRC="$QEMU_SRC" python3 - <<'PY'
+import os
+src = os.environ["QEMU_SRC"]
+p = os.path.join(src, "hw/m68k/mcf_intc.c")
+s = open(p).read()
+if "il_ip_priority" not in s:
+    s = s.replace(
+        "    M68kCPU *cpu;\n    int active_vector;\n",
+        "    M68kCPU *cpu;\n    bool il_ip_priority;\n    int active_vector;\n",
+        1,
+    )
+    s = s.replace(
+        "    int best_level;\n",
+        "    int best_level;\n    int best_rank;\n",
+        1,
+    )
+    s = s.replace(
+        "    best_level = 0;\n    best = 64;\n",
+        "    best_level = 0;\n    best_rank = -1;\n    best = 64;\n",
+        1,
+    )
+    old = (
+        "            if ((active & 1) != 0 && s->icr[i] >= best_level) {\n"
+        "                best_level = s->icr[i];\n"
+        "                best = i;\n"
+        "            }\n"
+    )
+    new = (
+        "            int rank = s->il_ip_priority ? (s->icr[i] & 0x3f)\n"
+        "                                             : s->icr[i];\n"
+        "            int level = s->il_ip_priority ? ((rank >> 3) & 7)\n"
+        "                                              : rank;\n"
+        "            if ((active & 1) != 0 && rank >= best_rank) {\n"
+        "                best_rank = rank;\n"
+        "                best_level = level;\n"
+        "                best = i;\n"
+        "            }\n"
+    )
+    assert old in s, "priority anchor missing in hw/m68k/mcf_intc.c"
+    s = s.replace(old, new, 1)
+
+    prop_anchor = (
+        '    DEFINE_PROP_LINK("m68k-cpu", mcf_intc_state, cpu,\n'
+        '                     TYPE_M68K_CPU, M68kCPU *),\n'
+    )
+    assert prop_anchor in s, "property anchor missing in hw/m68k/mcf_intc.c"
+    s = s.replace(
+        prop_anchor,
+        prop_anchor
+        + '    DEFINE_PROP_BOOL("il-ip-priority", mcf_intc_state,\n'
+          '                     il_ip_priority, false),\n',
+        1,
+    )
+
+    signature = (
+        "qemu_irq *mcf_intc_init(MemoryRegion *sysmem,\n"
+        "                        hwaddr base,\n"
+        "                        M68kCPU *cpu)\n"
+    )
+    replacement = (
+        "qemu_irq *mcf_intc_init_ext(MemoryRegion *sysmem,\n"
+        "                            hwaddr base,\n"
+        "                            M68kCPU *cpu,\n"
+        "                            bool il_ip_priority)\n"
+    )
+    assert signature in s, "init anchor missing in hw/m68k/mcf_intc.c"
+    s = s.replace(signature, replacement, 1)
+    link_anchor = (
+        '    object_property_set_link(OBJECT(dev), "m68k-cpu",\n'
+        '                             OBJECT(cpu), &error_abort);\n'
+    )
+    assert link_anchor in s, "link anchor missing in hw/m68k/mcf_intc.c"
+    s = s.replace(
+        link_anchor,
+        link_anchor
+        + '    object_property_set_bool(OBJECT(dev), "il-ip-priority",\n'
+          '                             il_ip_priority, &error_abort);\n',
+        1,
+    )
+    s += (
+        "\nqemu_irq *mcf_intc_init(MemoryRegion *sysmem, hwaddr base,\n"
+        "                        M68kCPU *cpu)\n"
+        "{\n"
+        "    return mcf_intc_init_ext(sysmem, base, cpu, false);\n"
+        "}\n"
+    )
+    open(p, "w").write(s)
+
+header = os.path.join(src, "include/hw/m68k/mcf.h")
+h = open(header).read()
+if "mcf_intc_init_ext" not in h:
+    anchor = (
+        "qemu_irq *mcf_intc_init(struct MemoryRegion *sysmem,\n"
+        "                        hwaddr base,\n"
+        "                        M68kCPU *cpu);\n"
+    )
+    assert anchor in h, "INTC header anchor missing in include/hw/m68k/mcf.h"
+    h = h.replace(
+        anchor,
+        anchor
+        + "qemu_irq *mcf_intc_init_ext(struct MemoryRegion *sysmem,\n"
+          "                            hwaddr base,\n"
+          "                            M68kCPU *cpu,\n"
+          "                            bool il_ip_priority);\n",
+        1,
+    )
+    open(header, "w").write(h)
+print("mcf_intc scoped functional priority overlay applied")
 PY
 fi
 
