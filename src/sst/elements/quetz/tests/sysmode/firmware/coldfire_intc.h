@@ -82,9 +82,11 @@ static inline uint32_t cf_intc_pending(unsigned line)
  * here, not hand-copied per ISR. */
 static inline void cf_isr_ack_settle(unsigned line, uint32_t ack_reg)
 {
+    cf_intc_mask(line);
     *(volatile uint32_t *)ack_reg = 1;
     while (cf_intc_pending(line) && *(volatile uint32_t *)ack_reg == 0)
         ;
+    cf_intc_unmask(line);
 }
 
 /* Re-arm a masked level source after its driver drained the condition in
