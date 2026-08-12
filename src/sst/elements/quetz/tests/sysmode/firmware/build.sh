@@ -131,6 +131,14 @@ echo "=== ColdFire Raptor GPIO device test (m68k) ==="
 $M68K_CC $M68K_FLAGS coldfire_startup.S coldfire_gpio.c -o coldfire_gpio
 echo "  -> coldfire_gpio"
 
+echo "=== ColdFire Raptor BSP startup-path validation (m68k) ==="
+# Uses its own BSP-shaped startup (.S) and linker script, not coldfire_startup.S:
+# reproduces crt0.c's SR/RAMBAR/SP/VBR movec sequence and the stock vector table.
+$M68K_CC -mcpu=5208 -O2 -nostdlib -nostartfiles -ffreestanding \
+  -T link_m68k_bsp_startup.ld -Wl,--build-id=none \
+  coldfire_bsp_startup.S coldfire_bsp_startup.c -o coldfire_bsp_startup
+echo "  -> coldfire_bsp_startup"
+
 echo "=== ColdFire mcf5208evb balar vectorAdd (m68k) ==="
 $M68K_CC $M68K_FLAGS coldfire_startup.S coldfire_gpu.c -o coldfire_gpu
 echo "  -> coldfire_gpu"

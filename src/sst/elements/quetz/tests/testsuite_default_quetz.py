@@ -2328,6 +2328,68 @@ class testcase_quetz_sysmode(SSTTestCase):
             "TestFinisher sentinel not triggered; sim may have hung")
 
     # -------------------------------------------------------------------------
+    def test_quetz_coldfire_bsp_startup(self):
+        """The stock raptor-bsp startup path (crt0.c) runs under Quetz.
+
+        coldfire_bsp_startup reproduces the BSP startup sequence exactly --
+        SR:=0x2000, RAMBAR:=base|(1<<9)|1 via movec (control reg 0xC05),
+        SP:=__STACK, VBR:=__INTERRUPT_VECTOR via movec (0x801), jmp main --
+        with a BSP-shaped image (vector table at VBR with only entries 0/1/2
+        live, .bss NOLOAD/not-cleared, .data linked in place). Reaching main
+        proves QEMU accepts the movec writes; main then verifies the load-time
+        negative facts (.bss observed zero without a clear loop, .data holds its
+        initialized value without a copy) and that the installed vector table
+        has the stock cf-isrs.c shape (only 0/1/2 live, rest NULL) read back
+        through VBR. (No runtime bus fault is provoked: mcf5208evb is RAZ/WI on
+        unmapped space and never raises one -- see bsp_torture.) Oracle:
+        'BSP startup: errors=0'."""
+        test_path = self.get_testsuite_dir()
+        sst_prefix, sst_bindir, sst_libexec = sst_paths()
+
+        import shutil
+        qemu_bin = os.path.join(sst_bindir, "qemu-system-m68k")
+        if not os.path.exists(qemu_bin):
+            qemu_bin = shutil.which("qemu-system-m68k") or qemu_bin
+        if not os.path.exists(qemu_bin):
+            self.skipTest("qemu-system-m68k not found")
+        exe_abs = os.path.join(test_path, "sysmode/firmware/coldfire_bsp_startup")
+        if not os.path.exists(exe_abs):
+            self.skipTest("coldfire_bsp_startup firmware not found; "
+                          "run M68K_CC=m68k-linux-gnu-gcc ./build.sh")
+
+        outdir = os.path.join(self.get_test_output_run_dir(),
+                              "quetz_sysmode_tests", "bsp_startup")
+        os.makedirs(outdir, exist_ok=True)
+        # Same region scaffold as bsp_torture: the deliberate access-error probe
+        # targets 0xE0000000, inside the filtered "high" range.
+        make_sysmode_env(sst_prefix, sst_libexec, qemu_bin, exe_abs,
+                         "-machine mcf5208evb -display none -serial stdio -m 128M",
+                         "-kernel", 0x40000000, 0x47FFFFFF,
+                         [("uart0", 0xFC060000, 0xFC0600FF, "uart", {"tx_offset": 12}),
+                          ("finish", 0x80000000, 0x80000003, "testfinish"),
+                          ("ips", 0xFC000000, 0xFCFFFFFF, "filtered"),
+                          ("low", 0x00000000, 0x3FFFFFFF, "filtered"),
+                          ("high", 0x48000000, 0xFBFFFFFF, "filtered")])
+
+        sdlfile = os.path.join(test_path, "sysmode", "basic_quetz_sysmode.py")
+        outfile = os.path.join(outdir, "bsp_startup.out")
+        errfile = os.path.join(outdir, "bsp_startup.err")
+        self.run_sst(sdlfile, outfile, errfile,
+                     mpi_out_files=os.path.join(outdir, "bsp_startup.testfile"),
+                     set_cwd=outdir, timeout_sec=180)
+        with open(outfile, "r") as stream:
+            raw = stream.read()
+        self.assertNotIn("FATAL", raw)
+        self.assertIn("reached main after SR/RAMBAR/SP/VBR sequence", raw,
+            "startup sequence did not reach main (movec to RAMBAR/VBR may have "
+            "faulted, or the vector table / entry point is misplaced)")
+        self.assertIn("BSP startup: errors=0", raw,
+            "startup negative-fact checks failed (.bss clear / .data copy / "
+            "stray-vector dispatch)")
+        self.assertIn("TESTFINISH[0]", raw,
+            "TestFinisher sentinel not triggered; sim may have hung")
+
+    # -------------------------------------------------------------------------
     def test_quetz_coldfire_accel_scale(self):
         """ColdFire (m68k) sensor batch computed ON THE DEVICE
         (quetz.ScaleOffsetKernel).
