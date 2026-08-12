@@ -76,6 +76,41 @@ print("mcf_intc qdev GPIO overlay applied")
 PY
 fi
 
+# --- target/m68k/helper.c: accept RAMBAR (control reg 0xC04/0xC05) movec -----
+# QEMU's ColdFire movec handler (cf_movec_to) aborts the guest on any control
+# register it does not model:
+#   qemu: fatal: Unimplemented control register write 0xc05 = ...
+# The stock raptor-bsp crt0.c programs RAMBAR (0xC05) very early
+#   (RAMBAR := __RAMBAR_START | (1<<9) | 1), so an unmodified BSP dies at boot.
+# RAMBAR configures the local-SRAM base/backdoor aperture, which has no
+# behavioral effect in QEMU's flat-SDRAM functional model. Store it in the
+# existing (declared-but-unused) env->rambar0 field for fidelity/read-back
+# rather than discarding it. Anchor-based + idempotent, like the edits above.
+if [ -f "$QEMU_SRC/target/m68k/helper.c" ]; then
+    QEMU_SRC="$QEMU_SRC" python3 - <<'PY'
+import os
+src = os.environ["QEMU_SRC"]
+p = os.path.join(src, "target/m68k/helper.c")
+s = open(p).read()
+marker = "case M68K_CR_RAMBAR0:"
+if marker not in s:
+    # Insert RAMBAR handling into cf_movec_to, just before its default abort.
+    default_line = "    /* TODO: Implement control registers.  */\n    default:\n"
+    assert default_line in s, "anchor missing in target/m68k/helper.c (cf_movec_to)"
+    ins = ("    case M68K_CR_RAMBAR0:\n"
+           "    case M68K_CR_RAMBAR1:\n"
+           "        /* Quetz overlay: RAMBAR configures the local-SRAM base and\n"
+           "         * backdoor aperture, inert in the flat-SDRAM functional\n"
+           "         * model. Store it (stock raptor-bsp crt0.c programs RAMBAR at\n"
+           "         * boot) so it reads back, instead of aborting the guest. */\n"
+           "        env->rambar0 = val;\n"
+           "        break;\n")
+    s = s.replace(default_line, ins + default_line, 1)
+    open(p, "w").write(s)
+print("cf_movec_to RAMBAR overlay applied")
+PY
+fi
+
 # --- linux-user (P6): SIGSEGV-trap synchronous MMIO --------------------------
 # System mode traps the doorbell with the sst-mmio-bridge device; user mode has
 # no device map, so qemu-<arch> reserves the aperture PROT_NONE and routes the
