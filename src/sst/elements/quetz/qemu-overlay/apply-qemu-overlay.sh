@@ -9,6 +9,11 @@ OVERLAY="$(cd "$(dirname "$0")" && pwd)"
 
 cp "$OVERLAY/hw/misc/sst_mmio_bridge.c" "$QEMU_SRC/hw/misc/sst_mmio_bridge.c"
 cp "$OVERLAY/hw/misc/mcf_bsp_compat.c" "$QEMU_SRC/hw/misc/mcf_bsp_compat.c"
+cp "$OVERLAY/hw/misc/raptor_bsp_blocks.h" "$QEMU_SRC/hw/misc/raptor_bsp_blocks.h"
+cp "$OVERLAY/hw/misc/mcf_dtimer.c" "$QEMU_SRC/hw/misc/mcf_dtimer.c"
+cp "$OVERLAY/hw/misc/raptor_dtimer_blocks.h" "$QEMU_SRC/hw/misc/raptor_dtimer_blocks.h"
+cp "$OVERLAY/hw/misc/mcf_gpio.c" "$QEMU_SRC/hw/misc/mcf_gpio.c"
+cp "$OVERLAY/hw/misc/raptor_gpio_blocks.h" "$QEMU_SRC/hw/misc/raptor_gpio_blocks.h"
 cp "$OVERLAY/quetz_ipc_client.c"        "$QEMU_SRC/hw/misc/quetz_ipc_client.c"
 
 mkdir -p "$QEMU_SRC/include/quetz"
@@ -28,6 +33,16 @@ fi
 if ! grep -q mcf_bsp_compat.c "$HW_MESON"; then
     cat >> "$HW_MESON" <<'EOF'
 system_ss.add(files('mcf_bsp_compat.c'))
+EOF
+fi
+if ! grep -q mcf_dtimer.c "$HW_MESON"; then
+    cat >> "$HW_MESON" <<'EOF'
+system_ss.add(files('mcf_dtimer.c'))
+EOF
+fi
+if ! grep -q mcf_gpio.c "$HW_MESON"; then
+    cat >> "$HW_MESON" <<'EOF'
+system_ss.add(files('mcf_gpio.c'))
 EOF
 fi
 

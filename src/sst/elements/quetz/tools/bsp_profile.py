@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert an mcf-bsp-compat JSONL trace into diagnostics and a safe profile."""
+"""Convert a Raptor BSP-compat JSONL trace into diagnostics and a safe profile."""
 
 from __future__ import annotations
 
@@ -11,15 +11,47 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 
-MCF5208_BLOCKS = {
-    "scm": (0xFC000000, 0x4000), "xbs": (0xFC004000, 0x4000),
-    "fbcs": (0xFC008000, 0x4000), "scm2": (0xFC040000, 0x4000),
-    "edma": (0xFC044000, 0x4000), "i2c": (0xFC058000, 0x4000),
-    "qspi": (0xFC05C000, 0x4000), "dtim0": (0xFC070000, 0x4000),
-    "dtim1": (0xFC074000, 0x4000), "eport": (0xFC088000, 0x4000),
-    "watchdog": (0xFC08C000, 0x4000), "pll": (0xFC090000, 0x4000),
-    "wtm": (0xFC098000, 0x4000), "gpio": (0xFC0A4000, 0x4000),
-}
+# The block allowlist is the single source of truth in the board contract
+# (boards/raptor/board.json, regions carrying `bsp_compat`). It is loaded at
+# runtime rather than hardcoded so this tool cannot drift from the QEMU
+# device's allowlist (raptor_bsp_blocks.h, generated from the same contract).
+#
+# Resolution order for the contract:
+#   1. an explicit --board path;
+#   2. boards/raptor/board.json walked up from this file (umbrella checkout);
+#   3. fall back to deriving block bases from the trace's own records.
+_DEFAULT_BOARD_NAMES = ("boards/raptor/board.json",)
+
+
+def _find_board() -> Path | None:
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        for rel in _DEFAULT_BOARD_NAMES:
+            candidate = parent / rel
+            if candidate.is_file():
+                return candidate
+    return None
+
+
+def load_blocks(board_path: Path | None) -> dict[str, tuple[int, int]]:
+    """Return {block_name: (base, size)} from the board contract, or {}."""
+    path = board_path or _find_board()
+    if not path or not path.is_file():
+        return {}
+    try:
+        board = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    blocks: dict[str, tuple[int, int]] = {}
+    for region in board.get("regions", []):
+        compat = region.get("bsp_compat")
+        if not compat:
+            continue
+        name = compat.get("block")
+        base = region["base"]
+        size = region["size"]
+        blocks[name] = (_number(base), _number(size))
+    return blocks
 
 
 def _number(value: object) -> int:
@@ -106,7 +138,7 @@ def analyze(records: list[dict], sources: dict[int, tuple[str, str]],
         elif key in last_write and record["value_int"] != last_write[key]["value_int"]:
             mismatches.append((last_write.pop(key), record))
 
-    lines = ["MCF5208 BSP compatibility discovery", f"accesses: {len(records)}",
+    lines = ["Raptor BSP compatibility discovery", f"accesses: {len(records)}",
              f"unique access shapes: {len(access_counts)}",
              f"unknown profile access shapes: {len(unknown_counts)}", "",
              "Likely status polls:"]
@@ -134,23 +166,34 @@ def analyze(records: list[dict], sources: dict[int, tuple[str, str]],
     return "\n".join(lines) + "\n"
 
 
-def make_profile(records: list[dict]) -> dict:
+def make_profile(records: list[dict], blocks: dict[str, tuple[int, int]] | None = None) -> dict:
+    blocks = blocks or {}
     observed = defaultdict(set)
+    block_min_addr: dict[str, int] = {}
     for record in records:
-        observed[record["block"]].add((record["address_int"], int(record["size"])))
-    blocks = []
-    for name, (base, size) in MCF5208_BLOCKS.items():
-        if name not in observed:
-            continue
+        name = record["block"]
+        observed[name].add((record["address_int"], int(record["size"])))
+        addr = record["address_int"]
+        block_min_addr[name] = min(block_min_addr.get(name, addr), addr)
+    out_blocks = []
+    # Emit observed blocks in canonical (base) order when known, else by name.
+    def _base_of(name: str) -> int:
+        if name in blocks:
+            return blocks[name][0]
+        # Fall back to the block's lowest observed address aligned to 0x4000.
+        return block_min_addr.get(name, 0) & ~0x3FFF
+
+    for name in sorted(observed, key=lambda n: (_base_of(n), n)):
+        base, size = blocks.get(name, (_base_of(name), 0x4000))
         registers = []
         for address, width in sorted(observed[name]):
             offset = address - base
             registers.append({"name": f"reg_{offset:04x}_{width * 8}",
                               "offset": f"0x{offset:x}", "width": width,
                               "reset": "0x0", "writable_mask": "0x0"})
-        blocks.append({"name": name, "base": f"0x{base:x}",
+        out_blocks.append({"name": name, "base": f"0x{base:x}",
                        "size": f"0x{size:x}", "registers": registers})
-    return {"version": 1, "target": "mcf5208", "blocks": blocks}
+    return {"version": 1, "target": "raptor", "blocks": out_blocks}
 
 
 def main() -> int:
@@ -160,13 +203,16 @@ def main() -> int:
     parser.add_argument("--report-out", required=True, type=Path)
     parser.add_argument("--profile-out", required=True, type=Path)
     parser.add_argument("--elf", type=Path)
+    parser.add_argument("--board", type=Path,
+                        help="board contract (default: locate boards/raptor/board.json)")
     parser.add_argument("--poll-threshold", type=int, default=100)
     args = parser.parse_args()
     records = load_trace(args.input)
+    blocks = load_blocks(args.board)
     sources = resolve_sources(records, args.elf)
     enrich_trace(records, sources, args.trace_out)
     args.report_out.write_text(analyze(records, sources, args.poll_threshold), encoding="utf-8")
-    args.profile_out.write_text(json.dumps(make_profile(records), indent=2) + "\n",
+    args.profile_out.write_text(json.dumps(make_profile(records, blocks), indent=2) + "\n",
                                 encoding="utf-8")
     return 0
 

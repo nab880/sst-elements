@@ -424,7 +424,8 @@ See SIMULATING-YOUR-SYSTEM.md § Endianness contract for
 multi-threaded workloads.
 
 **Private BSP compatibility.** In discovery mode, QEMU's
-`mcf-bsp-compat` device logs accesses to otherwise-unmodeled MCF5208 blocks
+`mcf-bsp-compat` device logs accesses to the allowlisted, otherwise-unmodeled
+Raptor peripheral blocks (generated from `boards/raptor/board.json`)
 while preserving read-as-zero/write-ignored behavior. The postprocessor
 identifies likely poll loops and write/readback mismatches and creates an
 inert profile skeleton. A reviewed version-1 profile can then provide sparse
@@ -628,9 +629,9 @@ The component contract is its SST params; these env vars configure the
 | `QUETZ_IRQ_LINES` | >0 enables bridge IRQ polling for lines [0, n) |
 | `QUETZ_IRQ_POLL_NS` | Bridge IRQ poll period in virtual-time ns (default 10000) |
 | `QUETZ_IRQ_INTC_TYPE` | QOM type of the interrupt controller (default `mcf-intc`) |
-| `QUETZ_BSP_DISCOVER=1` | Map and log supported unmodeled MCF5208 register blocks (system mode only) |
+| `QUETZ_BSP_DISCOVER=1` | Map and log the allowlisted unmodeled Raptor register blocks (system mode only) |
 | `QUETZ_BSP_PROFILE` | Version-1 BSP compatibility profile path (system mode only) |
-| `QUETZ_BSP_TARGET` | BSP profile target; currently `mcf5208` |
+| `QUETZ_BSP_TARGET` | BSP profile target; currently `raptor` |
 | `QUETZ_BSP_LOG` | Raw BSP MMIO JSONL output path |
 
 Everything else `QUETZ_*` (e.g. `QUETZ_EXE`, `QUETZ_QEMU`,

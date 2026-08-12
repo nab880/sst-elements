@@ -1,10 +1,10 @@
 # ColdFire BSP compatibility
 
-Quetz can run a firmware image that contains a private MCF5208 board-support
-package (BSP) without requiring its source. It discovers which otherwise
-unmodeled SoC registers the binary touches, reports likely initialization
-hangs, and applies a reviewed JSON description of the minimum register
-behavior needed by that BSP.
+Quetz can run a firmware image that contains a private Raptor (ColdFire V4)
+board-support package (BSP) without requiring its source. It discovers which
+otherwise unmodeled SoC registers the binary touches, reports likely
+initialization hangs, and applies a reviewed JSON description of the minimum
+register behavior needed by that BSP.
 
 This is for **functional bring-up testing**: did startup finish, did the
 application run, and did its drivers produce the expected results? It does
@@ -13,7 +13,7 @@ transactions, or peripheral throughput.
 
 ## The three operating modes
 
-| Mode | Command | Unmodeled MCF5208 registers |
+| Mode | Command | Unmodeled Raptor registers |
 |---|---|---|
 | Native baseline | no BSP option | QEMU behavior is unchanged: reads return zero and writes are ignored |
 | Discovery | `--bsp-discover` | All supported unmodeled blocks are mapped as logged RAZ/WI regions |
@@ -102,38 +102,23 @@ needed to reach and test the application.
 
 ## Profile format
 
-A profile is JSON with `version: 1`, target `mcf5208`, and a list of
+A profile is JSON with `version: 1`, target `raptor`, and a list of
 sparse blocks:
 
 ```json
 {
   "version": 1,
-  "target": "mcf5208",
+  "target": "raptor",
   "blocks": [
     {
-      "name": "pll",
+      "name": "gpiob3",
       "base": "0xfc090000",
       "size": "0x4000",
       "registers": [
         {
-          "name": "PCR",
-          "offset": "0x0",
-          "width": 4,
-          "reset": "0x0",
-          "writable_mask": "0xffffffff",
-          "on_write": [
-            {
-              "mask": "0x0",
-              "equals": "0x0",
-              "target": "0x4",
-              "set": "0x1"
-            }
-          ]
-        },
-        {
-          "name": "PSR",
-          "offset": "0x4",
-          "width": 4,
+          "name": "INT_STATUS",
+          "offset": "0xc",
+          "width": 2,
           "reset": "0x1",
           "writable_mask": "0x0"
         }
@@ -189,45 +174,49 @@ A rule with `mask: 0` and `equals: 0` is unconditional, as in the example.
 If omitted, `mask` defaults to all bits and the other trigger fields default
 to zero. Keep ordinary writable bits separate from W1C/W1S masks.
 
-## Allowed MCF5208 blocks
+## Allowed Raptor blocks
 
-Discovery and profiles are restricted to QEMU 9.2.1 ranges that the Quetz
-overlay has identified as unmodeled:
+Discovery and profiles are restricted to the sparse peripheral blocks the
+Quetz overlay has identified as unmodeled (otherwise-RAZ/WI) IPS space. This
+table is **generated** from the board contract `boards/raptor/board.json`
+(regions carrying a `bsp_compat` object with model `compat`, the default) into
+`qemu-overlay/hw/misc/raptor_bsp_blocks.h`; do not edit it by hand — change the
+board contract and regenerate with `tools/gen_bsp_compat_blocks.py`.
 
 | Block | Base | Size |
 |---|---:|---:|
-| SCM | `0xfc000000` | `0x4000` |
-| XBS | `0xfc004000` | `0x4000` |
-| FBCS | `0xfc008000` | `0x4000` |
-| SCM2 | `0xfc040000` | `0x4000` |
-| eDMA | `0xfc044000` | `0x4000` |
-| I²C | `0xfc058000` | `0x4000` |
-| QSPI | `0xfc05c000` | `0x4000` |
-| DTIM0 | `0xfc070000` | `0x4000` |
-| DTIM1 | `0xfc074000` | `0x4000` |
-| EPORT | `0xfc088000` | `0x4000` |
-| Watchdog | `0xfc08c000` | `0x4000` |
-| PLL | `0xfc090000` | `0x4000` |
-| WTM | `0xfc098000` | `0x4000` |
-| GPIO | `0xfc0a4000` | `0x4000` |
+| FBCS (FlexBus chip selects) | `0xfc008000` | `0x4000` |
+| SCM2 (platform control) | `0xfc040000` | `0x4000` |
+
+The DMA timers **DTIM0–3** (`0xfc070000`–`0xfc07ffff`) and the GPIO banks
+**GPIOB0–3** (`0xfc084000`–`0xfc093fff`) are *not* in this allowlist. They are
+modeled by dedicated QEMU devices (real behavior, not register storage):
+`mcf-dtimer` (a virtual-time counter) and `mcf-gpio` (16-bit registers with
+mask-in-high-byte value writes and read-modify-write direction). Their block
+tables are generated separately into `qemu-overlay/hw/misc/raptor_dtimer_blocks.h`
+and `raptor_gpio_blocks.h` from the same board contract (regions with
+`bsp_compat.model` `dtimer` / `gpio`). Both devices are instantiated on the same
+activation gate as this compatibility device, so do not add a DTIM or GPIO block
+to a compat profile — the two would claim the same aperture.
 
 The block name and base must match this table. A profile may use a smaller
 size but cannot extend beyond the canonical range. Profile blocks cannot
-overlap.
+overlap. QEMU-native devices (UART0–2, PIT, FEC, INTC) are deliberately absent
+— the compat device must never shadow them.
 
 ## Starter profile
 
-[`profiles/mcf5208-init.json`](profiles/mcf5208-init.json) demonstrates:
+[`profiles/raptor-init.json`](profiles/raptor-init.json) demonstrates:
 
 - writable FlexBus chip-select configuration registers;
-- stored I²C initialization registers and a fixed status value;
-- stored watchdog control/service registers;
-- an immediate PLL lock relationship;
-- GPIO output latch/readback.
+- a stored SCM2 register value for write/readback;
+- a fixed SCM2 status bit that satisfies a bounded init poll.
 
-It is an example of the format, not an authoritative MCF5208 or board model.
+It is an example of the format, not an authoritative Raptor or board model.
 Audit every address, width, mask, and status bit before using it with a real
-BSP.
+BSP. The reviewed board profile
+[`profiles/raptor-board.json`](../../../../../../profiles/raptor-board.json)
+(umbrella repo) is the starting point for real Raptor bring-up.
 
 ## What this can and cannot validate
 
@@ -243,11 +232,14 @@ It does not implement:
 
 - PLL frequency changes or lock delay;
 - watchdog expiry, reset, or service-window timing;
-- GPIO input stimulus, pin muxing, electrical levels, or interrupts;
+- GPIO input stimulus, pin muxing, electrical levels, or interrupts (GPIO
+  register I/O — direction/value/readback — is modeled by the separate mcf-gpio
+  device; interrupts and external pin stimulus are not);
 - I²C/QSPI transfers or attached devices;
 - eDMA data movement;
 - FlexBus external memory/device transactions;
-- timer counting, clock trees, or event scheduling;
+- clock trees, or timer event/interrupt scheduling (DMA-timer *counting* is
+  modeled by the separate `mcf-dtimer` device; timer interrupts/DMA are not);
 - hardware-accurate reset sequencing or cycle timing.
 
 Use QEMU-native devices where available. Use an SST MMIO component for a
@@ -264,7 +256,7 @@ peripheral simulator.
 |---|---|
 | `--bsp-discover` | Enable discovery logging and postprocessing |
 | `--bsp-profile FILE` | Stage and apply a version-1 JSON profile |
-| `--bsp-target mcf5208` | Select the target; currently the only accepted value |
+| `--bsp-target raptor` | Select the target; currently the only accepted value |
 
 For custom launchers, the equivalent system-mode environment variables are:
 
@@ -272,7 +264,7 @@ For custom launchers, the equivalent system-mode environment variables are:
 |---|---|
 | `QUETZ_BSP_DISCOVER=1` | Instantiate the discovery device |
 | `QUETZ_BSP_PROFILE=/path/profile.json` | Apply a profile |
-| `QUETZ_BSP_TARGET=mcf5208` | Select the target |
+| `QUETZ_BSP_TARGET=raptor` | Select the target |
 | `QUETZ_BSP_LOG=/path/trace.jsonl` | Write raw access records |
 
 These options are system-mode only. The launcher rejects them in QEMU
@@ -283,10 +275,16 @@ user mode.
 | Path | Responsibility |
 |---|---|
 | `qemu-overlay/hw/misc/mcf_bsp_compat.c` | QEMU register device, profile parser, access log |
+| `qemu-overlay/hw/misc/raptor_bsp_blocks.h` | Generated block allowlist (from `boards/raptor/board.json`) |
+| `qemu-overlay/hw/misc/mcf_dtimer.c` | QEMU DMA-timer device (DTIM0–3): virtual-time counter |
+| `qemu-overlay/hw/misc/raptor_dtimer_blocks.h` | Generated DTIM block table (model `dtimer` regions) |
+| `qemu-overlay/hw/misc/mcf_gpio.c` | QEMU GPIO device (GPIOB0–3): 16-bit, mask-in-high-byte value, RMW direction |
+| `qemu-overlay/hw/misc/raptor_gpio_blocks.h` | Generated GPIO block table (model `gpio` regions) |
+| `tools/gen_bsp_compat_blocks.py` | Regenerates the allowlist + DTIM/GPIO headers from the board contract |
 | `qemu-overlay/apply-qemu-overlay.sh` | Installs the Quetz overlay into pinned QEMU source |
 | `quetz_launcher.cc` | Converts environment variables into QEMU device arguments |
 | `tools/bsp_profile.py` | Enriches traces, reports likely problems, generates inert skeletons |
-| `profiles/mcf5208-init.json` | Reviewed-example starting profile |
+| `profiles/raptor-init.json` | Reviewed-example starting profile |
 | `tests/sysmode/firmware/bsp_torture.c` | Baseline and profiled behavior probe |
 
 ## Troubleshooting

@@ -150,7 +150,8 @@ pid_t QemuLauncher::spawn(const QuetzConfig& cfg,
     // Optional ColdFire BSP-initialization compatibility device.  The device
     // lives in QEMU (rather than SST) because its read values steer guest
     // control flow before the trace reaches Quetz.  It overlays only sparse,
-    // otherwise-unmodeled MCF5208 register blocks.
+    // otherwise-unmodeled Raptor register blocks (allowlist generated from
+    // boards/raptor/board.json into raptor_bsp_blocks.h).
     const char* bsp_profile  = getenv("QUETZ_BSP_PROFILE");
     const char* bsp_discover = getenv("QUETZ_BSP_DISCOVER");
     const char* bsp_target   = getenv("QUETZ_BSP_TARGET");
@@ -171,7 +172,7 @@ pid_t QemuLauncher::spawn(const QuetzConfig& cfg,
         reject_comma("QUETZ_BSP_LOG", bsp_log);
 
         std::string dev = "mcf-bsp-compat,target=";
-        dev += (bsp_target && bsp_target[0]) ? bsp_target : "mcf5208";
+        dev += (bsp_target && bsp_target[0]) ? bsp_target : "raptor";
         if (bsp_profile && bsp_profile[0]) {
             dev += ",profile=";
             dev += bsp_profile;
@@ -184,6 +185,29 @@ pid_t QemuLauncher::spawn(const QuetzConfig& cfg,
         }
         argv_strs.push_back("-device");
         argv_strs.push_back(dev);
+
+        // The DMA timers (DTIM0-3) are a dedicated device rather than compat
+        // register storage: DTCN must advance with virtual time so BSP
+        // busy-wait sleeps terminate. It owns 0xFC070000-0xFC07FFFF (the
+        // dtimer-model blocks generated into raptor_dtimer_blocks.h) and is
+        // therefore excluded from the mcf-bsp-compat allowlist. Enabled on the
+        // same gate: whenever BSP compatibility is active, the real Raptor
+        // always has these timers.
+        std::string dtimer_dev = "mcf-dtimer,target=";
+        dtimer_dev += (bsp_target && bsp_target[0]) ? bsp_target : "raptor";
+        argv_strs.push_back("-device");
+        argv_strs.push_back(dtimer_dev);
+
+        // GPIO banks (GPIOB0-3) are likewise a dedicated device rather than
+        // compat register storage: value writes use mask-in-high-byte and
+        // direction writes are read-modify-write, semantics the generic compat
+        // register model does not implement. It owns 0xFC084000-0xFC093FFF (the
+        // gpio-model blocks in raptor_gpio_blocks.h), excluded from the compat
+        // allowlist. Same use_bsp activation gate.
+        std::string gpio_dev = "mcf-gpio,target=";
+        gpio_dev += (bsp_target && bsp_target[0]) ? bsp_target : "raptor";
+        argv_strs.push_back("-device");
+        argv_strs.push_back(gpio_dev);
     }
 
     if (cfg.system_mode && !cfg.system_mode_loader.empty())

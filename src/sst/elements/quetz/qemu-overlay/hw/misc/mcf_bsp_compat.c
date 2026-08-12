@@ -1,10 +1,14 @@
 /*
- * mcf_bsp_compat.c -- profile-driven ColdFire BSP initialization support.
+ * mcf_bsp_compat.c -- profile-driven ColdFire/Raptor BSP initialization support.
  *
  * This intentionally models register behavior, not peripheral timing.  Sparse
- * blocks from a JSON profile are overlaid on QEMU's otherwise-unassigned
- * MCF5208 IPS ranges.  Unknown offsets remain read-as-zero/write-ignored and
- * every access can be written to a JSONL discovery log.
+ * blocks from a JSON profile are overlaid on the SoC's otherwise-unassigned
+ * IPS ranges.  Unknown offsets remain read-as-zero/write-ignored and every
+ * access can be written to a JSONL discovery log.
+ *
+ * The allowlist of overlayable blocks (raptor_bsp_blocks[]) is GENERATED from
+ * the board contract boards/raptor/board.json by tools/gen_bsp_compat_blocks.py;
+ * do not edit raptor_bsp_blocks.h by hand.
  */
 
 #include "qemu/osdep.h"
@@ -21,6 +25,8 @@
 #include "qapi/qmp/qstring.h"
 #include "qemu/error-report.h"
 #include "qemu/module.h"
+
+#include "raptor_bsp_blocks.h"
 
 #define TYPE_MCF_BSP_COMPAT "mcf-bsp-compat"
 OBJECT_DECLARE_SIMPLE_TYPE(McfBspCompatState, MCF_BSP_COMPAT)
@@ -69,30 +75,9 @@ struct McfBspCompatState {
     GPtrArray *blocks;           /* McfBspBlock* */
 };
 
-typedef struct MCFBlockDesc {
-    const char *name;
-    uint64_t base;
-    uint64_t size;
-} MCFBlockDesc;
-
-/* Only ranges QEMU 9.2.1 leaves unimplemented.  Native FEC, INTC, UART,
- * PIT, RCM, and SDRAMC ranges are deliberately absent. */
-static const MCFBlockDesc mcf5208_blocks[] = {
-    { "scm",      0xfc000000, 0x4000 },
-    { "xbs",      0xfc004000, 0x4000 },
-    { "fbcs",     0xfc008000, 0x4000 },
-    { "scm2",     0xfc040000, 0x4000 },
-    { "edma",     0xfc044000, 0x4000 },
-    { "i2c",      0xfc058000, 0x4000 },
-    { "qspi",     0xfc05c000, 0x4000 },
-    { "dtim0",    0xfc070000, 0x4000 },
-    { "dtim1",    0xfc074000, 0x4000 },
-    { "eport",    0xfc088000, 0x4000 },
-    { "watchdog", 0xfc08c000, 0x4000 },
-    { "pll",      0xfc090000, 0x4000 },
-    { "wtm",      0xfc098000, 0x4000 },
-    { "gpio",     0xfc0a4000, 0x4000 },
-};
+/* The overlayable-block allowlist (raptor_bsp_blocks[], RaptorBspBlockDesc)
+ * and the RAPTOR_BSP_COMPAT_TARGET token are generated from the board
+ * contract; see raptor_bsp_blocks.h. */
 
 static uint64_t width_mask(unsigned width)
 {
@@ -153,13 +138,13 @@ static bool dict_u64(QDict *dict, const char *key, uint64_t def,
     return true;
 }
 
-static const MCFBlockDesc *target_block(const char *name, uint64_t base,
-                                        uint64_t size)
+static const RaptorBspBlockDesc *target_block(const char *name, uint64_t base,
+                                              uint64_t size)
 {
     size_t i;
 
-    for (i = 0; i < G_N_ELEMENTS(mcf5208_blocks); i++) {
-        const MCFBlockDesc *d = &mcf5208_blocks[i];
+    for (i = 0; i < G_N_ELEMENTS(raptor_bsp_blocks); i++) {
+        const RaptorBspBlockDesc *d = &raptor_bsp_blocks[i];
         if (!strcmp(name, d->name) && base == d->base && size <= d->size) {
             return d;
         }
@@ -449,8 +434,8 @@ static bool parse_block(McfBspCompatState *s, QDict *dict, Error **errp)
         return false;
     }
     if (!size || !target_block(name, base, size)) {
-        error_setg(errp, "mcf-bsp-compat: block '%s' is not an unmodeled "
-                   "MCF5208 range (base=0x%" PRIx64 ", size=0x%" PRIx64 ")",
+        error_setg(errp, "mcf-bsp-compat: block '%s' is not an allowlisted "
+                   "Raptor range (base=0x%" PRIx64 ", size=0x%" PRIx64 ")",
                    name, base, size);
         return false;
     }
@@ -514,9 +499,10 @@ static bool load_profile(McfBspCompatState *s, Error **errp)
     version = qdict_get_try_int(root, "version", 0);
     target = qdict_get_try_str(root, "target");
     blocks = qdict_get_qlist(root, "blocks");
-    if (version != 1 || !target || strcmp(target, "mcf5208") || !blocks) {
+    if (version != 1 || !target || strcmp(target, RAPTOR_BSP_COMPAT_TARGET) ||
+        !blocks) {
         error_setg(errp, "mcf-bsp-compat: profile requires version=1, "
-                   "target='mcf5208', and a blocks array");
+                   "target='" RAPTOR_BSP_COMPAT_TARGET "', and a blocks array");
         qobject_unref(root_obj);
         return false;
     }
@@ -538,8 +524,8 @@ static void add_discovery_blocks(McfBspCompatState *s)
 {
     size_t i;
 
-    for (i = 0; i < G_N_ELEMENTS(mcf5208_blocks); i++) {
-        const MCFBlockDesc *d = &mcf5208_blocks[i];
+    for (i = 0; i < G_N_ELEMENTS(raptor_bsp_blocks); i++) {
+        const RaptorBspBlockDesc *d = &raptor_bsp_blocks[i];
         g_ptr_array_add(s->blocks, new_block(s, d->name, d->base, d->size));
     }
 }
@@ -550,8 +536,9 @@ static void mcf_bsp_compat_realize(DeviceState *dev, Error **errp)
     guint i;
 
     s->blocks = g_ptr_array_new_with_free_func(bsp_block_free);
-    if (!s->target || strcmp(s->target, "mcf5208")) {
-        error_setg(errp, "mcf-bsp-compat: only target=mcf5208 is supported");
+    if (!s->target || strcmp(s->target, RAPTOR_BSP_COMPAT_TARGET)) {
+        error_setg(errp, "mcf-bsp-compat: only target="
+                   RAPTOR_BSP_COMPAT_TARGET " is supported");
         return;
     }
     if (s->profile && s->profile[0]) {

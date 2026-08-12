@@ -87,6 +87,15 @@ static uint32_t cf_probe_r8(uint32_t addr, uint32_t *val)
 }
 
 __attribute__((unused))
+static uint32_t cf_probe_r16(uint32_t addr, uint32_t *val)
+{
+    uint32_t v = 0;
+    CF_PROBE_BODY(v = *(volatile uint16_t *)addr)
+    *val = v;
+    return g_fault_flag;
+}
+
+__attribute__((unused))
 static uint32_t cf_probe_w32(uint32_t addr, uint32_t v)
 {
     CF_PROBE_BODY(*(volatile uint32_t *)addr = v)
@@ -97,6 +106,13 @@ __attribute__((unused))
 static uint32_t cf_probe_w8(uint32_t addr, uint32_t v)
 {
     CF_PROBE_BODY(*(volatile uint8_t *)addr = (uint8_t)v)
+    return g_fault_flag;
+}
+
+__attribute__((unused))
+static uint32_t cf_probe_w16(uint32_t addr, uint32_t v)
+{
+    CF_PROBE_BODY(*(volatile uint16_t *)addr = (uint16_t)v)
     return g_fault_flag;
 }
 

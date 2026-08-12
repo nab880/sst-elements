@@ -717,9 +717,10 @@ quetz/
 │   └── decoder_generic.*              # Size-based fallback
 ├── qemu-overlay/                       # Quetz QEMU sources and pinned patches
 │   ├── apply-qemu-overlay.sh           # Apply overlay to upstream QEMU
-│   ├── hw/misc/mcf_bsp_compat.c        # Profile-driven MCF5208 BSP registers
+│   ├── hw/misc/mcf_bsp_compat.c        # Profile-driven Raptor BSP registers
+│   ├── hw/misc/raptor_bsp_blocks.h     # Generated block allowlist (board.json)
 │   └── hw/misc/sst_mmio_bridge.c       # Synchronous SST MMIO bridge
-├── profiles/mcf5208-init.json          # Example BSP compatibility profile
+├── profiles/raptor-init.json           # Example BSP compatibility profile
 ├── configure.m4 / Makefile.am
 ├── BSP-COMPATIBILITY.md                # Private-BSP discovery/profile guide
 ├── GETTING-STARTED.md                 # Docker-only ColdFire V4 on-ramp

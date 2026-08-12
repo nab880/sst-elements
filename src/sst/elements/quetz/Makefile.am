@@ -170,9 +170,14 @@ EXTRA_DIST =	GETTING-STARTED.md \
 	BSP-COMPATIBILITY.md \
 	QUETZ_OUTLINE.md \
 	README.md \
-	profiles/mcf5208-init.json \
+	profiles/raptor-init.json \
 	qemu-overlay/apply-qemu-overlay.sh \
 	qemu-overlay/hw/misc/mcf_bsp_compat.c \
+	qemu-overlay/hw/misc/mcf_dtimer.c \
+	qemu-overlay/hw/misc/mcf_gpio.c \
+	qemu-overlay/hw/misc/raptor_bsp_blocks.h \
+	qemu-overlay/hw/misc/raptor_dtimer_blocks.h \
+	qemu-overlay/hw/misc/raptor_gpio_blocks.h \
 	qemu-overlay/hw/misc/sst_mmio_bridge.c \
 	qemu-overlay/include/quetz/quetz_ipc_client.h \
 	qemu-overlay/include/quetz/quetz_ipc_types.h \
@@ -305,6 +310,7 @@ EXTRA_DIST =	GETTING-STARTED.md \
 	tests/expanded_coldfire_tests.py \
 	tools/check_nmea.py \
 	tools/bsp_profile.py \
+	tools/gen_bsp_compat_blocks.py \
 	tools/dump_stream.py \
 	tools/make_stream.py \
 	tools/serial_feeder.py \

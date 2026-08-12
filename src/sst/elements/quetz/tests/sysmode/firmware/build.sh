@@ -127,6 +127,10 @@ echo "=== ColdFire mcf5208evb BSP-survival probe catalogue (m68k) ==="
 $M68K_CC $M68K_FLAGS coldfire_startup.S bsp_torture.c -o bsp_torture
 echo "  -> bsp_torture"
 
+echo "=== ColdFire Raptor GPIO device test (m68k) ==="
+$M68K_CC $M68K_FLAGS coldfire_startup.S coldfire_gpio.c -o coldfire_gpio
+echo "  -> coldfire_gpio"
+
 echo "=== ColdFire mcf5208evb balar vectorAdd (m68k) ==="
 $M68K_CC $M68K_FLAGS coldfire_startup.S coldfire_gpu.c -o coldfire_gpu
 echo "  -> coldfire_gpu"

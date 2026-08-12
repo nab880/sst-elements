@@ -54,7 +54,7 @@ static void probe_range(const char *name, uint32_t base)
 void kernel_main(void)
 {
     uart_init();
-    uart_puts("BSP torture: MCF5208 init-register catalogue on mcf5208evb\n");
+    uart_puts("BSP torture: Raptor init-register catalogue on mcf5208evb\n");
     cf_install_fault_vectors(VEC_TABLE_ADDR);
     uart_puts("vectors installed (VBR=40800000)\n");
 
@@ -65,42 +65,60 @@ void kernel_main(void)
     f = cf_probe_r32(0xFC080000, &v); report("PIT0.PCSR  ", "r32", 0xFC080000, f, v);
     f = cf_probe_r32(0xFC030004, &v); report("FEC.EIR    ", "r32", 0xFC030004, f, v);
 
-    /* Suspects — BSP-init ranges QEMU does not (or may not) model. */
+    /* Suspects — Raptor BSP-init ranges QEMU does not model. Addresses follow
+     * the Raptor map (boards/raptor/board.json), not stock MCF5208: GPIOB0-3
+     * occupy 0xFC084000..0xFC090000 and DTIM0-3 0xFC070000..0xFC07C000. */
     probe_range("SCM   ", 0xFC000000);   /* system control: MPR/PACRs */
     probe_range("XBS   ", 0xFC004000);   /* crossbar switch */
     probe_range("FBCS  ", 0xFC008000);   /* FlexBus chip selects (CSAR0) */
-    probe_range("SCM2  ", 0xFC040010);   /* core watchdog CWCR area */
+    probe_range("SCM2  ", 0xFC040010);   /* platform control / core WDT area */
     probe_range("EDMA  ", 0xFC044000);
     probe_range("I2C   ", 0xFC058008);   /* I2CR */
     probe_range("QSPI  ", 0xFC05C000);
     probe_range("DTIM0 ", 0xFC070000);
-    probe_range("EPORT ", 0xFC088000);
-    probe_range("PLL   ", 0xFC090000);   /* clocking module PCR */
-    probe_range("WTM   ", 0xFC098000);   /* watchdog WCR */
+    probe_range("DTIM2 ", 0xFC078000);   /* the timer PFLASH actually uses */
+    probe_range("GPIOB0", 0xFC084000);   /* Raptor GPIO bank 0 (CORE1 strap) */
+    probe_range("GPIOB1", 0xFC088000);   /* Raptor GPIO bank 1 */
+    probe_range("GPIOB2", 0xFC08C000);   /* Raptor GPIO bank 2 (LEDs/button) */
+    probe_range("GPIOB3", 0xFC090000);   /* Raptor GPIO bank 3 (UBIO) */
     probe_range("RCM   ", 0xFC0A0000);   /* reset controller RCR */
-    probe_range("GPIO  ", 0xFC0A4000);   /* port output data regs */
+    probe_range("LEGGPIO", 0xFC0A4000);  /* legacy MCF GPIO; unused on Raptor */
     probe_range("SDRAMC", 0xFC0A8000);   /* SDRAM controller */
     probe_range("OFFMAP", 0xFC0FC000);   /* inside IPS space, no module */
     probe_range("FLASH0", 0x00000000);   /* off-SDRAM low memory */
     probe_range("WILD  ", 0xE0000000);   /* far outside the SoC map */
 
-    /* Behavioral hazard 1: write-then-verify (GPIO output readback). */
-    (void)cf_probe_w8(0xFC0A4000, 0x5A);
-    f = cf_probe_r8(0xFC0A4000, &v);
-    uart_puts("gpio write/readback: wrote 5a, read=");
+    /* Behavioral hazard 1: write-then-verify against a compat-profile register.
+     * GPIO now has a dedicated device (mcf-gpio) with mask-in-high-byte value
+     * semantics, so it is no longer a generic storage demo; use an SCM2
+     * (platform-control) register the profile marks STICKY instead. */
+    (void)cf_probe_w16(0xFC040020, 0x5A);
+    f = cf_probe_r16(0xFC040020, &v);
+    uart_puts("compat write/readback: wrote 5a, read=");
     uart_put_u32_hex(v);
     uart_puts(f ? " (FAULT)" : (v == 0x5A ? " (stored)" : " (WI)"));
     uart_putc('\n');
 
-    /* Behavioral hazard 2: bounded status poll (PLL lock style). A real BSP
-     * does `while (!(PSR & LOCK));` — on RAZ this never exits. */
+    /* Width discipline: a wrong-width access to a profiled register must not
+     * silently match. The profile declares SCM2+0x20 as 16-bit; a 32-bit read
+     * of the same offset should fall back to RAZ and be reported loudly by the
+     * compat device (the "width mismatch" diagnostic). */
+    f = cf_probe_r32(0xFC040020, &v);
+    uart_puts("compat width-check: r32 read=");
+    uart_put_u32_hex(v);
+    uart_putc('\n');
+
+    /* Behavioral hazard 2: bounded status poll. A real BSP does
+     * `while (!(STATUS & bit));` — on RAZ this never exits. Uses a profileable
+     * status register in an allowlisted compat block (SCM2+0x24); the profile
+     * can force it non-zero to unstick. */
     uint32_t polls = 0, hit = 0;
     for (polls = 0; polls < 10000; polls++) {
-        f = cf_probe_r32(0xFC090004, &v);
+        f = cf_probe_r16(0xFC040024, &v);
         if (f) { hit = 2; break; }
         if (v != 0) { hit = 1; break; }
     }
-    uart_puts("pll lock poll: ");
+    uart_puts("status poll: ");
     uart_puts(hit == 1 ? "satisfied after " :
               hit == 2 ? "FAULT after "     : "TIMEOUT (RAZ) after ");
     uart_put_u32_dec(polls);
