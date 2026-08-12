@@ -2196,19 +2196,30 @@ class testcase_quetz_sysmode(SSTTestCase):
                 raw = f.read()
         self.assertNotIn("FATAL", raw)
 
-        self.assertIn("catalogue done: clean=55 fault=0", raw,
+        self.assertIn("catalogue done: clean=61 fault=0", raw,
             "unmodeled-register behavior changed (was: all RAZ/WI, no faults) "
             "— re-run the BSP-survival assessment")
-        self.assertIn("gpio write/readback: wrote 5a, read=0x00000000 (WI)", raw,
-            "GPIO write-ignore behavior changed")
-        self.assertIn("pll lock poll: TIMEOUT (RAZ)", raw,
+        self.assertIn("compat write/readback: wrote 5a, read=0x00000000 (WI)", raw,
+            "compat write-ignore behavior changed")
+        self.assertIn("status poll: TIMEOUT (RAZ)", raw,
             "status-poll behavior changed (a poll that used to hang now exits)")
         self.assertIn("TESTFINISH[0]", raw,
             "TestFinisher sentinel not triggered; sim may have hung")
 
     # -------------------------------------------------------------------------
     def test_quetz_coldfire_bsp_compat_profile(self):
-        """An opt-in profile can satisfy BSP polls/readback without source edits."""
+        """An opt-in profile can satisfy BSP polls/readback without source edits.
+
+        Note: enabling BSP compatibility (QUETZ_BSP_PROFILE/TARGET) also
+        instantiates the dedicated mcf-dtimer device over DTIM0-3
+        (0xFC070000-0xFC07FFFF) and the mcf-gpio device over GPIOB0-3
+        (0xFC084000-0xFC093FFF), both gated on the same use_bsp condition.
+        bsp_torture's DTIM/GPIO probe_range accesses hit those real devices
+        rather than RAZ/WI, but they are wrong-width for the devices' registers,
+        so they remain non-faulting and read 0 -- the clean/fault catalogue
+        counts are unchanged from the baseline torture test. The write/readback
+        and status-poll hazards use SCM2 (a compat block) so this test still
+        exercises the mcf-bsp-compat profile path, not GPIO."""
         test_path = self.get_testsuite_dir()
         sst_prefix, sst_bindir, sst_libexec = sst_paths()
 
@@ -2220,7 +2231,7 @@ class testcase_quetz_sysmode(SSTTestCase):
             self.skipTest("qemu-system-m68k not found")
         exe_abs = os.path.join(test_path, "sysmode/firmware/bsp_torture")
         profile = os.path.normpath(os.path.join(
-            test_path, "../profiles/mcf5208-init.json"))
+            test_path, "../profiles/raptor-init.json"))
         if not os.path.exists(exe_abs):
             self.skipTest("bsp_torture firmware not found")
 
@@ -2236,7 +2247,7 @@ class testcase_quetz_sysmode(SSTTestCase):
                           ("low", 0x00000000, 0x3FFFFFFF, "filtered"),
                           ("high", 0x48000000, 0xFBFFFFFF, "filtered")])
         os.environ["QUETZ_BSP_PROFILE"] = profile
-        os.environ["QUETZ_BSP_TARGET"] = "mcf5208"
+        os.environ["QUETZ_BSP_TARGET"] = "raptor"
         os.environ["QUETZ_BSP_LOG"] = os.path.join(outdir, "bsp-mmio.jsonl")
 
         sdlfile = os.path.join(test_path, "sysmode", "basic_quetz_sysmode.py")
@@ -2248,8 +2259,8 @@ class testcase_quetz_sysmode(SSTTestCase):
         with open(outfile, "r") as stream:
             raw = stream.read()
         self.assertNotIn("FATAL", raw)
-        self.assertIn("gpio write/readback: wrote 5a, read=0x0000005a (stored)", raw)
-        self.assertIn("pll lock poll: satisfied after", raw)
+        self.assertIn("compat write/readback: wrote 5a, read=0x0000005a (stored)", raw)
+        self.assertIn("status poll: satisfied after", raw)
         self.assertIn("TESTFINISH[0]", raw)
         self.assertTrue(os.path.getsize(os.environ["QUETZ_BSP_LOG"]) > 0)
         with open(errfile, "r") as stream:
@@ -2257,6 +2268,64 @@ class testcase_quetz_sysmode(SSTTestCase):
         self.assertIn("width mismatch", raw,
             "profile/access width mismatch should be reported loudly instead "
             "of silently behaving as an unknown RAZ/WI register")
+
+    # -------------------------------------------------------------------------
+    def test_quetz_coldfire_gpio(self):
+        """The mcf-gpio device satisfies the BSP GPIO_test() readback oracle.
+
+        coldfire_gpio reproduces raptor-bsp GPIO_driver semantics (16-bit regs,
+        mask-in-high-byte value writes, read-modify-write direction writes) and
+        sweeps all four banks like GPIO_test(false), reporting errors=0 on
+        success. The device is instantiated by enabling BSP compatibility
+        (QUETZ_BSP_DISCOVER=1 -> use_bsp -> mcf-gpio + mcf-dtimer, plus the
+        compat device in discovery mode over fbcs/scm2 only; GPIOB0-3 are owned
+        exclusively by mcf-gpio). Oracle: 'GPIO test: errors=0'."""
+        test_path = self.get_testsuite_dir()
+        sst_prefix, sst_bindir, sst_libexec = sst_paths()
+
+        import shutil
+        qemu_bin = os.path.join(sst_bindir, "qemu-system-m68k")
+        if not os.path.exists(qemu_bin):
+            qemu_bin = shutil.which("qemu-system-m68k") or qemu_bin
+        if not os.path.exists(qemu_bin):
+            self.skipTest("qemu-system-m68k not found")
+        exe_abs = os.path.join(test_path, "sysmode/firmware/coldfire_gpio")
+        if not os.path.exists(exe_abs):
+            self.skipTest("coldfire_gpio firmware not found; "
+                          "run M68K_CC=m68k-linux-gnu-gcc ./build.sh")
+
+        outdir = os.path.join(self.get_test_output_run_dir(),
+                              "quetz_sysmode_tests", "gpio")
+        os.makedirs(outdir, exist_ok=True)
+        make_sysmode_env(sst_prefix, sst_libexec, qemu_bin, exe_abs,
+                         "-machine mcf5208evb -display none -serial stdio -m 128M",
+                         "-kernel", 0x40000000, 0x47FFFFFF,
+                         [("uart0", 0xFC060000, 0xFC0600FF, "uart", {"tx_offset": 12}),
+                          ("finish", 0x80000000, 0x80000003, "testfinish"),
+                          ("ips", 0xFC000000, 0xFCFFFFFF, "filtered"),
+                          ("low", 0x00000000, 0x3FFFFFFF, "filtered"),
+                          ("high", 0x48000000, 0xFBFFFFFF, "filtered")])
+        os.environ["QUETZ_BSP_DISCOVER"] = "1"
+        os.environ["QUETZ_BSP_TARGET"] = "raptor"
+
+        sdlfile = os.path.join(test_path, "sysmode", "basic_quetz_sysmode.py")
+        outfile = os.path.join(outdir, "gpio.out")
+        errfile = os.path.join(outdir, "gpio.err")
+        try:
+            self.run_sst(sdlfile, outfile, errfile,
+                         mpi_out_files=os.path.join(outdir, "gpio.testfile"),
+                         set_cwd=outdir, timeout_sec=180)
+        finally:
+            os.environ.pop("QUETZ_BSP_DISCOVER", None)
+            os.environ.pop("QUETZ_BSP_TARGET", None)
+        with open(outfile, "r") as stream:
+            raw = stream.read()
+        self.assertNotIn("FATAL", raw)
+        self.assertIn("GPIO test: errors=0", raw,
+            "mcf-gpio readback contract broken (direction RMW / value "
+            "mask-in-high-byte / 16-bit width)")
+        self.assertIn("TESTFINISH[0]", raw,
+            "TestFinisher sentinel not triggered; sim may have hung")
 
     # -------------------------------------------------------------------------
     def test_quetz_coldfire_accel_scale(self):

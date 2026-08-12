@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "target": "raptor",
+  "blocks": [
+    {
+      "name": "fbcs",
+      "base": "0xfc008000",
+      "size": "0x4000",
+      "registers": [
+        { "name": "CSAR0", "offset": "0x0", "width": 4, "reset": "0x0", "writable_mask": "0xffffffff" },
+        { "name": "CSMR0", "offset": "0x4", "width": 4, "reset": "0x0", "writable_mask": "0xffffffff" },
+        { "name": "CSCR0", "offset": "0x8", "width": 4, "reset": "0x0", "writable_mask": "0xffffffff" }
+      ]
+    },
+    {
+      "name": "scm2",
+      "base": "0xfc040000",
+      "size": "0x4000",
+      "registers": [
+        { "name": "SCM2_STICKY",     "offset": "0x20", "width": 2, "reset": "0x0", "writable_mask": "0xffff" },
+        { "name": "SCM2_STATUS_BIT", "offset": "0x24", "width": 2, "reset": "0x1", "writable_mask": "0x0" }
+      ]
+    }
+  ]
+}
