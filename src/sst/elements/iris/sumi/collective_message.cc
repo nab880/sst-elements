@@ -38,6 +38,7 @@ CollectiveWorkMessage::serialize_order(SST::Core::Serialization::serializer& ser
 {
   ProtocolMessage::serialize_order(ser);
   SST_SER(tag_);
+  SST_SER(group_id_);
   SST_SER(type_);
   SST_SER(round_);
   SST_SER(dom_recver_);
@@ -48,8 +49,8 @@ std::string
 CollectiveWorkMessage::toString() const
 {
   return SST::Hg::sprintf(
-    "message for collective %s recver=%d sender=%d nbytes=%d round=%d tag=%d %s %d->%d",
-     Collective::tostr(type_), recver(), sender(), payloadBytes(), round_, tag_,
+    "message for collective %s group=%llu recver=%d sender=%d nbytes=%d round=%d tag=%d %s %d->%d",
+     Collective::tostr(type_), (long long unsigned int) group_id_, recver(), sender(), payloadBytes(), round_, tag_,
      SST::Hg::NetworkMessage::typeStr(), fromaddr(), toaddr());
 }
 

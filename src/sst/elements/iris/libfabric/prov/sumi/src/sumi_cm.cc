@@ -54,7 +54,7 @@ struct fi_ops_cm sumi_ep_ops_cm = {
   .accept = fi_no_accept,
   .reject = fi_no_reject,
   .shutdown = fi_no_shutdown,
-  .join = fi_no_join,
+  .join = sumi_join_collective,
 };
 
 struct fi_ops_cm sumi_ep_msg_ops_cm = {
@@ -67,7 +67,7 @@ struct fi_ops_cm sumi_ep_msg_ops_cm = {
   .accept = sumi_accept,
 	.reject = fi_no_reject,
   .shutdown = sumi_shutdown,
-	.join = fi_no_join,
+	.join = sumi_join_collective,
 };
 
 struct fi_ops sumi_pep_fi_ops = {
@@ -859,6 +859,5 @@ extern "C" DIRECT_FN  int sumi_pep_open(struct fid_fabric *fabric,
 #endif
 	return FI_SUCCESS;
 }
-
 
 

@@ -57,6 +57,11 @@
 #include <assert.h>
 #include <mercury/common/errors.h>
 
+#include <algorithm>
+#include <mutex>
+#include <new>
+#include <vector>
+
 #include "sumi_prov.h"
 #include "sumi_av.h"
 
@@ -85,6 +90,192 @@ DIRECT_FN const char *sumi_av_straddr(struct fid_av *av,
 
 static int sumi_av_close(fid_t fid);
 
+namespace {
+
+struct SumiAvState {
+  std::mutex lock;
+  std::vector<fi_addr_t> addrs;
+};
+
+SumiAvState* avState(sumi_fid_av* av)
+{
+  return static_cast<SumiAvState*>(av->state);
+}
+
+int reserveSet(sumi_fid_av_set* set, size_t capacity)
+{
+  if (capacity <= set->capacity) return FI_SUCCESS;
+  if (capacity > SIZE_MAX / sizeof(fi_addr_t)) return -FI_EOVERFLOW;
+  auto* addrs = static_cast<fi_addr_t*>(
+      realloc(set->addrs, capacity * sizeof(fi_addr_t)));
+  if (!addrs) return -FI_ENOMEM;
+  set->addrs = addrs;
+  set->capacity = capacity;
+  return FI_SUCCESS;
+}
+
+bool contains(const sumi_fid_av_set* set, fi_addr_t addr)
+{
+  for (size_t i = 0; i < set->count; ++i) {
+    if (set->addrs[i] == addr) return true;
+  }
+  return false;
+}
+
+int sumi_av_set_close(fid_t fid)
+{
+  auto* set = reinterpret_cast<sumi_fid_av_set*>(fid);
+  free(set->addrs);
+  free(set);
+  return FI_SUCCESS;
+}
+
+int sumi_av_set_union(struct fid_av_set* dst_, const struct fid_av_set* src_)
+{
+  auto* dst = reinterpret_cast<sumi_fid_av_set*>(dst_);
+  auto* src = reinterpret_cast<const sumi_fid_av_set*>(src_);
+  if (dst->av != src->av) return -FI_EINVAL;
+  int ret = reserveSet(dst, dst->count + src->count);
+  if (ret) return ret;
+  for (size_t i = 0; i < src->count; ++i) {
+    if (!contains(dst, src->addrs[i])) dst->addrs[dst->count++] = src->addrs[i];
+  }
+  return FI_SUCCESS;
+}
+
+int sumi_av_set_intersect(struct fid_av_set* dst_, const struct fid_av_set* src_)
+{
+  auto* dst = reinterpret_cast<sumi_fid_av_set*>(dst_);
+  auto* src = reinterpret_cast<const sumi_fid_av_set*>(src_);
+  if (dst->av != src->av) return -FI_EINVAL;
+  size_t out = 0;
+  for (size_t i = 0; i < dst->count; ++i) {
+    if (contains(src, dst->addrs[i])) dst->addrs[out++] = dst->addrs[i];
+  }
+  dst->count = out;
+  return FI_SUCCESS;
+}
+
+int sumi_av_set_diff(struct fid_av_set* dst_, const struct fid_av_set* src_)
+{
+  auto* dst = reinterpret_cast<sumi_fid_av_set*>(dst_);
+  auto* src = reinterpret_cast<const sumi_fid_av_set*>(src_);
+  if (dst->av != src->av) return -FI_EINVAL;
+  size_t out = 0;
+  for (size_t i = 0; i < dst->count; ++i) {
+    if (!contains(src, dst->addrs[i])) dst->addrs[out++] = dst->addrs[i];
+  }
+  dst->count = out;
+  return FI_SUCCESS;
+}
+
+int sumi_av_set_insert(struct fid_av_set* set_, fi_addr_t addr)
+{
+  auto* set = reinterpret_cast<sumi_fid_av_set*>(set_);
+  if (contains(set, addr)) return -FI_EINVAL;
+  int ret = reserveSet(set, set->count + 1);
+  if (ret) return ret;
+  set->addrs[set->count++] = addr;
+  return FI_SUCCESS;
+}
+
+int sumi_av_set_remove(struct fid_av_set* set_, fi_addr_t addr)
+{
+  auto* set = reinterpret_cast<sumi_fid_av_set*>(set_);
+  for (size_t i = 0; i < set->count; ++i) {
+    if (set->addrs[i] != addr) continue;
+    for (size_t j = i + 1; j < set->count; ++j)
+      set->addrs[j - 1] = set->addrs[j];
+    --set->count;
+    return FI_SUCCESS;
+  }
+  return -FI_EINVAL;
+}
+
+int sumi_av_set_addr(struct fid_av_set* /*set*/, fi_addr_t* coll_addr)
+{
+  if (!coll_addr) return -FI_EINVAL;
+  *coll_addr = FI_ADDR_NOTAVAIL;
+  return FI_SUCCESS;
+}
+
+struct fi_ops sumi_av_set_fi_ops = {
+  .size = sizeof(struct fi_ops),
+  .close = sumi_av_set_close,
+  .bind = fi_no_bind,
+  .control = fi_no_control,
+  .ops_open = fi_no_ops_open,
+};
+
+struct fi_ops_av_set sumi_av_set_ops = {
+  .size = sizeof(struct fi_ops_av_set),
+  .set_union = sumi_av_set_union,
+  .intersect = sumi_av_set_intersect,
+  .diff = sumi_av_set_diff,
+  .insert = sumi_av_set_insert,
+  .remove = sumi_av_set_remove,
+  .addr = sumi_av_set_addr,
+};
+
+int sumi_av_create_set(struct fid_av* av_, struct fi_av_set_attr* attr,
+                       struct fid_av_set** set_out, void* context)
+{
+  if (!av_ || !attr || !set_out || attr->flags) return -FI_EINVAL;
+  if ((attr->comm_key && !attr->comm_key_size) ||
+      (!attr->comm_key && attr->comm_key_size))
+    return -FI_EINVAL;
+  if (attr->comm_key) return -FI_EOPNOTSUPP;
+  auto* av = reinterpret_cast<sumi_fid_av*>(av_);
+  auto* state = avState(av);
+  if (!state) return -FI_EINVAL;
+
+  std::lock_guard<std::mutex> guard(state->lock);
+  const size_t stride = attr->stride ? attr->stride : 1;
+  std::vector<fi_addr_t> members;
+  const bool empty = attr->start_addr == FI_ADDR_NOTAVAIL &&
+                     attr->end_addr == FI_ADDR_NOTAVAIL;
+  if ((attr->start_addr == FI_ADDR_NOTAVAIL) !=
+      (attr->end_addr == FI_ADDR_NOTAVAIL))
+    return -FI_EINVAL;
+  if (!empty) {
+    auto first = std::find(state->addrs.begin(), state->addrs.end(),
+                           attr->start_addr);
+    auto last = std::find(state->addrs.begin(), state->addrs.end(),
+                          attr->end_addr);
+    if (first == state->addrs.end() || last == state->addrs.end() ||
+        first > last)
+      return -FI_EINVAL;
+
+    const size_t first_idx = static_cast<size_t>(first - state->addrs.begin());
+    const size_t last_idx = static_cast<size_t>(last - state->addrs.begin());
+    for (size_t idx = first_idx; idx <= last_idx;) {
+      members.push_back(state->addrs[idx]);
+      if (last_idx - idx < stride) break;
+      idx += stride;
+    }
+  }
+  if (attr->count && members.size() > attr->count) return -FI_EINVAL;
+
+  auto* set = static_cast<sumi_fid_av_set*>(calloc(1, sizeof(sumi_fid_av_set)));
+  if (!set) return -FI_ENOMEM;
+  int ret = reserveSet(set, members.size());
+  if (ret) {
+    free(set);
+    return ret;
+  }
+  std::copy(members.begin(), members.end(), set->addrs);
+  set->count = members.size();
+  set->av = av;
+  set->av_set_fid.fid.fclass = FI_CLASS_AV_SET;
+  set->av_set_fid.fid.context = context;
+  set->av_set_fid.fid.ops = &sumi_av_set_fi_ops;
+  set->av_set_fid.ops = &sumi_av_set_ops;
+  *set_out = &set->av_set_fid;
+  return FI_SUCCESS;
+}
+
+} // namespace
+
 /*******************************************************************************
  * FI_OPS_* data structures.
  ******************************************************************************/
@@ -95,7 +286,8 @@ static struct fi_ops_av sumi_av_ops = {
   .insertsym = sumi_av_insertsym,
   .remove = sumi_av_remove,
   .lookup = sumi_av_lookup,
-  .straddr = sumi_av_straddr
+  .straddr = sumi_av_straddr,
+  .av_set = sumi_av_create_set,
 };
 
 static struct fi_ops sumi_fi_av_ops = {
@@ -149,6 +341,7 @@ EXTERN_C DIRECT_FN STATIC  int sumi_av_insert(struct fid_av *av, const void *add
 				    uint64_t flags, void *context)
 {
   sumi_fid_av* av_impl = (sumi_fid_av*) av;
+  std::vector<fi_addr_t> inserted(count);
   if (av_impl->domain->addr_format == FI_ADDR_STR){
     static bool warned_legacy_addr = false;
     char* addr_str = (char*) addr;
@@ -169,18 +362,23 @@ EXTERN_C DIRECT_FN STATIC  int sumi_av_insert(struct fid_av *av, const void *add
                 "FI_ADDR_STR form; expected \"<rank10>.<cq5>\" (cq=0)\n");
         warned_legacy_addr = true;
       }
-      fi_addr[i] = ADDR_RANK_BITS((uint64_t)rank) | ADDR_CQ_BITS((uint64_t)cq);
+      inserted[i] = ADDR_RANK_BITS((uint64_t)rank) | ADDR_CQ_BITS((uint64_t)cq);
+      if (fi_addr) fi_addr[i] = inserted[i];
       addr_str += SUMI_MAX_ADDR_LEN;
     }
   } else if (av_impl->domain->addr_format == FI_ADDR_SSTMAC) {
     uint64_t* addr_list = (uint64_t*) addr;
     for (int i=0; i < count; ++i){
-      fi_addr[i] = addr_list[i];
+      inserted[i] = addr_list[i];
+      if (fi_addr) fi_addr[i] = inserted[i];
     }
   } else {
     sst_hg_abort_printf("internal error: got addr format that isn't SSTMAC or STR");
   }
-  return FI_SUCCESS;
+  auto* state = avState(av_impl);
+  std::lock_guard<std::mutex> guard(state->lock);
+  state->addrs.insert(state->addrs.end(), inserted.begin(), inserted.end());
+  return static_cast<int>(count);
 }
 
 EXTERN_C DIRECT_FN STATIC  int sumi_av_insertsvc(struct fid_av *av, const char *node,
@@ -201,7 +399,13 @@ EXTERN_C DIRECT_FN STATIC  int sumi_av_insertsym(struct fid_av *av, const char *
 EXTERN_C DIRECT_FN STATIC  int sumi_av_remove(struct fid_av *av, fi_addr_t *fi_addr,
 				    size_t count, uint64_t flags)
 {
-  //we don't need to do anything to remove stuff
+  if (!av || (!fi_addr && count)) return -FI_EINVAL;
+  auto* state = avState(reinterpret_cast<sumi_fid_av*>(av));
+  std::lock_guard<std::mutex> guard(state->lock);
+  for (size_t i = 0; i < count; ++i) {
+    auto found = std::find(state->addrs.begin(), state->addrs.end(), fi_addr[i]);
+    if (found != state->addrs.end()) state->addrs.erase(found);
+  }
   return FI_SUCCESS;
 }
 
@@ -237,6 +441,7 @@ DIRECT_FN const char *sumi_av_straddr(struct fid_av *av,
 static int sumi_av_close(fid_t fid)
 {
   sumi_fid_av* av_impl = (sumi_fid_av*) fid;
+  delete avState(av_impl);
   free(av_impl);
   return FI_SUCCESS;
 }
@@ -250,6 +455,12 @@ extern "C" DIRECT_FN  int sumi_av_open(struct fid_domain *domain, struct fi_av_a
 			   struct fid_av **av, void *context)
 {
   sumi_fid_av* av_impl = (sumi_fid_av*) calloc(1, sizeof(sumi_fid_av));
+  if (!av_impl) return -FI_ENOMEM;
+  av_impl->state = new (std::nothrow) SumiAvState;
+  if (!av_impl->state) {
+    free(av_impl);
+    return -FI_ENOMEM;
+  }
   av_impl->av_fid.fid.fclass = FI_CLASS_AV;
   av_impl->av_fid.fid.context = context;
   av_impl->av_fid.fid.ops = const_cast<fi_ops*>(&sumi_fi_av_ops);

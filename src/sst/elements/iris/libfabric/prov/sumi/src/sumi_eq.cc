@@ -53,10 +53,61 @@
 #include "sumi_prov.h"
 #include "sumi_wait.h"
 
+#include <mercury/components/operating_system.h>
+#include <mercury/operating_system/process/progress_queue.h>
+
+#include <new>
 #include <vector>
 
 
 #define GNIX_EQ_DEFAULT_SIZE 1000
+
+namespace {
+
+struct SumiEqEvent {
+  uint32_t event;
+  uint64_t flags;
+  std::vector<uint8_t> data;
+};
+
+struct SumiEqState {
+  explicit SumiEqState(SST::Hg::OperatingSystemAPI* os) : events(os) {}
+
+  ~SumiEqState()
+  {
+    while (!events.items.empty()) {
+      delete events.items.front();
+      events.items.pop();
+    }
+  }
+
+  SST::Hg::SingleProgressQueue<SumiEqEvent> events;
+};
+
+SumiEqState* eqState(sumi_fid_eq* eq)
+{
+  return static_cast<SumiEqState*>(eq->state);
+}
+
+ssize_t readEvent(sumi_fid_eq* eq, uint32_t* event, void* buf, size_t len,
+                  uint64_t flags, bool blocking = false, double timeout = -1)
+{
+  if (flags & ~FI_PEEK) return -FI_EINVAL;
+  auto* state = eqState(eq);
+  auto* entry = state->events.front(blocking, timeout);
+  if (!entry) return -FI_EAGAIN;
+  if (len < entry->data.size()) return -FI_ETOOSMALL;
+  if (event) *event = entry->event;
+  if (!entry->data.empty()) memcpy(buf, entry->data.data(), entry->data.size());
+  ssize_t ret = static_cast<ssize_t>(entry->data.size());
+  if (!(flags & FI_PEEK)) {
+    state->events.pop();
+    delete entry;
+  }
+  return ret;
+}
+
+} // namespace
 
 DIRECT_FN STATIC ssize_t sumi_eq_read(struct fid_eq *eq, uint32_t *event,
               void *buf, size_t len, uint64_t flags);
@@ -109,11 +160,17 @@ extern "C" DIRECT_FN  int sumi_eq_open(struct fid_fabric *fabric, struct fi_eq_a
 
   ErrorDeallocate err(eq, [](void* ptr){
     auto* eq = (sumi_fid_eq*) ptr;
+    delete eqState(eq);
     free(eq);
   });
 
   if (!attr)
     return -FI_EINVAL;
+
+  eq->fabric = reinterpret_cast<sumi_fid_fabric*>(fabric);
+  eq->state = new (std::nothrow)
+      SumiEqState(SST::Hg::OperatingSystem::currentOs());
+  if (!eq->state) return -FI_ENOMEM;
 
   if (!attr->size)
     attr->size = GNIX_EQ_DEFAULT_SIZE;
@@ -133,7 +190,7 @@ extern "C" DIRECT_FN  int sumi_eq_open(struct fid_fabric *fabric, struct fi_eq_a
   }
   case FI_WAIT_UNSPEC: {
     struct fi_wait_attr requested = {
-      .wait_obj = eq->attr.wait_obj,
+      .wait_obj = attr->wait_obj,
       .flags = 0
     };
     sumi_wait_open(&eq->fabric->fab_fid, &requested, &eq->wait);
@@ -152,6 +209,7 @@ extern "C" DIRECT_FN  int sumi_eq_open(struct fid_fabric *fabric, struct fi_eq_a
 
   *eq_ptr = (fid_eq*) &eq->eq_fid;
 
+  err.success();
   return FI_SUCCESS;
 }
 
@@ -175,6 +233,9 @@ EXTERN_C DIRECT_FN STATIC  int sumi_eq_close(struct fid *fid)
 				references_held, eq);
 	}
 #endif
+	auto* eq = reinterpret_cast<sumi_fid_eq*>(fid);
+	delete eqState(eq);
+	free(eq);
 	return FI_SUCCESS;
 }
 
@@ -182,14 +243,19 @@ EXTERN_C DIRECT_FN STATIC  int sumi_eq_close(struct fid *fid)
 DIRECT_FN STATIC ssize_t sumi_eq_read(struct fid_eq *eq, uint32_t *event,
               void *buf, size_t len, uint64_t flags)
 {
-  return 0;
+  if (!eq || (!buf && len)) return -FI_EINVAL;
+  return readEvent(reinterpret_cast<sumi_fid_eq*>(eq), event, buf, len, flags);
 }
 
 DIRECT_FN STATIC ssize_t sumi_eq_sread(struct fid_eq *eq, uint32_t *event,
                void *buf, size_t len, int timeout,
                uint64_t flags)
 {
-  return 0;
+  if (!eq || (!buf && len)) return -FI_EINVAL;
+  auto* impl = reinterpret_cast<sumi_fid_eq*>(eq);
+  const bool blocking = timeout != 0;
+  const double timeout_s = timeout < 0 ? -1 : timeout * 1e-3;
+  return readEvent(impl, event, buf, len, flags, blocking, timeout_s);
 }
 
 EXTERN_C DIRECT_FN STATIC  int sumi_eq_control(struct fid *eq, int command, void *arg)
@@ -207,7 +273,7 @@ DIRECT_FN STATIC ssize_t sumi_eq_readerr(struct fid_eq *eq,
 					 struct fi_eq_err_entry *buf,
 					 uint64_t flags)
 {
-  ssize_t read_size = sizeof(*buf);
+  ssize_t read_size = -FI_EAGAIN;
 #if 0
 	struct sumi_fid_eq *eq_priv;
 	struct sumi_eq_entry *entry;
@@ -256,6 +322,23 @@ DIRECT_FN STATIC ssize_t sumi_eq_write(struct fid_eq *eq, uint32_t event,
 				       const void *buf, size_t len,
 				       uint64_t flags)
 {
+  if (!eq || (!buf && len)) return -FI_EINVAL;
+  auto* impl = reinterpret_cast<sumi_fid_eq*>(eq);
+  auto* state = eqState(impl);
+  if (impl->attr.size && state->events.items.size() >= impl->attr.size)
+    return -FI_EAGAIN;
+  auto* queued = new (std::nothrow) SumiEqEvent;
+  if (!queued) return -FI_ENOMEM;
+  queued->event = event;
+  queued->flags = flags;
+  const auto* bytes = static_cast<const uint8_t*>(buf);
+  try {
+    if (len) queued->data.assign(bytes, bytes + len);
+  } catch (const std::bad_alloc&) {
+    delete queued;
+    return -FI_ENOMEM;
+  }
+  state->events.incoming(queued);
   ssize_t ret = len;
 #if 0
   struct sumi_fid_eq *eq_priv;
@@ -308,4 +391,3 @@ DIRECT_FN STATIC const char *sumi_eq_strerror(struct fid_eq *eq, int prov_errno,
 {
 	return NULL;
 }
-

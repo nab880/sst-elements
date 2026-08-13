@@ -106,6 +106,7 @@ libpmi_la_LDFLAGS = -avoid-version
 
 install-exec-hook:
 	$(SST_REGISTER_TOOL) SST_ELEMENT_SOURCE     iris=$(abs_srcdir)
+	$(SST_REGISTER_TOOL) SST_ELEMENT_TESTS      iris=$(abs_srcdir)/libfabric/tests
 
 install-data-hook:
 	@$(MKDIR_P) $(DESTDIR)$(includedir)/iris

@@ -17,6 +17,7 @@
 #include <set>
 #include <map>
 #include <vector>
+#include <cstdint>
 
 #pragma once
 
@@ -33,6 +34,10 @@ class Communicator {
 
   int myCommRank() const {
     return my_comm_rank_;
+  }
+
+  uint64_t id() const {
+    return id_;
   }
 
   virtual ~Communicator(){}
@@ -85,8 +90,9 @@ class Communicator {
   }
 
  protected:
-  Communicator(int comm_rank) :
+  Communicator(int comm_rank, uint64_t id = 0) :
     my_comm_rank_(comm_rank),
+    id_(id),
     smp_comm_(nullptr),
     owner_comm_(nullptr),
     smp_balanced_(false),
@@ -97,6 +103,7 @@ class Communicator {
 
  private:
   int my_comm_rank_;
+  uint64_t id_;
 
   /**
    * Domain ranks do not need immediate resolution to physical ranks
@@ -139,7 +146,8 @@ class MapCommunicator :
   public Communicator
 {
  public:
-  MapCommunicator(int rank, std::vector<int>&& local_to_global);
+  MapCommunicator(int rank, std::vector<int>&& local_to_global,
+                  uint64_t id = 0);
 
   int nproc() const override {
     return global_to_local_.size();
@@ -161,7 +169,8 @@ class ShiftedCommunicator :
 {
  public:
   ShiftedCommunicator(Communicator* dom, int left_shift) :
-    Communicator((dom->myCommRank() - left_shift + dom->nproc()) % dom->nproc()),
+    Communicator((dom->myCommRank() - left_shift + dom->nproc()) % dom->nproc(),
+                 dom->id()),
     dom_(dom),
     nproc_(dom->nproc()),
     shift_(left_shift)
@@ -198,8 +207,9 @@ class IndexCommunicator :
    * @param nproc
    * @param proc_list
    */
-  IndexCommunicator(int comm_rank, int nproc, std::vector<int>&& proc_list) :
-    Communicator(comm_rank),
+  IndexCommunicator(int comm_rank, int nproc, std::vector<int>&& proc_list,
+                    uint64_t id = 0) :
+    Communicator(comm_rank, id),
     proc_list_(std::move(proc_list)), nproc_(nproc)
   {
   }
@@ -232,8 +242,9 @@ class RotateCommunicator :
    * @param shift
    * @param me
    */
-  RotateCommunicator(int my_global_rank, int nproc, int shift) :
-    Communicator(globalToCommRank(my_global_rank)),
+  RotateCommunicator(int my_global_rank, int nproc, int shift,
+                     uint64_t id = 0) :
+    Communicator(globalToCommRank(my_global_rank), id),
     nproc_(nproc), shift_(shift)
   {
   }
@@ -266,8 +277,9 @@ class SubrangeCommunicator :
   public Communicator
 {
  public:
-  SubrangeCommunicator(int my_global_rank, int start, int nproc) :
-    Communicator(globalToCommRank(my_global_rank)),
+  SubrangeCommunicator(int my_global_rank, int start, int nproc,
+                       uint64_t id = 0) :
+    Communicator(globalToCommRank(my_global_rank), id),
     nproc_(nproc), start_(start)
   {
   }

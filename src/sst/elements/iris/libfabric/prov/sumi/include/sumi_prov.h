@@ -27,6 +27,7 @@
 #include <rdma/fabric.h>
 #include <rdma/fi_atomic.h>
 #include <rdma/fi_cm.h>
+#include <rdma/fi_collective.h>
 #include <rdma/fi_domain.h>
 #include <rdma/fi_endpoint.h>
 #include <rdma/fi_eq.h>
@@ -330,7 +331,6 @@ struct sumi_fid_ep {
 	struct sumi_fid_stx *stx_ctx;
 	struct sumi_fid_eq *eq;
   int qos;
-  int coll_tag; // monotonic tag for FI_COLLECTIVE ops (see sumi_coll.cc)
 };
 
 struct sumi_fid_sep {
@@ -346,6 +346,10 @@ struct sumi_fid_sep {
 	bool *enabled;
 	struct sumi_cm_nic *cm_nic;
 	struct sumi_fid_av *av;
+	struct sumi_fid_cq *send_cq;
+	struct sumi_fid_cq *recv_cq;
+	struct sumi_fid_eq *eq;
+	uint64_t cq_flags;
 	struct sumi_ep_name my_name;
 	fastlock_t sep_lock;
   //struct sumi_reference ref_cnt;
@@ -353,6 +357,8 @@ struct sumi_fid_sep {
 
 struct sumi_fid_trx {
   sumi_fid_ep ep;
+  sumi_fid_sep* sep;
+  int index;
 };
 
 struct sumi_fid_stx {
@@ -366,6 +372,25 @@ struct sumi_fid_stx {
 struct sumi_fid_av {
   fid_av av_fid;
   sumi_fid_domain* domain;
+  void* state;
+};
+
+struct sumi_fid_av_set {
+  struct fid_av_set av_set_fid;
+  struct sumi_fid_av* av;
+  fi_addr_t* addrs;
+  size_t count;
+  size_t capacity;
+};
+
+struct sumi_fid_mc {
+  struct fid_mc mc_fid;
+  struct sumi_fid_ep* ep;
+  fi_addr_t* members;
+  size_t member_count;
+  void* communicator;
+  uint64_t group_key;
+  uint64_t access;
 };
 
 enum sumi_fab_req_type {
@@ -409,6 +434,7 @@ struct sumi_fid_eq {
   struct sumi_fid_fabric* fabric;
   struct fid_wait* wait;
   struct fi_eq_attr attr;
+  void* state;
 };
 
 struct sumi_progress_queue;
@@ -445,6 +471,13 @@ int sumi_domain_open(struct fid_fabric *fabric, struct fi_info *info,
 
 int sumi_av_open(struct fid_domain *domain, struct fi_av_attr *attr,
 		 struct fid_av **av, void *context);
+
+int sumi_query_collective(struct fid_domain *domain,
+                          enum fi_collective_op coll,
+                          struct fi_collective_attr *attr, uint64_t flags);
+
+int sumi_join_collective(struct fid_ep *ep, const void *addr, uint64_t flags,
+                         struct fid_mc **mc, void *context);
 
 int sumi_cq_open(struct fid_domain *domain, struct fi_cq_attr *attr,
 		 struct fid_cq **cq, void *context);

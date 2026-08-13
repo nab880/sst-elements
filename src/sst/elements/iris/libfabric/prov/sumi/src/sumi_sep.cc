@@ -283,6 +283,71 @@ static struct fi_ops_cm sumi_sep_rxtx_cm_ops = {
   .join = fi_no_join,
 };
 
+static int sumi_sep_ctx(struct fid_ep *sep, int index, bool is_tx,
+                        uint64_t caps, uint64_t mode, uint64_t op_flags,
+                        struct fid_ep **ctx_out, void *context)
+{
+  if (!sep || !ctx_out || sep->fid.fclass != FI_CLASS_SEP || index < 0)
+    return -FI_EINVAL;
+
+  auto* sep_priv = container_of(sep, struct sumi_fid_sep, ep_fid);
+  size_t count = is_tx ? sep_priv->info->ep_attr->tx_ctx_cnt
+                       : sep_priv->info->ep_attr->rx_ctx_cnt;
+  if (static_cast<size_t>(index) >= count ||
+      (caps && (caps & ~sep_priv->info->caps)) ||
+      (mode && (mode & ~sep_priv->info->mode)) ||
+      (op_flags & ~SUMI_EP_OP_FLAGS))
+    return -FI_EINVAL;
+
+  struct fid_ep** table = is_tx ? sep_priv->tx_ep_table
+                                : sep_priv->rx_ep_table;
+  if (table[index]) return -FI_EBUSY;
+
+  auto* trx = static_cast<sumi_fid_trx*>(calloc(1, sizeof(sumi_fid_trx)));
+  if (!trx) return -FI_ENOMEM;
+  auto* ep = &trx->ep;
+  ep->ep_fid.fid.fclass = is_tx ? FI_CLASS_TX_CTX : FI_CLASS_RX_CTX;
+  ep->ep_fid.fid.context = context;
+  ep->ep_fid.fid.ops = &sumi_sep_fi_ops;
+  ep->ep_fid.ops = &sumi_sep_ops;
+  // Collective groups are joined through fi_ops_cm::join even though these
+  // contexts do not otherwise perform connection management.
+  ep->ep_fid.cm = &sumi_ep_ops_cm;
+  ep->ep_fid.msg = &sumi_sep_msg_ops;
+  ep->ep_fid.rma = &sumi_sep_rma_ops;
+  ep->ep_fid.tagged = &sumi_sep_tagged_ops;
+  ep->ep_fid.atomic = &sumi_sep_atomic_ops;
+  ep->ep_fid.collective = &sumi_ep_collective_ops;
+  ep->domain = reinterpret_cast<sumi_fid_domain*>(sep_priv->domain);
+  ep->type = sep_priv->type;
+  ep->caps = sep_priv->caps;
+  ep->op_flags = op_flags;
+  trx->sep = sep_priv;
+  trx->index = index;
+
+  int ret = FI_SUCCESS;
+  if (sep_priv->eq)
+    ret = sumi_ep_bind(&ep->ep_fid.fid, &sep_priv->eq->eq_fid.fid, 0);
+  if (!ret && sep_priv->av)
+    ret = sumi_ep_bind(&ep->ep_fid.fid, &sep_priv->av->av_fid.fid, 0);
+  if (!ret && sep_priv->send_cq)
+    ret = sumi_ep_bind(&ep->ep_fid.fid, &sep_priv->send_cq->cq_fid.fid,
+                       FI_TRANSMIT |
+                       (sep_priv->cq_flags & FI_SELECTIVE_COMPLETION));
+  if (!ret && sep_priv->recv_cq)
+    ret = sumi_ep_bind(&ep->ep_fid.fid, &sep_priv->recv_cq->cq_fid.fid,
+                       FI_RECV |
+                       (sep_priv->cq_flags & FI_SELECTIVE_COMPLETION));
+  if (ret) {
+    free(trx);
+    return ret;
+  }
+
+  table[index] = &ep->ep_fid;
+  *ctx_out = &ep->ep_fid;
+  return FI_SUCCESS;
+}
+
 
 
 static int sumi_sep_tx_ctx(struct fid_ep *sep, int index,
@@ -352,6 +417,7 @@ static int sumi_sep_tx_ctx(struct fid_ep *sep, int index,
 	tx_priv->ep_fid.rma = &sumi_sep_rma_ops;
 	tx_priv->ep_fid.tagged = &sumi_sep_tagged_ops;
 	tx_priv->ep_fid.atomic = &sumi_sep_atomic_ops;
+	tx_priv->ep_fid.collective = &sumi_ep_collective_ops;
 	tx_priv->ep_fid.cm = &sumi_sep_rxtx_cm_ops;
 	tx_priv->index = index;
 
@@ -412,7 +478,11 @@ static int sumi_sep_tx_ctx(struct fid_ep *sep, int index,
 err:
 	fastlock_release(&sep_priv->sep_lock);
 #endif
-	return ret;
+	return sumi_sep_ctx(sep, index, true,
+	                    attr ? attr->caps : 0,
+	                    attr ? attr->mode : 0,
+	                    attr ? attr->op_flags : 0,
+	                    tx_ep, context);
 }
 
 static int sumi_sep_rx_ctx(struct fid_ep *sep, int index,
@@ -482,6 +552,7 @@ static int sumi_sep_rx_ctx(struct fid_ep *sep, int index,
 	rx_priv->ep_fid.rma = &sumi_sep_rma_ops;
 	rx_priv->ep_fid.tagged = &sumi_sep_tagged_ops;
 	rx_priv->ep_fid.atomic = &sumi_sep_atomic_ops;
+	rx_priv->ep_fid.collective = &sumi_ep_collective_ops;
 	rx_priv->ep_fid.cm = &sumi_sep_rxtx_cm_ops;
 	rx_priv->index = index;
 
@@ -540,7 +611,11 @@ static int sumi_sep_rx_ctx(struct fid_ep *sep, int index,
 err:
 	fastlock_release(&sep_priv->sep_lock);
 #endif
-	return ret;
+	return sumi_sep_ctx(sep, index, false,
+	                    attr ? attr->caps : 0,
+	                    attr ? attr->mode : 0,
+	                    attr ? attr->op_flags : 0,
+	                    rx_ep, context);
 }
 
 EXTERN_C DIRECT_FN STATIC  int sumi_sep_bind(fid_t fid, struct fid *bfid, uint64_t flags)
@@ -610,7 +685,56 @@ EXTERN_C DIRECT_FN STATIC  int sumi_sep_bind(fid_t fid, struct fid *bfid, uint64
 		break;
 	}
 #endif
-	return ret;
+  if (!fid || !bfid) return -FI_EINVAL;
+  if (fid->fclass == FI_CLASS_TX_CTX || fid->fclass == FI_CLASS_RX_CTX)
+    return sumi_ep_bind(fid, bfid, flags);
+  if (fid->fclass != FI_CLASS_SEP) return -FI_EINVAL;
+
+  auto* sep = container_of(fid, struct sumi_fid_sep, ep_fid.fid);
+  auto* domain = reinterpret_cast<sumi_fid_domain*>(sep->domain);
+  switch (bfid->fclass) {
+    case FI_CLASS_AV: {
+      auto* av = reinterpret_cast<sumi_fid_av*>(bfid);
+      if (av->domain != domain || sep->av) return -FI_EINVAL;
+      sep->av = av;
+      break;
+    }
+    case FI_CLASS_EQ: {
+      auto* eq = reinterpret_cast<sumi_fid_eq*>(bfid);
+      if (eq->fabric != domain->fabric || sep->eq) return -FI_EINVAL;
+      sep->eq = eq;
+      break;
+    }
+    case FI_CLASS_CQ: {
+      auto* cq = reinterpret_cast<sumi_fid_cq*>(bfid);
+      if (cq->domain != domain || !(flags & (FI_TRANSMIT | FI_RECV)))
+        return -FI_EINVAL;
+      if ((flags & FI_TRANSMIT) && sep->send_cq) return -FI_EINVAL;
+      if ((flags & FI_RECV) && sep->recv_cq) return -FI_EINVAL;
+      if (flags & FI_TRANSMIT) sep->send_cq = cq;
+      if (flags & FI_RECV) sep->recv_cq = cq;
+      sep->cq_flags |= flags;
+      break;
+    }
+    default:
+      return -FI_ENOSYS;
+  }
+
+  n_ids = static_cast<int>(MAX(sep->info->ep_attr->tx_ctx_cnt,
+                               sep->info->ep_attr->rx_ctx_cnt));
+  for (i = 0; i < n_ids; ++i) {
+    if (i < static_cast<int>(sep->info->ep_attr->tx_ctx_cnt) &&
+        sep->tx_ep_table[i]) {
+      ret = sumi_ep_bind(&sep->tx_ep_table[i]->fid, bfid, flags);
+      if (ret) return ret;
+    }
+    if (i < static_cast<int>(sep->info->ep_attr->rx_ctx_cnt) &&
+        sep->rx_ep_table[i]) {
+      ret = sumi_ep_bind(&sep->rx_ep_table[i]->fid, bfid, flags);
+      if (ret) return ret;
+    }
+  }
+  return FI_SUCCESS;
 }
 
 static int sumi_sep_control(fid_t fid, int command, void *arg)
@@ -712,7 +836,21 @@ static int sumi_sep_control(fid_t fid, int command, void *arg)
 	}
 err:
 #endif
-	return ret;
+  if (!fid) return -FI_EINVAL;
+  if (command != FI_ENABLE) return -FI_ENOSYS;
+  switch (fid->fclass) {
+    case FI_CLASS_SEP:
+      return FI_SUCCESS;
+    case FI_CLASS_TX_CTX:
+    case FI_CLASS_RX_CTX: {
+      auto* ep = reinterpret_cast<sumi_fid_ep*>(fid);
+      auto* trx = container_of(ep, struct sumi_fid_trx, ep);
+      if (trx->sep->enabled) trx->sep->enabled[trx->index] = true;
+      return FI_SUCCESS;
+    }
+    default:
+      return -FI_EINVAL;
+  }
 }
 
 static int sumi_sep_close(fid_t fid)
@@ -743,7 +881,37 @@ static int sumi_sep_close(fid_t fid)
 		return -FI_EINVAL;
 	}
 #endif
-	return ret;
+  if (!fid) return -FI_EINVAL;
+  switch (fid->fclass) {
+    case FI_CLASS_SEP: {
+      auto* sep = container_of(fid, struct sumi_fid_sep, ep_fid.fid);
+      size_t tx_count = sep->info->ep_attr->tx_ctx_cnt;
+      size_t rx_count = sep->info->ep_attr->rx_ctx_cnt;
+      for (size_t i = 0; i < tx_count; ++i)
+        if (sep->tx_ep_table[i]) return -FI_EBUSY;
+      for (size_t i = 0; i < rx_count; ++i)
+        if (sep->rx_ep_table[i]) return -FI_EBUSY;
+      fi_freeinfo(sep->info);
+      free(sep->ep_table);
+      free(sep->tx_ep_table);
+      free(sep->rx_ep_table);
+      free(sep->enabled);
+      free(sep);
+      return FI_SUCCESS;
+    }
+    case FI_CLASS_TX_CTX:
+    case FI_CLASS_RX_CTX: {
+      auto* ep = reinterpret_cast<sumi_fid_ep*>(fid);
+      auto* trx = container_of(ep, struct sumi_fid_trx, ep);
+      struct fid_ep** table = fid->fclass == FI_CLASS_TX_CTX
+          ? trx->sep->tx_ep_table : trx->sep->rx_ep_table;
+      if (table[trx->index] == &ep->ep_fid) table[trx->index] = nullptr;
+      free(trx);
+      return FI_SUCCESS;
+    }
+    default:
+      return -FI_EINVAL;
+  }
 }
 
 extern "C" int sumi_sep_open(struct fid_domain *domain, struct fi_info *info,
@@ -920,7 +1088,43 @@ err:
 	if (sep_priv)
 		free(sep_priv);
 #endif
-	return ret;
+  if (!domain || !info || !info->ep_attr || !sep) return -FI_EINVAL;
+  if (info->ep_attr->tx_ctx_cnt > SUMI_SEP_MAX_CNT ||
+      info->ep_attr->rx_ctx_cnt > SUMI_SEP_MAX_CNT)
+    return -FI_EINVAL;
+  size_t n_ids = MAX(info->ep_attr->tx_ctx_cnt,
+                     info->ep_attr->rx_ctx_cnt);
+  if (!n_ids) return -FI_EINVAL;
+
+  auto* sep_priv = static_cast<sumi_fid_sep*>(
+      calloc(1, sizeof(sumi_fid_sep)));
+  if (!sep_priv) return -FI_ENOMEM;
+  sep_priv->info = fi_dupinfo(info);
+  sep_priv->ep_table = static_cast<fid_ep**>(calloc(n_ids, sizeof(fid_ep*)));
+  sep_priv->tx_ep_table = static_cast<fid_ep**>(calloc(n_ids, sizeof(fid_ep*)));
+  sep_priv->rx_ep_table = static_cast<fid_ep**>(calloc(n_ids, sizeof(fid_ep*)));
+  sep_priv->enabled = static_cast<bool*>(calloc(n_ids, sizeof(bool)));
+  if (!sep_priv->info || !sep_priv->ep_table || !sep_priv->tx_ep_table ||
+      !sep_priv->rx_ep_table || !sep_priv->enabled) {
+    if (sep_priv->info) fi_freeinfo(sep_priv->info);
+    free(sep_priv->ep_table);
+    free(sep_priv->tx_ep_table);
+    free(sep_priv->rx_ep_table);
+    free(sep_priv->enabled);
+    free(sep_priv);
+    return -FI_ENOMEM;
+  }
+
+  sep_priv->ep_fid.fid.fclass = FI_CLASS_SEP;
+  sep_priv->ep_fid.fid.context = context;
+  sep_priv->ep_fid.fid.ops = &sumi_sep_fi_ops;
+  sep_priv->ep_fid.ops = &sumi_sep_ops;
+  sep_priv->ep_fid.cm = &sumi_ep_ops_cm;
+  sep_priv->domain = domain;
+  sep_priv->type = info->ep_attr->type;
+  sep_priv->caps = info->caps & SUMI_EP_PRIMARY_CAPS;
+  *sep = &sep_priv->ep_fid;
+  return FI_SUCCESS;
 
 }
 
@@ -1797,5 +2001,3 @@ sumi_sep_atomic_compwritemsg(struct fid_ep *ep, const struct fi_msg_atomic *msg,
 #endif
   return 0;
 }
-
-

@@ -177,7 +177,7 @@ SimTransport::SimTransport(SST::Params& params, SST::Hg::App* parent) :
   Transport("sumi", parent->sid(), parent->os()->addr()),
   Library(params, parent),
   //the server is what takes on the specified libname
-  completion_queues_(1),
+  completion_queues_(2),
   default_progress_queue_(parent->os()),
   nic_ioctl_(parent->os()->nicDataIoctl()),
   qos_analysis_(nullptr),
@@ -190,7 +190,11 @@ SimTransport::SimTransport(SST::Params& params, SST::Hg::App* parent) :
       new SST::Output("sumi::SimTransport:", verbose, 0, Output::STDOUT));
 
   completion_queues_[0] = std::bind(&DefaultProgressQueue::incoming,
-                                    &default_progress_queue_, 0, std::placeholders::_1);
+                                    &default_progress_queue_, 0,
+                                    std::placeholders::_1);
+  completion_queues_[1] = std::bind(&DefaultProgressQueue::incoming,
+                                    &default_progress_queue_, 1,
+                                    std::placeholders::_1);
   null_completion_notify_ = std::bind(&SimTransport::drop, this, std::placeholders::_1);
   rank_ = parent->get_taskid();
   auto* server_lib = parent->os()->eventLibrary(server_libname_);
@@ -700,15 +704,17 @@ CollectiveEngine::startCollectiveOp(Collective::type_t ty,
 }
 
 void
-CollectiveEngine::notifyCollectiveDone(int rank, Collective::type_t ty, int tag)
+CollectiveEngine::notifyCollectiveDone(int rank, Collective::type_t ty,
+                                       uint64_t group_id, int tag)
 {
-  Collective* coll = collectives_[ty][tag];
-  if (!coll){
+  CollectiveKey key{group_id, tag};
+  auto it = collectives_[ty].find(key);
+  if (it == collectives_[ty].end() || !it->second){
     sst_hg_throw_printf(SST::Hg::ValueError,
-      "transport::notify_collective_done: invalid collective of type %s, tag %d",
-       Collective::tostr(ty), tag);
+      "transport::notify_collective_done: invalid collective of type %s, group %llu, tag %d",
+       Collective::tostr(ty), (long long unsigned int) group_id, tag);
   }
-  finishCollective(coll, rank, ty, tag);
+  finishCollective(it->second, rank, ty, group_id, tag);
 }
 
 void
@@ -1046,8 +1052,9 @@ CollectiveEngine::barrier(int tag, int cq_id, Communicator* comm)
 CollectiveDoneMessage*
 CollectiveEngine::deliverPending(Collective* coll, int tag, Collective::type_t ty)
 {
-  std::list<CollectiveWorkMessage*> pending = pending_collective_msgs_[ty][tag];
-  pending_collective_msgs_[ty].erase(tag);
+  CollectiveKey key{coll->comm()->id(), tag};
+  std::list<CollectiveWorkMessage*> pending = pending_collective_msgs_[ty][key];
+  pending_collective_msgs_[ty].erase(key);
   CollectiveDoneMessage* dmsg = nullptr;
   for (auto* msg : pending){
     dmsg = coll->recv(msg);
@@ -1056,9 +1063,11 @@ CollectiveEngine::deliverPending(Collective* coll, int tag, Collective::type_t t
 }
 
 void
-CollectiveEngine::validateCollective(Collective::type_t ty, int tag)
+CollectiveEngine::validateCollective(Collective::type_t ty,
+                                     uint64_t group_id, int tag)
 {
-  tag_to_collective_map::iterator it = collectives_[ty].find(tag);
+  CollectiveKey key{group_id, tag};
+  tag_to_collective_map::iterator it = collectives_[ty].find(key);
   if (it == collectives_[ty].end()){
     return; // all good
   }
@@ -1090,7 +1099,8 @@ CollectiveEngine::startCollective(Collective* coll)
   coll->initActors();
   int tag = coll->tag();
   Collective::type_t ty = coll->type();
-  Collective*& map_entry = collectives_[ty][tag];
+  CollectiveKey key{coll->comm()->id(), tag};
+  Collective*& map_entry = collectives_[ty][key];
   Collective* active = nullptr;
   CollectiveDoneMessage* dmsg=nullptr;
   if (map_entry){
@@ -1114,8 +1124,11 @@ CollectiveEngine::startCollective(Collective* coll)
 }
 
 void
-CollectiveEngine::finishCollective(Collective* coll, int rank, Collective::type_t ty, int tag)
+CollectiveEngine::finishCollective(Collective* coll, int rank,
+                                   Collective::type_t ty,
+                                   uint64_t group_id, int tag)
 {
+  CollectiveKey key{group_id, tag};
   bool deliver_cq_msg; bool delete_collective;
   coll->actorDone(rank, deliver_cq_msg, delete_collective);
 //  debug_printf(sprockit::dbg::sumi,
@@ -1127,11 +1140,11 @@ CollectiveEngine::finishCollective(Collective* coll, int rank, Collective::type_
 
   coll->complete();
   if (delete_collective && !coll->persistent()){ //otherwise collective must exist FOREVER
-    collectives_[ty].erase(tag);
+    collectives_[ty].erase(key);
     todel_.push_back(coll);
   }
 
-  pending_collective_msgs_[ty].erase(tag);
+  pending_collective_msgs_[ty].erase(key);
 //  debug_printf(sprockit::dbg::sumi,
 //    "Rank %d finished collective of type %s tag %d",
 //    tport_->rank(), Collective::tostr(ty), tag);
@@ -1165,7 +1178,8 @@ CollectiveEngine::incoming(Message* msg)
   }
   int tag = cmsg->tag();
   Collective::type_t ty = cmsg->type();
-  tag_to_collective_map::iterator it = collectives_[ty].find(tag);
+  CollectiveKey key{cmsg->groupId(), tag};
+  tag_to_collective_map::iterator it = collectives_[ty].find(key);
 
   if (it == collectives_[ty].end()){
 //    debug_printf(sprockit::dbg::sumi_collective,
@@ -1175,7 +1189,7 @@ CollectiveEngine::incoming(Message* msg)
 //      msg->sender(),
 //      tag, Collective::tostr(ty));
       //message for collective we haven't started yet
-      pending_collective_msgs_[ty][tag].push_back(cmsg);
+      pending_collective_msgs_[ty][key].push_back(cmsg);
       return nullptr;
   }
 

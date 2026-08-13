@@ -55,7 +55,7 @@ Communicator::createSmpCommunicator(const std::set<int>& neighbors, CollectiveEn
 
 
 
-    smp_comm_ = new MapCommunicator(my_smp_rank, std::move(local_to_global));
+    smp_comm_ = new MapCommunicator(my_smp_rank, std::move(local_to_global), id());
     if (smp_comm_->nproc() == 0){
       sst_hg_abort_printf("Created SMP communicator of size 0!"
                         " Neighbor set has size %d, intersection with comm is %d",
@@ -85,7 +85,8 @@ Communicator::createSmpCommunicator(const std::set<int>& neighbors, CollectiveEn
         }
       }
       int nranks = idx;
-      owner_comm_ = new IndexCommunicator(my_owner_rank, nranks, std::move(owner_to_global));
+      owner_comm_ = new IndexCommunicator(my_owner_rank, nranks,
+                                           std::move(owner_to_global), id());
       if (owner_comm_->nproc() == 0){
         sst_hg_abort_printf("Created owner communicator of size 0!"
                           "Parent comm has size %d, SMP comm has size %d",
@@ -132,8 +133,9 @@ GlobalCommunicator::globalToCommRank(int global_rank) const
   return global_rank;
 }
 
-MapCommunicator::MapCommunicator(int rank, std::vector<int>&& local_to_global)
- : Communicator(rank),
+MapCommunicator::MapCommunicator(int rank, std::vector<int>&& local_to_global,
+                                 uint64_t id)
+ : Communicator(rank, id),
    local_to_global_(std::move(local_to_global))
 {
   for (int idx=0; idx < local_to_global_.size(); ++idx){

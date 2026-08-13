@@ -57,6 +57,9 @@
 #include <errno.h>
 #include <string.h>
 
+#include <mutex>
+#include <unordered_map>
+
 #include <mercury/common/errors.h>
 #include <sumi/message.h>
 #include <sumi/transport.h>
@@ -129,9 +132,43 @@ class FabricTransport : public SST::Iris::sumi::SimTransport {
     return inited_;
   }
 
+  uint64_t nextCollectiveGroupKey(uint64_t membership_key) {
+    uint64_t ordinal;
+    {
+      std::lock_guard<std::mutex> guard(collective_lock_);
+      ordinal = collective_group_sequences_[membership_key]++;
+    }
+    return mixCollectiveKey(membership_key, ordinal);
+  }
+
+  bool nextCollectiveTag(uint64_t group_key, int* tag) {
+    if (!tag) return false;
+    uint64_t sequence;
+    {
+      std::lock_guard<std::mutex> guard(collective_lock_);
+      sequence = collective_sequences_[group_key]++;
+    }
+    // The high nibble is reserved by hierarchical collective sub-operations.
+    if (sequence > 0x0fffffffULL) return false;
+    *tag = static_cast<int>(sequence);
+    return true;
+  }
+
+ private:
+  static uint64_t mixCollectiveKey(uint64_t key, uint64_t sequence) {
+    uint64_t mixed = key + 0x9e3779b97f4a7c15ULL + sequence;
+    mixed = (mixed ^ (mixed >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    mixed = (mixed ^ (mixed >> 27)) * 0x94d049bb133111ebULL;
+    mixed ^= mixed >> 31;
+    return mixed;
+  }
+
  private:
   bool inited_;
   std::vector<FabricMessage*> unmatched_recvs_;
+  std::mutex collective_lock_;
+  std::unordered_map<uint64_t, uint64_t> collective_group_sequences_;
+  std::unordered_map<uint64_t, uint64_t> collective_sequences_;
 };
 
 FabricTransport* sumi_fabric();

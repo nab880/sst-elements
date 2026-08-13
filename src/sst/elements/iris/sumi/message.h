@@ -70,6 +70,7 @@ class Message : public SST::Hg::NetworkMessage
  public:
   static const int no_ack = -1;
   static const int default_cq = 0;
+  static const int collective_cq = 1;
 
  typedef enum {
     ping,
@@ -317,4 +318,3 @@ class ProtocolMessage : public Message {
 };
 
 } // end namespace sumi
-

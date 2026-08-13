@@ -327,6 +327,24 @@ class Transport {
 
 class CollectiveEngine
 {
+ private:
+  struct CollectiveKey {
+    uint64_t group_id;
+    int tag;
+
+    bool operator==(const CollectiveKey& other) const {
+      return group_id == other.group_id && tag == other.tag;
+    }
+  };
+
+  struct CollectiveKeyHash {
+    size_t operator()(const CollectiveKey& key) const {
+      size_t hash = std::hash<uint64_t>{}(key.group_id);
+      return hash ^ (std::hash<int>{}(key.tag) + 0x9e3779b9U +
+                     (hash << 6) + (hash >> 2));
+    }
+  };
+
  public:
   CollectiveEngine(SST::Params& params,
                     Transport* tport);
@@ -357,7 +375,8 @@ class CollectiveEngine
     return eager_cutoff_;
   }
 
-  void notifyCollectiveDone(int rank, Collective::type_t ty, int tag);
+  void notifyCollectiveDone(int rank, Collective::type_t ty,
+                            uint64_t group_id, int tag);
 
   bool useEagerProtocol(uint64_t byte_length) const {
     return byte_length < eager_cutoff_;
@@ -531,11 +550,12 @@ class CollectiveEngine
                         int nelems, int type_size,
                         int tag);
 
-  void finishCollective(Collective* coll, int rank, Collective::type_t ty, int tag);
+  void finishCollective(Collective* coll, int rank, Collective::type_t ty,
+                        uint64_t group_id, int tag);
 
   CollectiveDoneMessage* startCollective(Collective* coll);
 
-  void validateCollective(Collective::type_t ty, int tag);
+  void validateCollective(Collective::type_t ty, uint64_t group_id, int tag);
 
   CollectiveDoneMessage* deliverPending(Collective* coll, int tag, Collective::type_t ty);
 
@@ -561,11 +581,13 @@ class CollectiveEngine
   template <typename Key, typename Value>
   using spkt_enum_map = std::unordered_map<Key, Value, enum_hash>;
 
-  typedef std::unordered_map<int,Collective*> tag_to_collective_map;
+  typedef std::unordered_map<CollectiveKey, Collective*, CollectiveKeyHash>
+      tag_to_collective_map;
   typedef spkt_enum_map<Collective::type_t, tag_to_collective_map> collective_map;
   collective_map collectives_;
 
-  typedef std::unordered_map<int,std::list<CollectiveWorkMessage*>> tag_to_pending_map;
+  typedef std::unordered_map<CollectiveKey, std::list<CollectiveWorkMessage*>,
+                             CollectiveKeyHash> tag_to_pending_map;
   typedef spkt_enum_map<Collective::type_t, tag_to_pending_map> pending_map;
   pending_map pending_collective_msgs_;
 

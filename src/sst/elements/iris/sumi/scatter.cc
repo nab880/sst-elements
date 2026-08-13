@@ -67,6 +67,8 @@ BtreeScatterActor::initBuffers()
   int max_recv_buf_size = midpoint_*nelems_*type_size_;
   if (me == root_){
     int buf_size = nproc * nelems_ * type_size_;
+    void* local_src = static_cast<char*>(src) + me * result_size;
+    my_api_->memcopy(dst, local_src, result_size);
     if (root_ != 0){
       recv_buffer_ = my_api_->allocateWorkspace(max_recv_buf_size, dst);
       if (root_ == midpoint_){
@@ -77,7 +79,6 @@ BtreeScatterActor::initBuffers()
         my_api_->memcopy(dst_buffer, src_buffer, copy_size);
       }
     } else {
-      my_api_->memcopy(dst, src, result_size);
       recv_buffer_ = result_buffer_; //won't ever actually be used
       result_buffer_ = dst;
     }
@@ -115,8 +116,9 @@ BtreeScatterActor::finalizeBuffers()
       my_api_->freeWorkspace(recv_buffer_,max_recv_buf_size);
     }
   } else {
-    if (me % 2 == 0){
-      //I sent from a temp buffer, need a memcpy
+    if (me % 2 == 0 || midpoint_ == 1){
+      // Subtree forwarders receive into a temp buffer.  The two-rank tree has
+      // no final in-place round, so its odd midpoint also needs this copy.
       my_api_->memcopy(result_buffer_, recv_buffer_, result_size);
     }
     my_api_->freeWorkspace(recv_buffer_, max_recv_buf_size);

@@ -24,7 +24,8 @@ libfi_allreduce_test_la_LDFLAGS = -module -avoid-version
 
 EXTRA_DIST = \
   tests/fi_allreduce_test.cc \
-  tests/test_fi_allreduce.py
+  tests/test_fi_allreduce.py \
+  tests/testsuite_default_iris.py
 
 sumi_sources = \
   prov/sumi/src/sumi_av.cc \
@@ -218,4 +219,3 @@ ofi_standalone_rdma_HEADERS = \
   include/rdma/fi_rma.h \
   include/rdma/fi_tagged.h \
   include/rdma/fi_trigger.h
-

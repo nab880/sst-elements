@@ -238,8 +238,9 @@ DagCollectiveActor::sendEagerMessage(Action* ac)
     rankStr().c_str(), toString().c_str(), this, ac->partner, tag_, ac->offset, (long long unsigned int) num_bytes);
 
   /*auto* msg =*/ my_api_->smsgSend<CollectiveWorkMessage>(ac->phys_partner, num_bytes, buf,
-                                              cq_id_, cq_id_, Message::collective, engine_->smsgQos(),
-                                              type_, dom_me_, ac->partner,
+                                              cq_id_, cq_id_,
+                                              Message::collective, engine_->smsgQos(),
+                                              type_, comm_->id(), dom_me_, ac->partner,
                                               tag_, ac->round, ac->nelems, type_size_,
                                               nullptr, CollectiveWorkMessage::eager);
 }
@@ -253,8 +254,9 @@ DagCollectiveActor::sendRdmaPutHeader(Action* ac)
     rankStr().c_str(), toString().c_str(), this, rankStr(ac->partner).c_str(), ac->round, tag_, ac->offset);
 
   my_api_->smsgSend<CollectiveWorkMessage>(ac->phys_partner, 0, buf,
-                                           Message::no_ack, cq_id_, Message::collective, engine_->rdmaHeaderQos(),
-                                           type_, dom_me_, ac->partner,
+                                           Message::no_ack, cq_id_,
+                                           Message::collective, engine_->rdmaHeaderQos(),
+                                           type_, comm_->id(), dom_me_, ac->partner,
                                            tag_, ac->round,
                                            ac->nelems, type_size_, buf, CollectiveWorkMessage::put);
 }
@@ -269,8 +271,9 @@ DagCollectiveActor::sendRdmaGetHeader(Action* ac)
     rankStr().c_str(), toString().c_str(), this, ac->partner, tag_, ac->offset);
 
   my_api_->smsgSend<CollectiveWorkMessage>(ac->phys_partner, 64, //use platform-independent size
-                        buf, Message::no_ack, cq_id_, Message::collective, engine_->rdmaHeaderQos(),
-                        type_, dom_me_, ac->partner,
+                        buf, Message::no_ack, cq_id_,
+                        Message::collective, engine_->rdmaHeaderQos(),
+                        type_, comm_->id(), dom_me_, ac->partner,
                         tag_, ac->round,
                         ac->nelems, type_size_, buf, CollectiveWorkMessage::get); //do not ack the send
 }
@@ -644,7 +647,8 @@ DagCollectiveActor::nextRoundReadyToPut(
 
   uint64_t size; void* buf = getSendBuffer(ac, size);
   my_api_->rdmaPutResponse(header, size, buf, header->partnerBuffer(),
-                            cq_id_, cq_id_, engine_->rdmaGetQos());
+                            cq_id_, cq_id_,
+                            engine_->rdmaGetQos());
 
   output.output("Rank %s, collective %s(%p) starting put %d elems at offset %d to %d for round=%d tag=%d msg %p",
     rankStr().c_str(), toString().c_str(), this, ac->nelems, ac->offset, header->domSender(), ac->round, tag_, header);
@@ -671,7 +675,8 @@ DagCollectiveActor::nextRoundReadyToGet(
 
   my_api_->rdmaGetRequestResponse(header, ac->nelems*type_size_,
                                   getRecvbuffer(ac), header->partnerBuffer(),
-                                  cq_id_, cq_id_, engine_->rdmaGetQos());
+                                  cq_id_, cq_id_,
+                                  engine_->rdmaGetQos());
 
   output.output("Rank %s, collective %s(%p) starting get %d elems at offset %d from %d for round=%d tag=%d msg %p",
     rankStr().c_str(), toString().c_str(), this, ac->nelems, ac->offset, header->domSender(), header->round(), tag_, header);
@@ -758,7 +763,7 @@ DagCollectiveActor::putDoneNotification()
   output.output("Rank %s putting done notification on tag=%d ", rankStr().c_str(), tag_);
 
   finalizeBuffers();
-  engine_->notifyCollectiveDone(dom_me_, type_, tag_);
+  engine_->notifyCollectiveDone(dom_me_, type_, comm_->id(), tag_);
 }
 
 void

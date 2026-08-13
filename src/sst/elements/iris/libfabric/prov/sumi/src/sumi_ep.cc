@@ -845,6 +845,7 @@ extern "C" DIRECT_FN  int sumi_ep_bind(fid_t fid, struct fid *bfid, uint64_t fla
       if (ep->domain != av->domain) {
         return -FI_EINVAL;
       }
+      ep->av = av;
       break;
     }
     case FI_CLASS_CNTR: //TODO
@@ -968,4 +969,3 @@ EXTERN_C DIRECT_FN STATIC  int sumi_rx_context(struct fid_ep *ep, int index,
 {
 	return -FI_ENOSYS;
 }
-

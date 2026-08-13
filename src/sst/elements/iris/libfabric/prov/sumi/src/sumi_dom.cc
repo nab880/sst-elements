@@ -138,7 +138,9 @@ static struct fi_ops_domain sumi_domain_ops = {
   .cntr_open = sumi_cntr_open,
   .poll_open = fi_no_poll_open,
   .stx_ctx = sumi_stx_open,
-  .srx_ctx = fi_no_srx_context
+  .srx_ctx = fi_no_srx_context,
+  .query_atomic = fi_no_query_atomic,
+  .query_collective = sumi_query_collective,
 };
 
 #define SUMI_MR_MODE_DEFAULT FI_MR_BASIC
@@ -364,5 +366,4 @@ extern "C" DIRECT_FN  int sumi_srx_context(struct fid_domain *domain,
   *rx_ep = (fid_ep*) srx_impl;
 	return -FI_ENOSYS;
 }
-
 

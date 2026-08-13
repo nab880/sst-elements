@@ -103,6 +103,7 @@ class CollectiveWorkMessage final :
   template <class... Args>
   CollectiveWorkMessage(
     Collective::type_t type,
+    uint64_t group_id,
     int dom_sender, int dom_recver,
     int tag, int round,
     int nelems, int type_size, void* buffer, protocol_t p,
@@ -110,6 +111,7 @@ class CollectiveWorkMessage final :
     ProtocolMessage(nelems, type_size, buffer, p,
                      std::forward<Args>(args)...),
     tag_(tag),
+    group_id_(group_id),
     type_(type),
     round_(round),
     dom_sender_(dom_sender),
@@ -132,6 +134,10 @@ class CollectiveWorkMessage final :
 
   int tag() const {
     return tag_;
+  }
+
+  uint64_t groupId() const {
+    return group_id_;
   }
 
   int domSender() const {
@@ -179,6 +185,8 @@ class CollectiveWorkMessage final :
 
  private:
   int tag_;
+
+  uint64_t group_id_;
 
   Collective::type_t type_;
 
