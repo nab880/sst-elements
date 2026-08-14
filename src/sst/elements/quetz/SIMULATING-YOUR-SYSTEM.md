@@ -24,6 +24,10 @@ The worked example throughout is the shipped **`coldfire_system`** demo:
 - **QEMU-native peripherals** — the mcf5208evb's three UARTs, two PIT
   timers, and FEC ethernet — including **interrupt-driven** use: their IRQs
   vector normally through the INTC.
+- **Reviewed Raptor functional profile** — `raptor-core2` directly maps the
+  confirmed Raptor RAM/ROM apertures, UART0–2, provisional INTC behavior,
+  FlexBus/platform registers, GPIOB0–3, and counting DTIM0–3. Unsupported
+  MMIO fails closed by default.
 - **SST-side MMIO devices** (accelerator, stream, sink, your own), both
   **polled** and **interrupt-driven** — SST devices can raise real INTC
   lines (§ Interrupt-driven devices).
@@ -32,7 +36,7 @@ The worked example throughout is the shipped **`coldfire_system`** demo:
 
 **Works with an explicit compatibility profile:**
 
-- **Private MCF5208 BSP initialization.** Discovery mode logs accesses across
+- **Private BSP initialization on the legacy vehicle.** Discovery mode logs accesses across
   QEMU's otherwise-unmodeled SCM, bus, chip-select, eDMA, I²C, QSPI, timer,
   EPORT, watchdog, PLL, WTM, and GPIO ranges. The analyzer reports likely
   polling loops and failed write/readback checks from the ELF alone.
@@ -42,11 +46,14 @@ The worked example throughout is the shipped **`coldfire_system`** demo:
   initialization and enter the application.
 - The feature is opt-in. With no BSP option, the `bsp_torture` baseline
   remains QEMU's original read-as-zero/write-ignored behavior.
+- Compatibility/profile/discovery options are rejected with `raptor-core2`;
+  that machine already owns the reviewed devices.
 
 **Still outside the model:**
 
 - PLL frequency and lock timing; watchdog expiry/reset; GPIO stimulus,
-  muxing, and pin interrupts; I²C/QSPI transactions; eDMA movement; external
+  muxing, and pin interrupts; DMA-timer interrupts/DMA requests; I²C/QSPI
+  transactions; eDMA movement; external
   FlexBus devices; and hardware-accurate reset sequencing. A profile may
   describe initialization-visible state, not these data paths.
 - **Cycle accuracy.** Timing is approximate everywhere (trace-driven memory
@@ -72,10 +79,14 @@ contract, JSON schema, allowed register map, and modeling boundary are in
 
 ## Supported parts
 
-QEMU models exactly **one** ColdFire machine — `mcf5208evb` (MCF5208: V2
-core, ISA_A+, no FPU/MMU, 3 UARTs, 2 PITs, FEC, one INTC pair) — and that
-machine is the **reference vehicle** for the whole ColdFire family. Other
-parts are supported by *relocation*, not by new machine models:
+Quetz carries two ColdFire machine roles:
+
+- `mcf5208evb` (MCF5208 V2) is the legacy portability, discovery, and profile
+  vehicle.
+- `raptor-core2` is the dedicated single-CPU Raptor functional profile. It is
+  intentionally a reviewed subset, not an exact SKU claim.
+
+Non-Raptor parts still use relocation on the legacy vehicle:
 
 | your part differs in | you change | cost |
 |---|---|---|
@@ -91,9 +102,10 @@ as-is, and V4 builds are covered below.
 
 ### ColdFire V4 targets
 
-The target is a **ColdFire V4** core (V4/V4e with EMAC and FPU). The
-`mcf5208evb` reference vehicle covers it — add `-cpu cfv4e` to
-`QUETZ_QEMU_ARGS`. Verified in the suite:
+The target is a **ColdFire V4** core (V4/V4e with EMAC and FPU). For Raptor
+BSP ELFs use `raptor-core2`, whose CPU is fixed to `cfv4e`. For generic V4
+diagnostics the `mcf5208evb` vehicle remains available with `-cpu cfv4e`.
+Verified in the suite:
 
 - **V2-compiled firmware runs unmodified** under `-cpu cfv4e`.
 - **V4-native codegen executes correctly**: `-mcpu=5475` (hard-float V4e)
@@ -109,9 +121,9 @@ The target is a **ColdFire V4** core (V4/V4e with EMAC and FPU). The
   are currently targeted at the MCF5208 register map even when `cfv4e`
   supplies the core ISA.
 
-On-chip peripherals the reference vehicle doesn't model read as RAZ/WI
-without a compatibility profile. Use profiles only for initialization-visible
-state; validate the *data path* with stream/sink devices or a dedicated model.
+On-chip peripherals the legacy vehicle doesn't model read as RAZ/WI without a
+compatibility profile. Use profiles only for initialization-visible state;
+validate the *data path* with stream/sink devices or a dedicated model.
 The memory map is integrator-defined, so relocate via the table above.
 QEMU's `cfv4e` does not model the V4 **MMU** (freestanding
 / flat-supervisor firmware — this whole flow — is unaffected; MMU-on OS

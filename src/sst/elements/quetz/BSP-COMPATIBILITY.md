@@ -1,7 +1,8 @@
 # ColdFire BSP compatibility
 
-Quetz can run a firmware image that contains a private Raptor (ColdFire V4)
-board-support package (BSP) without requiring its source. It discovers which
+Quetz can diagnose a firmware image that contains a private Raptor (ColdFire
+V4) board-support package (BSP) without requiring its source. On the legacy
+`mcf5208evb` vehicle it discovers which
 otherwise unmodeled SoC registers the binary touches, reports likely
 initialization hangs, and applies a reviewed JSON description of the minimum
 register behavior needed by that BSP.
@@ -11,15 +12,18 @@ application run, and did its drivers produce the expected results? It does
 not model clock timing, watchdog expiry, pin electrical behavior, bus
 transactions, or peripheral throughput.
 
-## The three operating modes
+The dedicated `raptor-core2` machine is the Raptor acceptance path. It owns
+the reviewed devices directly and rejects profile/discovery options.
+
+## The three legacy operating modes
 
 | Mode | Command | Unmodeled Raptor registers |
 |---|---|---|
-| Native baseline | no BSP option | QEMU behavior is unchanged: reads return zero and writes are ignored |
-| Discovery | `--bsp-discover` | All supported unmodeled blocks are mapped as logged RAZ/WI regions |
-| Compatibility | `--bsp-profile FILE` | Only the blocks and exact register shapes in the reviewed profile gain state or scripted behavior |
+| Native baseline | no BSP option on `mcf5208evb` | QEMU behavior is unchanged: reads return zero and writes are ignored |
+| Discovery | `--bsp-discover` on `mcf5208evb` | All supported unmodeled blocks are mapped as logged RAZ/WI regions |
+| Compatibility | `--bsp-profile FILE` on `mcf5208evb` | Only the blocks and exact register shapes in the reviewed profile gain state or scripted behavior |
 
-The compatibility layer is opt-in. It cannot replace QEMU's native FEC,
+The compatibility layer is opt-in and legacy-only. It cannot replace QEMU's native FEC,
 INTC, UART, PIT, RCM, or SDRAMC devices, and profiles that try to map outside
 the approved unmodeled blocks are rejected.
 
@@ -195,9 +199,10 @@ modeled by dedicated QEMU devices (real behavior, not register storage):
 mask-in-high-byte value writes and read-modify-write direction). Their block
 tables are generated separately into `qemu-overlay/hw/misc/raptor_dtimer_blocks.h`
 and `raptor_gpio_blocks.h` from the same board contract (regions with
-`bsp_compat.model` `dtimer` / `gpio`). Both devices are instantiated on the same
-activation gate as this compatibility device, so do not add a DTIM or GPIO block
-to a compat profile — the two would claim the same aperture.
+`bsp_compat.model` `dtimer` / `gpio`). The legacy launcher instantiates these
+devices beside the compatibility device. `raptor-core2` instantiates the same
+device types itself and rejects the launcher overlay. Do not add a DTIM or GPIO
+block to a compat profile — two devices would claim the same aperture.
 
 The block name and base must match this table. A profile may use a smaller
 size but cannot extend beyond the canonical range. Profile blocks cannot

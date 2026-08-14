@@ -94,18 +94,44 @@ typedef struct McfDtimerModule {
     uint64_t accum;
     int64_t  base_ns;
     bool     running;
+    QEMUTimer *heartbeat;
 } McfDtimerModule;
 
 struct McfDtimerState {
     DeviceState parent_obj;
     char *target;
+    bool strict_mmio;
     McfDtimerModule modules[G_N_ELEMENTS(raptor_dtimer_blocks)];
 };
+
+static void dtimer_bad_access(McfDtimerModule *m, const char *op,
+                              hwaddr offset, unsigned size)
+{
+    if (m->owner->strict_mmio) {
+        error_report("RAPTOR_MMIO_UNSUPPORTED owner=%s op=%s "
+                     "addr=0x%08" PRIx64 " size=%u",
+                     m->name, op, m->base + offset, size);
+        exit(EXIT_FAILURE);
+    }
+    warn_report("mcf-dtimer: %s: unmodeled/wrong-width %s at +0x%" PRIx64
+                " (size %u); access remains RAZ/WI",
+                m->name, op, (uint64_t)offset, size);
+}
 
 static bool dtmr_should_run(uint16_t dtmr)
 {
     return (dtmr & DTMR_RST_BIT) &&
            ((dtmr & DTMR_CLK_MASK) >> DTMR_CLK_SHIFT) != 0;
+}
+
+static void dtimer_heartbeat(void *opaque)
+{
+    McfDtimerModule *m = opaque;
+
+    if (m->running) {
+        timer_mod(m->heartbeat,
+                  qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 1000000000LL);
+    }
 }
 
 /* Counts elapsed over ns nanoseconds at the module's current clock select.
@@ -156,6 +182,7 @@ static void dtimer_freeze(McfDtimerModule *m)
             m->accum += dtimer_counts_for_ns(m, (uint64_t)(now - m->base_ns));
         }
         m->running = false;
+        timer_del(m->heartbeat);
     }
 }
 
@@ -168,6 +195,9 @@ static void dtimer_resync(McfDtimerModule *m)
     if (want && !m->running) {
         m->base_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
         m->running = true;
+        /* Keep a virtual-clock deadline pending while the counter runs. This
+         * lets qtest advance time even though DTCN is calculated lazily. */
+        timer_mod(m->heartbeat, m->base_ns + 1000000000LL);
     } else if (!want && m->running) {
         dtimer_freeze(m);
     }
@@ -211,8 +241,7 @@ static uint64_t dtimer_read(void *opaque, hwaddr offset, unsigned size)
     default:
         break;
     }
-    warn_report("mcf-dtimer: %s: unmodeled/wrong-width read at +0x%" PRIx64
-                " (size %u); returning 0", m->name, (uint64_t)offset, size);
+    dtimer_bad_access(m, "read", offset, size);
     return 0;
 }
 
@@ -224,6 +253,10 @@ static void dtimer_write(void *opaque, hwaddr offset, uint64_t value,
     switch (offset) {
     case DTMR_OFFSET:
         if (size == 2) {
+            /* Bank elapsed counts at the old clock before adopting a new
+             * CLK value. Otherwise a live clock change retroactively re-rates
+             * the entire running span. */
+            dtimer_freeze(m);
             m->dtmr = (uint16_t)value;
             dtimer_resync(m);
             return;
@@ -265,26 +298,27 @@ static void dtimer_write(void *opaque, hwaddr offset, uint64_t value,
         break;
     case DTCR_OFFSET:
         /* Capture register is read-only; a functional sim never latches it. */
-        warn_report("mcf-dtimer: %s: write to read-only DTCR ignored", m->name);
+        dtimer_bad_access(m, "write-read-only", offset, size);
         return;
     default:
         break;
     }
-    warn_report("mcf-dtimer: %s: unmodeled/wrong-width write at +0x%" PRIx64
-                " (size %u, value 0x%" PRIx64 ") ignored",
-                m->name, (uint64_t)offset, size, value);
+    dtimer_bad_access(m, "write", offset, size);
 }
 
 static const MemoryRegionOps dtimer_ops = {
     .read = dtimer_read,
     .write = dtimer_write,
-    .endianness = DEVICE_NATIVE_ENDIAN,
+    .endianness = DEVICE_BIG_ENDIAN,
     .valid = { .min_access_size = 1, .max_access_size = 4 },
     .impl  = { .min_access_size = 1, .max_access_size = 4 },
 };
 
 static void dtimer_module_reset(McfDtimerModule *m)
 {
+    if (m->heartbeat) {
+        timer_del(m->heartbeat);
+    }
     m->dtmr = 0x0000;
     m->dtxmr = 0x00;
     m->dter = 0x00;
@@ -314,6 +348,8 @@ static void mcf_dtimer_realize(DeviceState *dev, Error **errp)
         m->name = g_strdup(d->name);
         m->base = d->base;
         m->size = d->size;
+        m->heartbeat = timer_new_ns(QEMU_CLOCK_VIRTUAL,
+                                    dtimer_heartbeat, m);
         dtimer_module_reset(m);
 
         memory_region_init_io(&m->region, OBJECT(dev), &dtimer_ops, m,
@@ -336,13 +372,26 @@ static void mcf_dtimer_unrealize(DeviceState *dev)
             object_unparent(OBJECT(&m->region));
             m->mapped = false;
         }
+        timer_free(m->heartbeat);
+        m->heartbeat = NULL;
         g_free(m->name);
         m->name = NULL;
     }
 }
 
+static void mcf_dtimer_reset(DeviceState *dev)
+{
+    McfDtimerState *s = MCF_DTIMER(dev);
+    size_t i;
+
+    for (i = 0; i < G_N_ELEMENTS(s->modules); i++) {
+        dtimer_module_reset(&s->modules[i]);
+    }
+}
+
 static Property mcf_dtimer_properties[] = {
     DEFINE_PROP_STRING("target", McfDtimerState, target),
+    DEFINE_PROP_BOOL("strict-mmio", McfDtimerState, strict_mmio, false),
     DEFINE_PROP_END_OF_LIST(),
 };
 
@@ -352,6 +401,7 @@ static void mcf_dtimer_class_init(ObjectClass *klass, void *data)
 
     dc->realize = mcf_dtimer_realize;
     dc->unrealize = mcf_dtimer_unrealize;
+    device_class_set_legacy_reset(dc, mcf_dtimer_reset);
     dc->user_creatable = true;
     device_class_set_props(dc, mcf_dtimer_properties);
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);

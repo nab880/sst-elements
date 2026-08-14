@@ -2,6 +2,7 @@
 import importlib.util
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -13,6 +14,12 @@ assert SPEC.loader
 SPEC.loader.exec_module(bsp_profile)
 
 GEN_TOOL = TOOLS / "gen_bsp_compat_blocks.py"
+GEN_SPEC = importlib.util.spec_from_file_location(
+    "gen_bsp_compat_blocks", GEN_TOOL
+)
+gen_bsp_compat_blocks = importlib.util.module_from_spec(GEN_SPEC)
+assert GEN_SPEC.loader
+GEN_SPEC.loader.exec_module(gen_bsp_compat_blocks)
 # The generated header and the board contract live in the umbrella repo,
 # reachable by walking up from this file. Resolve them for the staleness test.
 _ELEM = Path(__file__).parents[2]
@@ -129,15 +136,95 @@ class BspProfileToolTests(unittest.TestCase):
             self.assertIn("gpiob2", blocks)  # ... and GPIO
 
     def test_generator_rejects_unknown_model(self):
-        import importlib.util as _ilu
-        spec = _ilu.spec_from_file_location("gen_bsp_compat_blocks", GEN_TOOL)
-        gen = _ilu.module_from_spec(spec)
-        spec.loader.exec_module(gen)
         board = {"regions": [
             {"name": "bad", "base": "0x1000", "size": "0x10",
              "bsp_compat": {"block": "bad", "model": "bogus"}}]}
         with self.assertRaises(ValueError):
-            gen.extract_blocks(board, model=None)
+            gen_bsp_compat_blocks.extract_blocks(board, model=None)
+
+    def test_generator_rejects_duplicate_across_models(self):
+        board = {"regions": [
+            {"name": "compat", "base": "0x1000", "size": "0x10",
+             "bsp_compat": {"block": "duplicate"}},
+            {"name": "timer", "base": "0x2000", "size": "0x10",
+             "bsp_compat": {"block": "duplicate", "model": "dtimer"}},
+        ]}
+        for model in (None, "compat", "dtimer"):
+            with self.subTest(model=model), self.assertRaises(ValueError):
+                gen_bsp_compat_blocks.extract_blocks(board, model=model)
+
+    def test_load_blocks_reuses_generator_validation(self):
+        bad_contracts = (
+            {"regions": [
+                {"name": "bad", "base": "0x1000", "size": "0x10",
+                 "bsp_compat": {"block": "bad", "model": "bogus"}},
+            ]},
+            {"regions": [
+                {"name": "bad", "base": "0x1000", "size": "0x10",
+                 "bsp_compat": {}},
+            ]},
+            {"regions": [
+                {"name": "one", "base": "0x1000", "size": "0x10",
+                 "bsp_compat": {"block": "same"}},
+                {"name": "two", "base": "0x2000", "size": "0x10",
+                 "bsp_compat": {"block": "same", "model": "gpio"}},
+            ]},
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "board.json"
+            for board in bad_contracts:
+                with self.subTest(board=board):
+                    path.write_text(__import__("json").dumps(board), encoding="utf-8")
+                    with self.assertRaises(ValueError):
+                        bsp_profile.load_blocks(path)
+
+    def test_stale_header_check_fails(self):
+        board = _find_board()
+        if board is None:
+            self.skipTest("board contract not reachable")
+        with tempfile.TemporaryDirectory() as directory:
+            header = Path(directory) / "raptor_bsp_blocks.h"
+            header.write_text("stale\n", encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, str(GEN_TOOL), str(board),
+                 "--check-header", str(header)],
+                capture_output=True, text=True,
+            )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("is stale", result.stderr)
+
+    def test_write_header_round_trip(self):
+        board = _find_board()
+        if board is None:
+            self.skipTest("board contract not reachable")
+        with tempfile.TemporaryDirectory() as directory:
+            header = Path(directory) / "raptor_gpio_blocks.h"
+            write = subprocess.run(
+                [sys.executable, str(GEN_TOOL), str(board),
+                 "--write-gpio-header", str(header)],
+                capture_output=True, text=True,
+            )
+            check = subprocess.run(
+                [sys.executable, str(GEN_TOOL), str(board),
+                 "--check-gpio-header", str(header)],
+                capture_output=True, text=True,
+            )
+        self.assertEqual(write.returncode, 0, write.stderr)
+        self.assertEqual(check.returncode, 0, check.stderr)
+
+    def test_print_json_includes_all_device_models(self):
+        board = _find_board()
+        if board is None:
+            self.skipTest("board contract not reachable")
+        result = subprocess.run(
+            [sys.executable, str(GEN_TOOL), str(board), "--print-json"],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        blocks = __import__("json").loads(result.stdout)["blocks"]
+        self.assertIn("fbcs", blocks)
+        self.assertIn("dtim2", blocks)
+        self.assertIn("gpiob2", blocks)
 
 
 if __name__ == "__main__":

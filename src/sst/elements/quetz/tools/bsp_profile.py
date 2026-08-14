@@ -7,8 +7,15 @@ import argparse
 import json
 import shutil
 import subprocess
+import sys
 from collections import Counter, defaultdict
 from pathlib import Path
+
+_TOOLS_DIR = Path(__file__).resolve().parent
+if str(_TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(_TOOLS_DIR))
+
+from gen_bsp_compat_blocks import extract_blocks
 
 
 # The block allowlist is the single source of truth in the board contract
@@ -42,16 +49,10 @@ def load_blocks(board_path: Path | None) -> dict[str, tuple[int, int]]:
         board = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
-    blocks: dict[str, tuple[int, int]] = {}
-    for region in board.get("regions", []):
-        compat = region.get("bsp_compat")
-        if not compat:
-            continue
-        name = compat.get("block")
-        base = region["base"]
-        size = region["size"]
-        blocks[name] = (_number(base), _number(size))
-    return blocks
+    return {
+        name: (base, size)
+        for name, base, size in extract_blocks(board, model=None)
+    }
 
 
 def _number(value: object) -> int:

@@ -23,6 +23,7 @@
 #include "qapi/qmp/qlist.h"
 #include "qapi/qmp/qnum.h"
 #include "qapi/qmp/qstring.h"
+#include "qemu/cutils.h"
 #include "qemu/error-report.h"
 #include "qemu/module.h"
 
@@ -44,6 +45,7 @@ typedef struct McfBspRegister {
     uint64_t offset;
     unsigned width;
     uint64_t value;
+    uint64_t reset_value;
     uint64_t writable_mask;
     uint64_t read_set;
     uint64_t read_clear;
@@ -98,8 +100,8 @@ static bool obj_u64(QObject *obj, uint64_t *value)
 {
     QNum *num;
     QString *str;
-    char *end = NULL;
-    unsigned long long parsed;
+    const char *end = NULL;
+    uint64_t parsed;
 
     if (!obj) {
         return false;
@@ -112,9 +114,8 @@ static bool obj_u64(QObject *obj, uint64_t *value)
     if (!str) {
         return false;
     }
-    errno = 0;
-    parsed = strtoull(qstring_get_str(str), &end, 0);
-    if (errno || !end || *end) {
+    if (qemu_strtou64(qstring_get_str(str), &end, 0, &parsed) ||
+        !end || *end) {
         return false;
     }
     *value = parsed;
@@ -308,7 +309,7 @@ static void bsp_write(void *opaque, hwaddr offset, uint64_t input,
 static const MemoryRegionOps bsp_ops = {
     .read = bsp_read,
     .write = bsp_write,
-    .endianness = DEVICE_NATIVE_ENDIAN,
+    .endianness = DEVICE_BIG_ENDIAN,
     .valid = { .min_access_size = 1, .max_access_size = 4 },
     .impl  = { .min_access_size = 1, .max_access_size = 4 },
 };
@@ -399,6 +400,7 @@ static bool parse_register(McfBspBlock *block, QDict *dict, Error **errp)
         return false;
     }
     reg->value &= width_mask(reg->width);
+    reg->reset_value = reg->value;
     reg->writable_mask &= width_mask(reg->width);
     g_ptr_array_add(block->registers, reg);
     return true;
@@ -582,6 +584,27 @@ static void mcf_bsp_compat_unrealize(DeviceState *dev)
     g_clear_pointer(&s->blocks, g_ptr_array_unref);
 }
 
+static void mcf_bsp_compat_reset(DeviceState *dev)
+{
+    McfBspCompatState *s = MCF_BSP_COMPAT(dev);
+    guint i;
+
+    if (!s->blocks) {
+        return;
+    }
+    for (i = 0; i < s->blocks->len; i++) {
+        McfBspBlock *block = g_ptr_array_index(s->blocks, i);
+        guint j;
+
+        for (j = 0; j < block->registers->len; j++) {
+            McfBspRegister *reg = g_ptr_array_index(block->registers, j);
+            reg->value = reg->reset_value;
+            reg->read_sequence_pos = 0;
+            reg->width_mismatch_reported = false;
+        }
+    }
+}
+
 static Property mcf_bsp_compat_properties[] = {
     DEFINE_PROP_STRING("target", McfBspCompatState, target),
     DEFINE_PROP_STRING("profile", McfBspCompatState, profile),
@@ -596,6 +619,7 @@ static void mcf_bsp_compat_class_init(ObjectClass *klass, void *data)
 
     dc->realize = mcf_bsp_compat_realize;
     dc->unrealize = mcf_bsp_compat_unrealize;
+    device_class_set_legacy_reset(dc, mcf_bsp_compat_reset);
     dc->user_creatable = true;
     device_class_set_props(dc, mcf_bsp_compat_properties);
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);

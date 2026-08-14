@@ -30,6 +30,32 @@
 using namespace SST;
 using namespace SST::Quetz;
 
+static bool qemuMachineIs(const std::vector<std::string>& args,
+                          const char* machine)
+{
+    const std::string prefix = std::string(machine) + ",";
+
+    for (size_t i = 0; i < args.size(); i++) {
+        if ((args[i] == "-machine" || args[i] == "-M") &&
+            i + 1 < args.size()) {
+            if (args[i + 1] == machine ||
+                args[i + 1].rfind(prefix, 0) == 0) {
+                return true;
+            }
+            i++;
+            continue;
+        }
+        const std::string long_form = "-machine=";
+        if (args[i].rfind(long_form, 0) == 0) {
+            std::string value = args[i].substr(long_form.size());
+            if (value == machine || value.rfind(prefix, 0) == 0) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 QemuLauncher::QemuLauncher(SST::Output* out)
     : output_(out), pid_(0)
 {}
@@ -158,6 +184,7 @@ pid_t QemuLauncher::spawn(const QuetzConfig& cfg,
     const char* bsp_log      = getenv("QUETZ_BSP_LOG");
     bool use_bsp = (bsp_profile && bsp_profile[0]) ||
                    (bsp_discover && bsp_discover[0] == '1');
+    bool native_raptor = qemuMachineIs(cfg.qemu_extra_args, "raptor-core2");
     if (use_bsp) {
         if (!cfg.system_mode)
             output_->fatal(CALL_INFO, -1,
@@ -170,6 +197,12 @@ pid_t QemuLauncher::spawn(const QuetzConfig& cfg,
         };
         reject_comma("QUETZ_BSP_PROFILE", bsp_profile);
         reject_comma("QUETZ_BSP_LOG", bsp_log);
+        reject_comma("QUETZ_BSP_TARGET", bsp_target);
+        if (native_raptor)
+            output_->fatal(CALL_INFO, -1,
+                "raptor-core2 owns its reviewed BSP devices; compatibility "
+                "profiles/discovery may only overlay the legacy mcf5208evb "
+                "diagnostic machine.\n");
 
         std::string dev = "mcf-bsp-compat,target=";
         dev += (bsp_target && bsp_target[0]) ? bsp_target : "raptor";

@@ -59,20 +59,20 @@ Full detail in [SIMULATING-YOUR-SYSTEM.md](SIMULATING-YOUR-SYSTEM.md)
   instructions and devices return real data; all timing (memory path,
   device latency, IRQ delivery) is approximate. Assert function, never
   timing.
-- **Freestanding firmware, or a profiled private BSP.** Native QEMU reads
-  unmodeled MCF5208 registers as zero and ignores writes. Quetz can discover
-  the exact register shapes used by a BSP binary and apply a reviewed,
-  opt-in compatibility profile for initialization. This validates basic
-  program behavior, not peripheral timing or physical I/O. See
+- **Freestanding firmware, a profiled private BSP, or the reviewed Raptor
+  machine.** `mcf5208evb` retains the discovery/profile workflow for legacy
+  diagnostics. `raptor-core2` directly owns the reviewed Raptor memory map,
+  UART/INTC, GPIO, and DMA-timer behavior; it rejects compatibility overlays
+  so devices cannot be mapped twice. This validates basic program behavior,
+  not peripheral timing or physical I/O. See
   [BSP-COMPATIBILITY.md](BSP-COMPATIBILITY.md).
-- **One ColdFire machine.** `mcf5208evb` is the reference vehicle;
-  other family parts map onto it via linker script + deck env (memory
-  map, UART base, INTC lines). ColdFire V4 targets are assessed and
-  CI-gated — run with `-cpu cfv4e` (`test_quetz_coldfire_v4_fpu`,
-  `test_quetz_coldfire_irq_cfv4e`). A different SoC means a new QEMU
-  machine — ask first.
-- **Interrupts:** QEMU-native device IRQs (UART/timer/FEC) and SST-device
-  IRQ injection both work; IRQ *latency* is functional, not modeled.
+- **Two ColdFire machine roles.** `mcf5208evb` remains the portable legacy
+  vehicle. `raptor-core2` is the single-CPU Raptor functional profile and the
+  acceptance path for Raptor BSP ELFs. Its UART0–2 sources are provisionally
+  26–28; exact SKU and complete topology remain nonclaims.
+- **Interrupts:** native IRQs and SST-device injection work on the legacy
+  vehicle. On `raptor-core2`, UART delivery is verified; GPIO and DMA-timer
+  interrupt/DMA paths deliberately fail closed or remain inert.
 
 ---
 

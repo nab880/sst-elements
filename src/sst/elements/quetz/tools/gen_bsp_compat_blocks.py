@@ -90,10 +90,15 @@ def extract_blocks(board: dict,
     Pass ``model=None`` to return every bsp_compat block regardless of model.
     """
     blocks: dict[str, tuple[int, int]] = {}
+    seen_names: set[str] = set()
     for region in board.get("regions", []):
         compat = region.get("bsp_compat")
-        if not compat:
+        if compat is None:
             continue
+        if not isinstance(compat, dict):
+            raise ValueError(
+                f"region {region.get('name')!r}: bsp_compat must be an object"
+            )
         name = compat.get("block")
         if not isinstance(name, str) or not name:
             raise ValueError(
@@ -106,12 +111,13 @@ def extract_blocks(board: dict,
                 f"region {region.get('name')!r}: bsp_compat.model "
                 f"{region_model!r} is not one of {KNOWN_MODELS}"
             )
+        if name in seen_names:
+            raise ValueError(f"duplicate bsp_compat block name {name!r}")
+        seen_names.add(name)
         if model is not None and region_model != model:
             continue
         base = _as_int(region["base"])
         size = _as_int(region["size"])
-        if name in blocks:
-            raise ValueError(f"duplicate bsp_compat block name {name!r}")
         blocks[name] = (base, size)
     return [(name, base, size) for name, (base, size) in
             sorted(blocks.items(), key=lambda item: item[1][0])]

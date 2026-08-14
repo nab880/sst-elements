@@ -172,6 +172,7 @@ EXTRA_DIST =	GETTING-STARTED.md \
 	README.md \
 	profiles/raptor-init.json \
 	qemu-overlay/apply-qemu-overlay.sh \
+	qemu-overlay/hw/m68k/raptor.c \
 	qemu-overlay/hw/misc/mcf_bsp_compat.c \
 	qemu-overlay/hw/misc/mcf_dtimer.c \
 	qemu-overlay/hw/misc/mcf_gpio.c \

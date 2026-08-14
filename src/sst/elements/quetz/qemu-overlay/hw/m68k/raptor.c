@@ -15,6 +15,8 @@
 #include "hw/boards.h"
 #include "hw/loader.h"
 #include "hw/m68k/mcf.h"
+#include "hw/qdev-core.h"
+#include "hw/qdev-properties.h"
 #include "qom/object.h"
 #include "sysemu/qtest.h"
 #include "sysemu/reset.h"
@@ -42,9 +44,6 @@ OBJECT_DECLARE_SIMPLE_TYPE(RaptorMachineState, RAPTOR_MACHINE)
 #define RAPTOR_UART0_BASE     0xfc060000ULL
 #define RAPTOR_UART1_BASE     0xfc064000ULL
 #define RAPTOR_UART2_BASE     0xfc068000ULL
-#define RAPTOR_GPIO0_BASE     0xfc084000ULL
-#define RAPTOR_GPIO_STRIDE    0x00004000ULL
-
 typedef struct RaptorFlexBus {
     MemoryRegion iomem;
     struct RaptorMachineState *machine;
@@ -55,14 +54,6 @@ typedef struct RaptorPlatform {
     MemoryRegion iomem;
     struct RaptorMachineState *machine;
 } RaptorPlatform;
-
-typedef struct RaptorGPIO {
-    MemoryRegion iomem;
-    struct RaptorMachineState *machine;
-    uint16_t value;
-    uint16_t direction;
-    unsigned bank;
-} RaptorGPIO;
 
 struct RaptorMachineState {
     MachineState parent_obj;
@@ -76,7 +67,6 @@ struct RaptorMachineState {
     MemoryRegion p1_ram;
     RaptorFlexBus flexbus;
     RaptorPlatform platform;
-    RaptorGPIO gpio[4];
 };
 
 static void raptor_bad_access(RaptorMachineState *s, const char *owner,
@@ -197,61 +187,11 @@ static const MemoryRegionOps raptor_platform_ops = {
     },
 };
 
-static uint64_t raptor_gpio_read(void *opaque, hwaddr addr, unsigned size)
-{
-    RaptorGPIO *s = opaque;
-
-    if (size == 2 && addr == 0x10) {
-        return s->value;
-    }
-    if (size == 2 && addr == 0x18) {
-        return s->direction;
-    }
-    raptor_bad_access(s->machine, "gpio",
-                      RAPTOR_GPIO0_BASE + s->bank * RAPTOR_GPIO_STRIDE + addr,
-                      size, false);
-    return 0;
-}
-
-static void raptor_gpio_write(void *opaque, hwaddr addr, uint64_t value,
-                              unsigned size)
-{
-    RaptorGPIO *s = opaque;
-
-    if (size == 2 && addr == 0x10) {
-        s->value = value;
-        return;
-    }
-    if (size == 2 && addr == 0x18) {
-        s->direction = value;
-        return;
-    }
-    raptor_bad_access(s->machine, "gpio",
-                      RAPTOR_GPIO0_BASE + s->bank * RAPTOR_GPIO_STRIDE + addr,
-                      size, true);
-}
-
-static const MemoryRegionOps raptor_gpio_ops = {
-    .read = raptor_gpio_read,
-    .write = raptor_gpio_write,
-    .endianness = DEVICE_BIG_ENDIAN,
-    .valid = {
-        .min_access_size = 2,
-        .max_access_size = 2,
-        .unaligned = false,
-    },
-};
-
 static void raptor_peripherals_reset(void *opaque)
 {
     RaptorMachineState *s = opaque;
-    unsigned i;
 
     memset(s->flexbus.regs, 0, sizeof(s->flexbus.regs));
-    for (i = 0; i < 4; i++) {
-        s->gpio[i].value = 0;
-        s->gpio[i].direction = 0;
-    }
 }
 
 static void raptor_map_ram(MemoryRegion *mr, const char *name, uint64_t base,
@@ -259,6 +199,15 @@ static void raptor_map_ram(MemoryRegion *mr, const char *name, uint64_t base,
 {
     memory_region_init_ram(mr, NULL, name, size, &error_fatal);
     memory_region_add_subregion(get_system_memory(), base, mr);
+}
+
+static void raptor_create_reviewed_device(const char *type, bool strict_mmio)
+{
+    DeviceState *dev = qdev_new(type);
+
+    qdev_prop_set_string(dev, "target", "raptor");
+    qdev_prop_set_bit(dev, "strict-mmio", strict_mmio);
+    qdev_realize_and_unref(dev, NULL, &error_fatal);
 }
 
 static void raptor_machine_init(MachineState *machine)
@@ -270,7 +219,6 @@ static void raptor_machine_init(MachineState *machine)
     qemu_irq *pic;
     uint64_t elf_entry;
     int kernel_size;
-    unsigned i;
 
     if (machine->ram_size != RAPTOR_LOCAL_RAM_SIZE) {
         error_report("raptor-core2 requires exactly 64 KiB of P2 local RAM");
@@ -310,7 +258,7 @@ static void raptor_machine_init(MachineState *machine)
     s->platform.machine = s;
     memory_region_init_io(&s->platform.iomem, OBJECT(machine),
                           &raptor_platform_ops, &s->platform,
-                          "raptor.platform", 0x10);
+                          "raptor.platform", 0x4000);
     memory_region_add_subregion(sysmem, RAPTOR_PLATFORM_BASE,
                                 &s->platform.iomem);
 
@@ -319,17 +267,14 @@ static void raptor_machine_init(MachineState *machine)
     mcf_uart_create_mmap(RAPTOR_UART1_BASE, pic[27], serial_hd(1));
     mcf_uart_create_mmap(RAPTOR_UART2_BASE, pic[28], serial_hd(2));
 
-    for (i = 0; i < 4; i++) {
-        RaptorGPIO *gpio = &s->gpio[i];
+    /*
+     * GPIO and DTIMER behavior comes from the same generated board-contract
+     * tables used by the legacy compatibility path. The dedicated machine
+     * owns these instances; the launcher refuses a second profile overlay.
+     */
+    raptor_create_reviewed_device("mcf-gpio", s->strict_mmio);
+    raptor_create_reviewed_device("mcf-dtimer", s->strict_mmio);
 
-        gpio->machine = s;
-        gpio->bank = i;
-        memory_region_init_io(&gpio->iomem, OBJECT(machine), &raptor_gpio_ops,
-                              gpio, "raptor.gpio", 0x4000);
-        memory_region_add_subregion(sysmem,
-                                    RAPTOR_GPIO0_BASE + i * RAPTOR_GPIO_STRIDE,
-                                    &gpio->iomem);
-    }
     g_free(pic);
     qemu_register_reset(raptor_peripherals_reset, s);
     raptor_peripherals_reset(s);
