@@ -46,8 +46,23 @@ typedef struct McfGpioBank {
 struct McfGpioState {
     DeviceState parent_obj;
     char *target;
+    bool strict_mmio;
     McfGpioBank banks[G_N_ELEMENTS(raptor_gpio_blocks)];
 };
+
+static void gpio_bad_access(McfGpioBank *b, const char *op,
+                            hwaddr offset, unsigned size)
+{
+    if (b->owner->strict_mmio) {
+        error_report("RAPTOR_MMIO_UNSUPPORTED owner=%s op=%s "
+                     "addr=0x%08" PRIx64 " size=%u",
+                     b->name, op, b->base + offset, size);
+        exit(EXIT_FAILURE);
+    }
+    warn_report("mcf-gpio: %s: unmodeled/wrong-width %s at +0x%" PRIx64
+                " (size %u); access remains RAZ/WI",
+                b->name, op, (uint64_t)offset, size);
+}
 
 static void gpio_report_arming(McfGpioBank *b, const char *what, uint64_t val)
 {
@@ -55,12 +70,16 @@ static void gpio_report_arming(McfGpioBank *b, const char *what, uint64_t val)
         return;
     }
     b->arm_reported = true;
-    error_report("mcf-gpio: %s: %s (0x%" PRIx64 ") arms a GPIO interrupt that "
+    error_report("RAPTOR_MMIO_UNSUPPORTED owner=%s: %s (0x%" PRIx64
+                 ") arms a GPIO interrupt that "
                  "cannot be delivered (event->vector assignment is unknown; "
                  "no BSP/tester uses GPIO interrupts). Treating as a loud "
                  "no-op; if an application genuinely needs GPIO IRQs, the INTC "
                  "line mapping must come from hardware docs (blockers.md 2).",
                  b->name, what, val);
+    if (b->owner->strict_mmio) {
+        exit(EXIT_FAILURE);
+    }
 }
 
 static uint64_t gpio_read(void *opaque, hwaddr offset, unsigned size)
@@ -69,8 +88,7 @@ static uint64_t gpio_read(void *opaque, hwaddr offset, unsigned size)
 
     /* All GPIO registers are 16-bit accesses. Reject other widths loudly. */
     if (size != 2) {
-        warn_report("mcf-gpio: %s: non-16-bit read at +0x%" PRIx64
-                    " (size %u); returning 0", b->name, (uint64_t)offset, size);
+        gpio_bad_access(b, "read", offset, size);
         return 0;
     }
 
@@ -93,8 +111,7 @@ static uint64_t gpio_read(void *opaque, hwaddr offset, unsigned size)
     default:
         break;
     }
-    warn_report("mcf-gpio: %s: read at unmodeled offset +0x%" PRIx64
-                "; returning 0", b->name, (uint64_t)offset);
+    gpio_bad_access(b, "read", offset, size);
     return 0;
 }
 
@@ -105,9 +122,7 @@ static void gpio_write(void *opaque, hwaddr offset, uint64_t value,
     uint16_t word = (uint16_t)value;
 
     if (size != 2) {
-        warn_report("mcf-gpio: %s: non-16-bit write at +0x%" PRIx64
-                    " (size %u, value 0x%" PRIx64 ") ignored",
-                    b->name, (uint64_t)offset, size, value);
+        gpio_bad_access(b, "write", offset, size);
         return;
     }
 
@@ -128,20 +143,23 @@ static void gpio_write(void *opaque, hwaddr offset, uint64_t value,
         return;
     case GPIO_INT_ENABLE_OFFSET:
         if (word & GPIO_PIN_MASK) {
-            gpio_report_arming(b, "interrupt-enable write", word & GPIO_PIN_MASK);
+            gpio_report_arming(b, "interrupt-enable write",
+                               word & GPIO_PIN_MASK);
         }
         /* Preserve readback even when unsupported IRQ arming is reported. */
         b->int_enable = word & GPIO_PIN_MASK;
         return;
     case GPIO_TRIGGER_LEVEL_OFFSET:
         if (b->int_enable & GPIO_PIN_MASK) {
-            gpio_report_arming(b, "trigger-level write with IRQ enabled", word);
+            gpio_report_arming(b, "trigger-level write with IRQ enabled",
+                               word & GPIO_PIN_MASK);
         }
         b->trigger_level = word & GPIO_PIN_MASK;
         return;
     case GPIO_TRIGGER_TYPE_OFFSET:
         if (b->int_enable & GPIO_PIN_MASK) {
-            gpio_report_arming(b, "trigger-type write with IRQ enabled", word);
+            gpio_report_arming(b, "trigger-type write with IRQ enabled",
+                               word & GPIO_PIN_MASK);
         }
         b->trigger_type = word & GPIO_PIN_MASK;
         return;
@@ -151,15 +169,13 @@ static void gpio_write(void *opaque, hwaddr offset, uint64_t value,
     default:
         break;
     }
-    warn_report("mcf-gpio: %s: write at unmodeled offset +0x%" PRIx64
-                " (value 0x%" PRIx64 ") ignored",
-                b->name, (uint64_t)offset, value);
+    gpio_bad_access(b, "write", offset, size);
 }
 
 static const MemoryRegionOps gpio_ops = {
     .read = gpio_read,
     .write = gpio_write,
-    .endianness = DEVICE_NATIVE_ENDIAN,
+    .endianness = DEVICE_BIG_ENDIAN,
     /* Allow wrong-width accesses to reach the diagnostic handler. */
     .valid = { .min_access_size = 1, .max_access_size = 4 },
     .impl  = { .min_access_size = 1, .max_access_size = 4 },
@@ -222,8 +238,19 @@ static void mcf_gpio_unrealize(DeviceState *dev)
     }
 }
 
+static void mcf_gpio_reset(DeviceState *dev)
+{
+    McfGpioState *s = MCF_GPIO(dev);
+    size_t i;
+
+    for (i = 0; i < G_N_ELEMENTS(s->banks); i++) {
+        gpio_bank_reset(&s->banks[i]);
+    }
+}
+
 static Property mcf_gpio_properties[] = {
     DEFINE_PROP_STRING("target", McfGpioState, target),
+    DEFINE_PROP_BOOL("strict-mmio", McfGpioState, strict_mmio, false),
     DEFINE_PROP_END_OF_LIST(),
 };
 
@@ -233,6 +260,7 @@ static void mcf_gpio_class_init(ObjectClass *klass, void *data)
 
     dc->realize = mcf_gpio_realize;
     dc->unrealize = mcf_gpio_unrealize;
+    device_class_set_legacy_reset(dc, mcf_gpio_reset);
     dc->user_creatable = true;
     device_class_set_props(dc, mcf_gpio_properties);
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
