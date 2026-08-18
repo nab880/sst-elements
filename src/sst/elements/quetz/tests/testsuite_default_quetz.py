@@ -2334,12 +2334,12 @@ class testcase_quetz_sysmode(SSTTestCase):
         coldfire_bsp_startup reproduces the BSP startup sequence exactly --
         SR:=0x2000, RAMBAR:=base|(1<<9)|1 via movec (control reg 0xC05),
         SP:=__STACK, VBR:=__INTERRUPT_VECTOR via movec (0x801), jmp main --
-        with a BSP-shaped image (vector table at VBR with only entries 0/1/2
-        live, .bss NOLOAD/not-cleared, .data linked in place). Reaching main
+        with a BSP-shaped image (vector table at VBR with entries 0..8 live and
+        9..255 NULL, .bss NOLOAD/not-cleared, .data linked in place). Reaching main
         proves QEMU accepts the movec writes; main then verifies the load-time
         negative facts (.bss observed zero without a clear loop, .data holds its
         initialized value without a copy) and that the installed vector table
-        has the stock cf-isrs.c shape (only 0/1/2 live, rest NULL) read back
+        has the canonical BSP 5.7 shape (0..8 live, 9..255 NULL) read back
         through VBR. (No runtime bus fault is provoked: mcf5208evb is RAZ/WI on
         unmapped space and never raises one -- see bsp_torture.) Oracle:
         'BSP startup: errors=0'."""

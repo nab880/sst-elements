@@ -11,6 +11,13 @@ volatile uint32_t g_startup_resume_pc;
 extern uint32_t _vect[256];
 extern void _start(void);
 extern void cf_startup_fault(void);
+extern void cf_access_error(void);
+extern void cf_address_error(void);
+extern void cf_illegal_instruction(void);
+extern void cf_divide_by_zero(void);
+extern void cf_reserved_6(void);
+extern void cf_reserved_7(void);
+extern void cf_privilege_violation(void);
 extern uint32_t __STACK[];
 
 /* Startup deliberately leaves this NOLOAD region uncleared. */
@@ -58,11 +65,23 @@ static uint32_t check_vector_table_shape(void)
     const volatile uint32_t *vt = (const volatile uint32_t *)(uintptr_t)&_vect[0];
     uint32_t errors = 0;
 
-    if (vt[0] != (uint32_t)(uintptr_t)__STACK)           errors++; /* initial SP */
-    if (vt[1] != (uint32_t)(uintptr_t)&_start)           errors++; /* initial PC */
-    if (vt[2] != (uint32_t)(uintptr_t)&cf_startup_fault) errors++; /* access err */
+    void (*const handlers[7])(void) = {
+        cf_access_error,
+        cf_address_error,
+        cf_illegal_instruction,
+        cf_divide_by_zero,
+        cf_reserved_6,
+        cf_reserved_7,
+        cf_privilege_violation,
+    };
 
-    for (unsigned i = 3; i < 256; i++) {
+    if (vt[0] != (uint32_t)(uintptr_t)__STACK) errors++; /* initial SP */
+    if (vt[1] != (uint32_t)(uintptr_t)&_start) errors++; /* initial PC */
+    for (unsigned i = 0; i < 7; i++) {
+        if (vt[i + 2] != (uint32_t)(uintptr_t)handlers[i]) errors++;
+    }
+
+    for (unsigned i = 9; i < 256; i++) {
         if (vt[i] != 0) {                                /* rest are NULL */
             errors++;
             break;
@@ -95,7 +114,7 @@ void kernel_main(void)
     errors += e_data;
 
     uint32_t e_vec = check_vector_table_shape();
-    uart_puts("vector table (0/1/2 live, rest NULL): ");
+    uart_puts("vector table (0..8 live, 9..255 NULL): ");
     uart_puts(e_vec == 0 ? "ok\n" : "FAIL\n");
     errors += e_vec;
 

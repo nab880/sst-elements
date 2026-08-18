@@ -58,14 +58,37 @@ cf_startup_fault:
 	rte
 	.size cf_startup_fault,.-cf_startup_fault
 
-| --------------------------------------------------------------------------- Vector table, cf-isrs.c shape: entries 0/1/2 live, rest zero (NULL).
+| BSP 5.7 installs exception stubs for vectors 2..8.
+	.macro STARTUP_FAULT_STUB name
+	.global \name
+	.type \name,@function
+\name:
+	bra	cf_startup_fault
+	.size \name,.-\name
+	.endm
+
+	STARTUP_FAULT_STUB cf_access_error
+	STARTUP_FAULT_STUB cf_address_error
+	STARTUP_FAULT_STUB cf_illegal_instruction
+	STARTUP_FAULT_STUB cf_divide_by_zero
+	STARTUP_FAULT_STUB cf_reserved_6
+	STARTUP_FAULT_STUB cf_reserved_7
+	STARTUP_FAULT_STUB cf_privilege_violation
+
+| --------------------------------------------------------------------------- Vector table, canonical BSP 5.7 shape: entries 0..8 live, rest zero (NULL).
 	.section .vectorram,"a"
 	.align 2
 	.global _vect
 _vect:
 	.long	__STACK                 |  0 (0x000) initial supervisor SP
 	.long	_start                  |  1 (0x004) initial PC
-	.long	cf_startup_fault        |  2 (0x008) access error
-	| entries 3..255 left as zero fill (NULL), like the stock table
-	.space	(256-3)*4, 0
+	.long	cf_access_error         |  2 (0x008) access error
+	.long	cf_address_error        |  3 (0x00c) address error
+	.long	cf_illegal_instruction  |  4 (0x010) illegal instruction
+	.long	cf_divide_by_zero       |  5 (0x014) divide by zero
+	.long	cf_reserved_6           |  6 (0x018) reserved
+	.long	cf_reserved_7           |  7 (0x01c) reserved
+	.long	cf_privilege_violation  |  8 (0x020) privilege violation
+	| entries 9..255 left as zero fill (NULL), like the canonical table
+	.space	(256-9)*4, 0
 	.size _vect,.-_vect
