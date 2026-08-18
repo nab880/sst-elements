@@ -16,9 +16,9 @@
  *     on);
  *   - .data holds its initialized value even though startup runs no ROM->RAM
  *     copy (it is linked in place);
- * and the vector-table property that only entries 0/1/2 are live: it reads the
- * installed table back through VBR and confirms entries 0/1/2 are the expected
- * non-NULL values while 3..255 are NULL (the stock cf-isrs.c shape). A taken
+ * and the vector-table property that entries 0..8 are live: it reads the
+ * installed table back through VBR and confirms entries 0..8 are the expected
+ * non-NULL values while 9..255 are NULL (the canonical BSP 5.7 shape). A taken
  * exception on any live vector is exercised separately below where the machine
  * permits it.
  *
@@ -42,6 +42,13 @@ volatile uint32_t g_startup_resume_pc;
 extern uint32_t _vect[256];
 extern void _start(void);
 extern void cf_startup_fault(void);
+extern void cf_access_error(void);
+extern void cf_address_error(void);
+extern void cf_illegal_instruction(void);
+extern void cf_divide_by_zero(void);
+extern void cf_reserved_6(void);
+extern void cf_reserved_7(void);
+extern void cf_privilege_violation(void);
 extern uint32_t __STACK[];
 
 /* .bss: zero-initialized by convention, but startup runs NO clear loop. A
@@ -85,7 +92,7 @@ static uint32_t check_data_in_place(void)
     return errors;
 }
 
-/* Verify the vector table has the stock cf-isrs.c shape: only entries 0/1/2 are
+/* Verify the vector table has the canonical BSP 5.7 shape: entries 0..8 are
  * live, the rest NULL. The table is read at its linked address (_vect), which
  * is exactly the address startup programmed into VBR (__INTERRUPT_VECTOR ==
  * load base == &_vect). We do not read VBR back with movec: on ColdFire V4 VBR
@@ -96,11 +103,23 @@ static uint32_t check_vector_table_shape(void)
     const volatile uint32_t *vt = (const volatile uint32_t *)(uintptr_t)&_vect[0];
     uint32_t errors = 0;
 
-    if (vt[0] != (uint32_t)(uintptr_t)__STACK)           errors++; /* initial SP */
-    if (vt[1] != (uint32_t)(uintptr_t)&_start)           errors++; /* initial PC */
-    if (vt[2] != (uint32_t)(uintptr_t)&cf_startup_fault) errors++; /* access err */
+    void (*const handlers[7])(void) = {
+        cf_access_error,
+        cf_address_error,
+        cf_illegal_instruction,
+        cf_divide_by_zero,
+        cf_reserved_6,
+        cf_reserved_7,
+        cf_privilege_violation,
+    };
 
-    for (unsigned i = 3; i < 256; i++) {
+    if (vt[0] != (uint32_t)(uintptr_t)__STACK) errors++; /* initial SP */
+    if (vt[1] != (uint32_t)(uintptr_t)&_start) errors++; /* initial PC */
+    for (unsigned i = 0; i < 7; i++) {
+        if (vt[i + 2] != (uint32_t)(uintptr_t)handlers[i]) errors++;
+    }
+
+    for (unsigned i = 9; i < 256; i++) {
         if (vt[i] != 0) {                                /* rest are NULL */
             errors++;
             break;
@@ -138,7 +157,7 @@ void kernel_main(void)
     errors += e_data;
 
     uint32_t e_vec = check_vector_table_shape();
-    uart_puts("vector table (0/1/2 live, rest NULL): ");
+    uart_puts("vector table (0..8 live, 9..255 NULL): ");
     uart_puts(e_vec == 0 ? "ok\n" : "FAIL\n");
     errors += e_vec;
 

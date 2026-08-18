@@ -22,8 +22,8 @@ __INTERRUPT_VECTOR = 0x40000000;   /* VBR target = load base (1 MB aligned) */
 SECTIONS {
     . = 0x40000000;
 
-    /* Vector table at VBR. Only entries 0/1/2 are populated by the source;
-     * the rest are zero (NULL), exactly like the stock cf-isrs.c table. */
+    /* Vector table at VBR. Entries 0..8 are populated by the source; entries
+     * 9..255 are zero (NULL), matching the canonical BSP 5.7 ELF. */
     .vectorram : { KEEP(*(.vectorram)) }
 
     .text : {
