@@ -7,6 +7,18 @@ AM_CPPFLAGS += \
 	$(MPI_CPPFLAGS) \
 	$(PYTHON_CPPFLAGS)
 
+lib_LTLIBRARIES = libsstmerlincollective.la
+libsstmerlincollective_la_SOURCES = \
+	services/collective/collectiveTypes.h \
+	services/collective/collectiveServiceData.h \
+	services/collective/collectiveServiceData.cc \
+	services/collective/collectiveArithmetic.h \
+	services/collective/collectiveArithmetic.cc \
+	services/collective/collectiveEndpoint.h \
+	services/collective/collectiveRoute.h \
+	services/collective/collectiveRoute.cc
+libsstmerlincollective_la_LDFLAGS = -avoid-version
+
 compdir = $(pkglibdir)
 comp_LTLIBRARIES = libmerlin.la
 
@@ -28,6 +40,8 @@ libmerlin_la_SOURCES = \
 	test/nic.cc \
 	test/inc_nic.h \
 	test/inc_nic.cc \
+	test/collective/contractTest.h \
+	test/collective/contractTest.cc \
 	test/route_test/route_test.h \
 	test/route_test/route_test.cc \
 	test/pt2pt/pt2pt_test.h \
@@ -108,6 +122,8 @@ libmerlin_la_SOURCES = \
 
 EXTRA_DIST = \
 	tests/testsuite_default_merlin.py \
+	tests/testsuite_default_collective.py \
+	tests/collective_contract.py \
 	tests/hyperx_128_test.py \
 	tests/dragon_128_test.py \
 	tests/dragon_72_test.py \
@@ -138,13 +154,20 @@ EXTRA_DIST = \
 	tests/refFiles/test_merlin_torus_64_test.out \
 	tests/refFiles/test_merlin_polarfly_455_test.out \
 	tests/refFiles/test_merlin_polarstar_504_test.out \
+	tests/refFiles/collective_contract.out \
 	tests/refFiles/test_merlin_fattree_inc_test.out
 
 sstdir = $(includedir)/sst/elements/merlin
 nobase_sst_HEADERS = \
-	router.h
+	router.h \
+	services/collective/collectiveTypes.h \
+	services/collective/collectiveServiceData.h \
+	services/collective/collectiveArithmetic.h \
+	services/collective/collectiveEndpoint.h \
+	services/collective/collectiveRoute.h
 
 libmerlin_la_LDFLAGS = -module -avoid-version $(PYTHON_LDFLAGS)
+libmerlin_la_LIBADD = libsstmerlincollective.la
 
 BUILT_SOURCES = \
 	pymerlin.inc \

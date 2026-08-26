@@ -51,8 +51,17 @@ ignored_list=
 added_make_list=
 added_m4_list=
 
-# Look at the the directories in the elements subdir
+# Merlin owns support libraries consumed by other elements, so discover it
+# first while retaining the existing order for every other element.
+element_dirs="merlin"
 for file in `ls $BASE_DIR/src/sst/elements`; do
+    if test "$file" != "merlin"; then
+        element_dirs="$element_dirs $file"
+    fi
+done
+
+# Look at the directories in the elements subdir.
+for file in $element_dirs; do
 
     # Make sure file is actually a dir
 	if [ -d "$BASE_DIR/src/sst/elements/$file" ]; then
