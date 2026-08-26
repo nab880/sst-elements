@@ -116,7 +116,12 @@ PortControl::recv(int vc)
 	if ( input_buf[vc].empty() ) return NULL;
 
 	internal_router_event* event = input_buf[vc].front();
+	const auto* removed_request = event->inspectRequest();
+	if ( removed_request != nullptr && removed_request->hasService() ) {
+	    parent->networkServiceHeadRemoved();
+	}
 	input_buf[vc].pop();
+	if ( ++vc_head_generations[vc] == 0 ) ++vc_head_generations[vc];
 
 	// Need to update vc_heads
 	if ( input_buf[vc].empty() ) {
@@ -127,6 +132,10 @@ PortControl::recv(int vc)
         auto event = input_buf[vc].front();
         topo->route_packet(port_number, event->getVC(), event);
 	    vc_heads[vc] = input_buf[vc].front();
+	    const auto* next_request = event->inspectRequest();
+	    if ( next_request != nullptr && next_request->hasService() ) {
+	        parent->networkServiceHeadAppeared();
+	    }
 	}
 
     int vc_return = topo->isHostPort(port_number) ? event->getCreditReturnVC() : vc;
@@ -145,6 +154,23 @@ PortControl::recv(int vc)
     }
 #endif
     return event;
+}
+
+NetworkServiceHeadIdentity
+PortControl::inspectNetworkServiceHead(int vc) const
+{
+    if ( !connected || vc < 0 || vc >= num_vcs || input_buf[vc].empty() ) return {};
+    return { input_buf[vc].front(), vc_head_generations[vc] };
+}
+
+internal_router_event*
+PortControl::recvNetworkServiceExpected(int vc, const NetworkServiceHeadIdentity& expected)
+{
+    const NetworkServiceHeadIdentity actual = inspectNetworkServiceHead(vc);
+    if ( !expected.valid() || actual.event != expected.event || actual.generation != expected.generation ) {
+        return nullptr;
+    }
+    return recv(vc);
 }
 
 void
@@ -280,6 +306,7 @@ PortControl::serialize_order(SST::Core::Serialization::serializer& ser) {
             SST_SER(port_out_credits[i]);
         }
     }
+    SST_SER(vc_head_generations);
     // vc_heads, xbar_in_credits, output_queue_lengths are non-owning
     // pointers into hr_router arrays — re-established via initVCs post-UNPACK
 
@@ -502,7 +529,7 @@ PortControl::PortControl(ComponentId_t cid, Params& params,  Router* rif, int rt
     }
     cm_outstanding_threshold = (cm_ot / flit_size).getRoundedValue();
 
-    UnitAlgebra mtu = params.find<UnitAlgebra>("mtu", "8KB");
+    UnitAlgebra mtu = params.find<UnitAlgebra>("mtu", "2kB");
     if ( mtu.hasUnits("B") ) mtu *= UnitAlgebra("8b/B");
 
     // Get the serialization time for an mtu
@@ -594,6 +621,7 @@ PortControl::initVCs(int vns, int* vcs_per_vn, internal_router_event** vc_heads_
     for ( int i = 0; i < vns; ++i ) {
         num_vcs += vcs_per_vn[i];
     }
+    vc_head_generations.assign(num_vcs, 0);
 
     // If the port is not connected, we still need to initialize
     // vc_heads entries to NULL
@@ -760,6 +788,11 @@ PortControl::init(unsigned int phase) {
             RtrInitEvent* ev = new RtrInitEvent();
             ev->command = RtrInitEvent::REPORT_ID;
             ev->int_value = topo->getEndpointID(port_number);
+            port_link->sendUntimedData(ev);
+
+            ev = new RtrInitEvent();
+            ev->command = RtrInitEvent::REPORT_NETWORK_SERVICE;
+            ev->int_value = static_cast<int>(parent->getNetworkServiceID());
             port_link->sendUntimedData(ev);
         }
         else {
@@ -1059,6 +1092,10 @@ PortControl::handle_input_n2r(Event* ev)
 	case BaseRtrEvent::PACKET:
 	{
 	    RtrEvent* event = static_cast<RtrEvent*>(ev);
+	    if ( !event->hasValidTransportMetadata() || event->getRouteVN() < 0 ||
+             event->getRouteVN() >= num_vns ) {
+	        output.fatal(CALL_INFO, 1, "PortControl received a timed packet with invalid transport metadata\n");
+	    }
 	    // Simply put the event into the right virtual network queue
 
 	    // Need to process input and do the routing
@@ -1068,19 +1105,19 @@ PortControl::handle_input_n2r(Event* ev)
         rtr_event->setCreditReturnVC(vn);
         int curr_vc = rtr_event->getVC();
 
-        if (parent->startINC(port_number, rtr_event)) {
-            break;
-        }
-
+	    const bool was_empty = input_buf[curr_vc].empty();
 	    input_buf[curr_vc].push(rtr_event);
 	    input_buf_count[curr_vc]++;
 
 	    // If this becomes vc_head we need to put it into the vc_heads
 	    // array and do the routing decision here using route_packet()
-	    if ( vc_heads[curr_vc] == NULL ) {
+	    if ( was_empty ) {
+            if ( ++vc_head_generations[curr_vc] == 0 ) ++vc_head_generations[curr_vc];
             topo->route_packet(port_number, rtr_event->getVC(), rtr_event);
             vc_heads[curr_vc] = rtr_event;
             parent->inc_vcs_with_data();
+	        const auto* request = rtr_event->inspectRequest();
+	        if ( request != nullptr && request->hasService() ) parent->networkServiceHeadAppeared();
 	    }
 
 	    if ( event->getTraceType() != SST::Interfaces::SimpleNetwork::Request::NONE ) {
@@ -1149,25 +1186,29 @@ PortControl::handle_input_r2r(Event* ev)
 	case BaseRtrEvent::INTERNAL:
     {
 	    internal_router_event* event = static_cast<internal_router_event*>(ev);
+        if ( !event->hasValidTransportMetadata() || event->getVN() < 0 || event->getVN() >= num_vns ||
+             event->getVC() < 0 || event->getVC() >= num_vcs ) {
+            output.fatal(CALL_INFO, 1, "PortControl received an invalid timed internal packet\n");
+        }
         if ( enable_congestion_management ) parent->reportIncomingEvent(event);
 	    // Simply put the event into the right virtual network queue
 
 	    // Need to do the routing
 	    int curr_vc = event->getVC();
 
-        if (parent->startINC(port_number, event)) {
-            break;
-        }
-
+	    const bool was_empty = input_buf[curr_vc].empty();
 	    input_buf[curr_vc].push(event);
 	    input_buf_count[curr_vc]++;
 
 	    // If this becomes vc_head (there isn't an event already
 	    // in the array) we need to put it into the vc_heads array
-	    if ( vc_heads[curr_vc] == NULL ) {
+	    if ( was_empty ) {
+            if ( ++vc_head_generations[curr_vc] == 0 ) ++vc_head_generations[curr_vc];
             topo->route_packet(port_number, event->getVC(), event);
             vc_heads[curr_vc] = event;
             parent->inc_vcs_with_data();
+	        const auto* request = event->inspectRequest();
+	        if ( request != nullptr && request->hasService() ) parent->networkServiceHeadAppeared();
 	    }
 
 	    if ( event->getTraceType() != SimpleNetwork::Request::NONE ) {

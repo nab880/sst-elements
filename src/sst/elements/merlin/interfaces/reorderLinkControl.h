@@ -187,6 +187,8 @@ public:
     bool isNetworkInitialized() const override;
     nid_t getEndpointID() const override;
     const UnitAlgebra& getLinkBW() const override;
+    std::vector<NetworkServiceID> getSupportedServices() const override;
+    bool queryServiceCapability(NetworkServiceID id, NetworkServiceCapability& out) const override;
 
 
     void serialize_order(SST::Core::Serialization::serializer& ser) override;

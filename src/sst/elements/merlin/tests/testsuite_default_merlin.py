@@ -3,6 +3,8 @@
 from sst_unittest import *
 from sst_unittest_support import *
 
+from pathlib import Path
+
 try:
     from sympy.polys.domains import ZZ
 except:
@@ -65,9 +67,85 @@ class testcase_merlin_Component(SSTTestCase):
     def test_merlin_dragon_128_deferred(self):
         self.merlin_test_template("dragon_128_test_deferred")
 
-    def test_merlin_fattree_inc(self):
-        self.merlin_test_template("fattree_inc_test")
+    def test_merlin_network_service_contract(self):
+        self.merlin_test_template("network_service_contract", exact=True)
 
+    def test_merlin_network_service_missing_processor(self):
+        self.merlin_test_template("network_service_missing_processor", exact=True, strict_stderr=True)
+
+    def test_merlin_network_service_pass_tagged(self):
+        self.merlin_test_template("network_service_pass_tagged", exact=True, strict_stderr=True)
+
+    def test_merlin_network_service_pr2_integration(self):
+        self.merlin_test_template("network_service_pr2_integration", exact=True, strict_stderr=True)
+
+    def test_merlin_network_service_pass_baseline(self):
+        test_path = self.get_testsuite_dir()
+        outdir = self.get_test_output_run_dir()
+        sdlfile = "{}/network_service_pass_baseline.py".format(test_path)
+        disabled_out = "{}/test_merlin_network_service_pass_baseline_disabled.out".format(outdir)
+        disabled_err = "{}/test_merlin_network_service_pass_baseline_disabled.err".format(outdir)
+        enabled_out = "{}/test_merlin_network_service_pass_baseline_enabled.out".format(outdir)
+        enabled_err = "{}/test_merlin_network_service_pass_baseline_enabled.err".format(outdir)
+
+        self.run_sst(sdlfile, disabled_out, disabled_err)
+        self.run_sst(sdlfile, enabled_out, enabled_err, other_args='--model-options="pass"')
+        self.assertFalse(os_test_file(disabled_err, "-s"), "disabled baseline produced stderr")
+        self.assertFalse(os_test_file(enabled_err, "-s"), "PASS baseline produced stderr")
+        self.assertEqual(Path(disabled_out).read_bytes(), Path(enabled_out).read_bytes(),
+            "installing the PASS processor changed ordinary traffic output or timing")
+
+    def test_merlin_network_service_source_boundary(self):
+        source = Path(self.get_testsuite_dir()).parent
+        generic_files = [
+            source / "networkService.h",
+            source / "networkService.cc",
+            source / "router.h",
+            source / "hr_router" / "hr_router.h",
+            source / "hr_router" / "hr_router.cc",
+            source / "hr_router" / "xbar_arb_rr.h",
+            source / "interfaces" / "portControl.h",
+            source / "interfaces" / "portControl.cc",
+            source / "interfaces" / "linkControl.h",
+            source / "interfaces" / "linkControl.cc",
+            source / "interfaces" / "reorderLinkControl.h",
+            source / "interfaces" / "reorderLinkControl.cc",
+            source / "interfaces" / "ExtendedRequest.h",
+            source / "interfaces" / "endpointNIC" / "endpointNIC.h",
+            source / "interfaces" / "endpointNIC" / "endpointNIC.cc",
+            source / "merlin.cc",
+        ]
+        forbidden = [
+            "sst/elements/collective",
+            "services/collective",
+            "SST::Collective",
+            "CollectiveOperation",
+            "CollectiveDatatype",
+            "CollectiveServiceData",
+            "incEvent",
+            "Accelerator",
+            "collective_accel",
+            "Mercury",
+            "Firefly",
+            "Ember",
+            "Hermes",
+            "Iris",
+            "MaskMPI",
+            "mask-mpi",
+        ]
+        for path in generic_files:
+            contents = path.read_text(encoding="utf-8")
+            for token in forbidden:
+                self.assertNotIn(token, contents, "{} leaked into {}".format(token, path))
+
+        removed = [
+            source / "hr_router" / "collective_accel.h",
+            source / "hr_router" / "xbar_arb_rr_chiplets.h",
+            source / "test" / "inc_nic.h",
+            source / "test" / "inc_nic.cc",
+        ]
+        for path in removed:
+            self.assertFalse(path.exists(), "legacy INC source remains: {}".format(path))
 
     @unittest.skipIf(not(('sympy.polys.galoistools' in sys.modules) and ('sympy.polys.domains' in sys.modules)), "Polarfly construction requires sympy")
     def test_merlin_polarfly_455(self):
@@ -108,7 +186,7 @@ class testcase_merlin_Component(SSTTestCase):
 
 #####
 
-    def merlin_test_template(self, testcase, cwd=False):
+    def merlin_test_template(self, testcase, cwd=False, exact=False, strict_stderr=False):
         # Get the path to the test files
         test_path = self.get_testsuite_dir()
         outdir = self.get_test_output_run_dir()
@@ -142,14 +220,17 @@ class testcase_merlin_Component(SSTTestCase):
                     testDataFileName, errfile
                 )
             )
+            if strict_stderr:
+                self.fail("merlin test {} produced stderr: {}".format(testDataFileName, errfile))
 
-        cmp_result = testing_compare_sorted_diff(testcase, outfile, reffile)
+        cmp_result = testing_compare_diff(testcase, outfile, reffile) if exact else \
+            testing_compare_sorted_diff(testcase, outfile, reffile)
         if cmp_result == False:
             diffdata = testing_get_diff_data(testcase)
             log_failure(diffdata)
         self.assertTrue(
             cmp_result,
-            "Sorted Output file {0} does not match sorted Reference File {1}".format(
+            "Output file {0} does not match Reference File {1}".format(
                 outfile, reffile
             ),
         )

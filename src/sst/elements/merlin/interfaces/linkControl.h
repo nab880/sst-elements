@@ -69,6 +69,7 @@ public:
         {"use_nid_remap",      "If true, will remap logical nids in job to physical ids", "false" },
         {"nid_map_name",       "Base name of shared region where my NID map will be located.  If empty, no NID map will be used.",""},
         {"vn_remap",           "Remap VNs onto/off of the network.  If empty, no vn remapping is done", "" },
+        {"network_service_ids", "Nonzero generic network-service IDs this configured Merlin path preserves", "" },
 
     )
 
@@ -144,6 +145,7 @@ private:
     // Holds the credits for the router input buffers.  Size is
     // total_vns.
     int* router_credits;
+    std::vector<int> router_credit_capacity;
 
     /******************************************************************
      * Data structures to hold input quewus
@@ -164,6 +166,9 @@ private:
     int job_id;
     Shared::SharedArray<nid_t> nid_map;
     bool use_nid_map;
+    std::vector<NetworkServiceID> supported_network_services;
+    NetworkServiceID router_network_service_id = SST::Interfaces::SimpleNetwork::NETWORK_SERVICE_NONE;
+    std::vector<uint8_t> logical_vn_supported;
 
     // Doing a round robin on the output.  Need to keep track of the
     // current virtual channel.
@@ -278,6 +283,8 @@ public:
         }
     }
     inline const UnitAlgebra& getLinkBW() const override { return link_bw; }
+    std::vector<NetworkServiceID> getSupportedServices() const override;
+    bool queryServiceCapability(NetworkServiceID id, NetworkServiceCapability& out) const override;
 
 private:
     bool network_initialized;

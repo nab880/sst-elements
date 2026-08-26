@@ -22,6 +22,10 @@
 
 #include "merlin.h"
 
+#include <algorithm>
+#include <limits>
+#include <utility>
+
 namespace SST {
 using namespace Interfaces;
 
@@ -84,6 +88,7 @@ LinkControl::serialize_order(SST::Core::Serialization::serializer& ser) {
 
     SST_SER(SST::Core::Serialization::array(output_queues, used_vns));
     SST_SER(SST::Core::Serialization::array(router_credits, total_vns));
+    SST_SER(router_credit_capacity);
     SST_SER(SST::Core::Serialization::array(router_return_credits, total_vns));
     SST_SER(SST::Core::Serialization::array(input_queues, req_vns));
 
@@ -108,6 +113,9 @@ LinkControl::serialize_order(SST::Core::Serialization::serializer& ser) {
     SST_SER(job_id);
     SST_SER(nid_map);
     SST_SER(use_nid_map);
+    SST_SER(supported_network_services);
+    SST_SER(router_network_service_id);
+    SST_SER(logical_vn_supported);
     SST_SER(curr_out_vn);
     SST_SER(idle_start);
     SST_SER(is_idle);
@@ -140,7 +148,8 @@ LinkControl::LinkControl(ComponentId_t cid, Params &params, int vns) :
     req_vns(vns), used_vns(0), total_vns(0), vn_out_map(nullptr),
     vn_remap_out(nullptr), output_queues(nullptr), router_credits(nullptr),
     router_return_credits(nullptr), input_queues(nullptr),
-    id(-1), logical_nid(-1), use_nid_map(false), job_id(0),
+    id(-1), logical_nid(-1), job_id(0), use_nid_map(false),
+    router_network_service_id(SimpleNetwork::NETWORK_SERVICE_NONE),
     curr_out_vn(0), waiting(true), have_packets(false), start_block(0),
     idle_start(0), is_idle(true),
     receiveFunctor(nullptr), sendFunctor(nullptr),
@@ -198,6 +207,7 @@ LinkControl::LinkControl(ComponentId_t cid, Params &params, int vns) :
     // now.  Others will wait until init when we find out the rest of
     // the VN usage.
     input_queues = new network_queue_t[req_vns];
+    logical_vn_supported.assign(static_cast<size_t>(req_vns), 1);
 
     // Need to wait to do output_queues, router_credits
 
@@ -212,6 +222,23 @@ LinkControl::LinkControl(ComponentId_t cid, Params &params, int vns) :
         for ( int i = 0; i < req_vns; ++i ) {
             vn_out_map[i] = vn_map_vec[i];
         }
+    }
+
+    std::vector<uint32_t> configured_service_ids;
+    params.find_array<uint32_t>("network_service_ids", configured_service_ids);
+    supported_network_services.reserve(configured_service_ids.size());
+    for ( uint32_t service_id : configured_service_ids ) {
+        if ( service_id == SimpleNetwork::NETWORK_SERVICE_NONE ||
+             service_id > SimpleNetwork::NETWORK_SERVICE_PLUGIN_MAX ) {
+            merlin_abort.fatal(CALL_INFO, 1,
+                "LinkControl network_service_ids entries must be nonzero 16-bit values\n");
+        }
+        supported_network_services.push_back(static_cast<NetworkServiceID>(service_id));
+    }
+    std::sort(supported_network_services.begin(), supported_network_services.end());
+    if ( std::adjacent_find(supported_network_services.begin(), supported_network_services.end()) !=
+         supported_network_services.end() ) {
+        merlin_abort.fatal(CALL_INFO, 1, "LinkControl network_service_ids must be unique\n");
     }
 
 
@@ -355,6 +382,15 @@ void LinkControl::init(unsigned int phase)
         }
         delete ev;
 
+        ev = rtr_link->recvUntimedData();
+        init_ev = checkInitProtocol(ev, RtrInitEvent::REPORT_NETWORK_SERVICE, CALL_INFO);
+        if ( init_ev->int_value < 0 ||
+             init_ev->int_value > static_cast<int>(SimpleNetwork::NETWORK_SERVICE_PLUGIN_MAX) ) {
+            merlin_abort_full.fatal(CALL_INFO, 1, "Router reported an invalid network-service ID\n");
+        }
+        router_network_service_id = static_cast<NetworkServiceID>(init_ev->int_value);
+        delete ev;
+
         }
         break;
     case 2:
@@ -390,6 +426,7 @@ void LinkControl::init(unsigned int phase)
         // total_vns
         router_return_credits = new int[total_vns];
         router_credits = new int[total_vns];
+        router_credit_capacity.assign(static_cast<size_t>(total_vns), 0);
         for ( int i = 0; i < total_vns; ++i ) {
             router_return_credits[i] = 0;
             router_credits[i] = 0;
@@ -402,6 +439,7 @@ void LinkControl::init(unsigned int phase)
         used_vns = 0;
         for ( int i = 0; i < req_vns; ++i ) {
             int vn = vn_out_map[i];
+            logical_vn_supported[static_cast<size_t>(i)] = vn == -1 ? 0 : 1;
             if ( vn != -1 ) {
                 // If this is the first time this VN was specified add
                 // one to used_vns
@@ -437,9 +475,6 @@ void LinkControl::init(unsigned int phase)
         delete[] vn_out_map;
         vn_out_map = nullptr;
 
-
-        network_initialized = true;
-
         // Need to send available credits to other side of link
         for ( int i = 0; i < total_vns; i++ ) {
             int credits = router_return_credits[i];
@@ -461,6 +496,7 @@ void LinkControl::init(unsigned int phase)
             {
                 credit_event* ce = static_cast<credit_event*>(bev);
                 router_credits[ce->vc] += ce->credits;
+                router_credit_capacity[static_cast<size_t>(ce->vc)] += ce->credits;
                 delete ev;
             }
             break;
@@ -474,6 +510,17 @@ void LinkControl::init(unsigned int phase)
                 merlin_abort_full.fatal(CALL_INFO, 1, "Reached state where a non-RtrEvent was not handled.");
                 break;
             }
+        }
+        if ( !network_initialized && router_credit_capacity.size() == static_cast<size_t>(total_vns) ) {
+            bool ready = true;
+            for ( int vn = 0; vn < req_vns; ++vn ) {
+                if ( logical_vn_supported[static_cast<size_t>(vn)] != 0 &&
+                     router_credit_capacity[static_cast<size_t>(vn_remap_out[vn]->vn)] <= 0 ) {
+                    ready = false;
+                    break;
+                }
+            }
+            network_initialized = ready;
         }
         break;
     }
@@ -535,11 +582,20 @@ void LinkControl::finish(void)
 // otherwise.
 bool LinkControl::send(SimpleNetwork::Request* req, int vn) {
     // Check to see if the VN is in range
-    if ( vn >= req_vns ) return false;
-    req->vn = vn;
+    if ( req == nullptr || vn < 0 || vn >= req_vns ||
+         logical_vn_supported.size() != static_cast<size_t>(req_vns) ||
+         logical_vn_supported[static_cast<size_t>(vn)] == 0 ) return false;
+    if ( req->hasService() ) {
+        if ( req->getServiceID() != router_network_service_id ||
+             !std::binary_search(supported_network_services.begin(), supported_network_services.end(),
+                 req->getServiceID()) ) {
+            return false;
+        }
+    }
 
-    // Check to see if we need to do a nid translation
-    if ( use_nid_map ) req->dest = nid_map[req->dest];
+    // Resolve transport metadata without mutating caller-owned state.  A
+    // failed timed send is transactional for advertised network services.
+    const nid_t physical_dest = use_nid_map ? nid_map[req->dest] : req->dest;
 
     // Get the output queue information for that vn
     output_queue_bundle_t& out_handle = *(vn_remap_out[vn]);
@@ -550,7 +606,11 @@ bool LinkControl::send(SimpleNetwork::Request* req, int vn) {
     // Create a router event using id and original vn
     RtrEvent* ev = new RtrEvent(req,id,real_vn);
     // Fill in the number of flits
-    ev->computeSizeInFlits(flit_size);
+    if ( !ev->computeSizeInFlits(flit_size) ) {
+        ev->takeRequest();
+        delete ev;
+        return false;
+    }
     int flits = ev->getSizeInFlits();
 
     // Check to see if there are enough credits to send
@@ -562,9 +622,12 @@ bool LinkControl::send(SimpleNetwork::Request* req, int vn) {
 
     // Update the credits
     out_handle.credits -= flits;
-    // ev->request->vn = vn;
-
+    req->vn   = vn;
+    req->dest = physical_dest;
     ev->setInjectionTime(getCurrentSimTimeNano());
+    if ( !ev->markTransportMetadataValid() ) {
+        merlin_abort_full.fatal(CALL_INFO, 1, "LinkControl produced invalid transport metadata\n");
+    }
     out_handle.queue.push(ev);
     if ( waiting && !have_packets ) {
         output_timing->send(1,nullptr);
@@ -581,11 +644,71 @@ bool LinkControl::send(SimpleNetwork::Request* req, int vn) {
     return true;
 }
 
+std::vector<SimpleNetwork::NetworkServiceID>
+LinkControl::getSupportedServices() const
+{
+    std::vector<NetworkServiceID> supported;
+    if ( !network_initialized ) return supported;
+    for ( NetworkServiceID service_id : supported_network_services ) {
+        NetworkServiceCapability capability;
+        if ( queryServiceCapability(service_id, capability) ) supported.push_back(service_id);
+    }
+    return supported;
+}
+
+bool
+LinkControl::queryServiceCapability(NetworkServiceID service_id, NetworkServiceCapability& out) const
+{
+    if ( !network_initialized || service_id != router_network_service_id ||
+         !std::binary_search(supported_network_services.begin(), supported_network_services.end(), service_id) ) {
+        return false;
+    }
+
+    const int64_t output_capacity_flits = (outbuf_size / flit_size_ua).getRoundedValue();
+    if ( output_capacity_flits <= 0 || flit_size <= 0 ||
+         router_credit_capacity.size() != static_cast<size_t>(total_vns) ) {
+        return false;
+    }
+
+    NetworkServiceCapability capability;
+    capability.service_id         = service_id;
+    capability.min_schema_version = 0;
+    capability.max_schema_version = std::numeric_limits<NetworkServiceVersion>::max();
+    capability.features = SERVICE_FEATURE_SIDECAR_PRESERVATION |
+                          SERVICE_FEATURE_TRANSACTIONAL_TIMED_SEND |
+                          SERVICE_FEATURE_UNTIMED_PRESERVATION |
+                          SERVICE_FEATURE_SERIALIZATION |
+                          SERVICE_FEATURE_INTERMEDIATE_TERMINATION_SAFE |
+                          SERVICE_FEATURE_FRESH_BASE_REQUEST_TAG_FIRST_RECEIVE;
+    capability.max_atomic_request_bits_by_vn.resize(static_cast<size_t>(req_vns), 0);
+    for ( int vn = 0; vn < req_vns; ++vn ) {
+        if ( logical_vn_supported[static_cast<size_t>(vn)] != 0 ) {
+            const int real_vn = vn_remap_out[vn]->vn;
+            const int64_t capacity_flits = std::min<int64_t>(
+                output_capacity_flits, router_credit_capacity[static_cast<size_t>(real_vn)]);
+            if ( capacity_flits > 0 && static_cast<uint64_t>(capacity_flits) <=
+                    std::numeric_limits<uint64_t>::max() / static_cast<uint64_t>(flit_size) ) {
+                capability.max_atomic_request_bits_by_vn[static_cast<size_t>(vn)] =
+                    static_cast<uint64_t>(capacity_flits) * static_cast<uint64_t>(flit_size);
+            }
+        }
+    }
+    if ( std::none_of(capability.max_atomic_request_bits_by_vn.begin(),
+            capability.max_atomic_request_bits_by_vn.end(), [](uint64_t bits) { return bits != 0; }) ) {
+        return false;
+    }
+    out = std::move(capability);
+    return true;
+}
+
 
 // Returns true if there is space in the output buffer and false
 // otherwise.
 bool LinkControl::spaceToSend(int vn, int bits) {
-    if ( vn_remap_out[vn]->credits * flit_size < bits) return false;
+    if ( vn < 0 || vn >= req_vns || bits < 0 ||
+         logical_vn_supported.size() != static_cast<size_t>(req_vns) ||
+         logical_vn_supported[static_cast<size_t>(vn)] == 0 ) return false;
+    if ( static_cast<int64_t>(vn_remap_out[vn]->credits) * static_cast<int64_t>(flit_size) < bits ) return false;
     return true;
 }
 
@@ -710,9 +833,16 @@ void LinkControl::handle_input(Event* ev)
     }
     else {
         RtrEvent* event = static_cast<RtrEvent*>(ev);
+        if ( !event->hasValidTransportMetadata() ) {
+            merlin_abort_full.fatal(CALL_INFO, 1, "LinkControl received a timed packet with invalid transport metadata\n");
+        }
         // Simply put the event into the right virtual network queue
         // int orig_vn = event->getOriginalVN();
         int vn = event->getLogicalVN();
+        if ( vn < 0 || vn >= req_vns ) {
+            merlin_abort_full.fatal(CALL_INFO, 1,
+                "LinkControl received logical VN %d outside configured range [0, %d)\n", vn, req_vns);
+        }
         // event->request->vn = orig_vn;
 
         input_queues[vn].push(event);
@@ -832,9 +962,6 @@ void LinkControl::handle_output(Event* ev)
 
         curr_out_vn = vn_to_send + 1;
         if ( curr_out_vn == used_vns ) curr_out_vn = 0;
-
-        // Add in inject time so we can track latencies
-        send_event->setInjectionTime(getCurrentSimTimeNano());
 
         // Subtract credits
         router_credits[output_queues[vn_to_send].vn] -= size;

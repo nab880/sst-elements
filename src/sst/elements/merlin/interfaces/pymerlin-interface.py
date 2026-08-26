@@ -21,7 +21,7 @@ from sst.merlin.base import *
 class LinkControl(NetworkInterface):
     def __init__(self):
         NetworkInterface.__init__(self)
-        self._declareParams("params",["link_bw","input_buf_size","output_buf_size","vn_remap"])
+        self._declareParams("params",["link_bw","input_buf_size","output_buf_size","vn_remap","network_service_ids"])
         self._subscribeToPlatformParamSet("network_interface")
 
     # returns subcomp, port_name

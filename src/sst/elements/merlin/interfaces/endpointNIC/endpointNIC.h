@@ -60,28 +60,30 @@ public:
     )
 
     EndpointNIC(ComponentId_t cid, Params& params, int vns);
-    ~EndpointNIC();
+    ~EndpointNIC() override;
 
     // SimpleNetwork interface methods - forward to link_control
-    void init(unsigned int phase);
-    void setup();
-    void complete(unsigned int phase);
-    void finish();
+    void init(unsigned int phase) override;
+    void setup() override;
+    void complete(unsigned int phase) override;
+    void finish() override;
 
-    bool send(Request* req, int vn);
-    bool spaceToSend(int vn, int num_bits);
-    Request* recv(int vn);
-    bool requestToReceive(int vn);
+    bool send(Request* req, int vn) override;
+    bool spaceToSend(int vn, int num_bits) override;
+    Request* recv(int vn) override;
+    bool requestToReceive(int vn) override;
 
-    void sendUntimedData(Request* req);
-    Request* recvUntimedData();
+    void sendUntimedData(Request* req) override;
+    Request* recvUntimedData() override;
 
-    void setNotifyOnReceive(HandlerBase* functor);
-    void setNotifyOnSend(HandlerBase* functor);
+    void setNotifyOnReceive(HandlerBase* functor) override;
+    void setNotifyOnSend(HandlerBase* functor) override;
 
-    bool isNetworkInitialized() const;
-    nid_t getEndpointID() const;
-    const UnitAlgebra& getLinkBW() const;
+    bool isNetworkInitialized() const override;
+    nid_t getEndpointID() const override;
+    const UnitAlgebra& getLinkBW() const override;
+    std::vector<NetworkServiceID> getSupportedServices() const override;
+    bool queryServiceCapability(NetworkServiceID id, NetworkServiceCapability& out) const override;
 
 protected:
     // Virtual methods for child classes to for NIC-specific functionality

@@ -21,6 +21,10 @@
 
 #include "merlin.h"
 
+#include <limits>
+#include <memory>
+#include <utility>
+
 namespace SST {
 using namespace Interfaces;
 
@@ -120,27 +124,41 @@ void ReorderLinkControl::finish(void)
 // Returns true if there is space in the output buffer and false
 // otherwise.
 bool ReorderLinkControl::send(SimpleNetwork::Request* req, int vn) {
-    if ( vn >= vns ) return false;
-    if ( !link_control->spaceToSend(vn, req->size_in_bits) ) return false;
+    if ( req == nullptr || vn < 0 || vn >= vns ) return false;
 
-    Merlin::ExtendedRequest* ext_req = new Merlin::ExtendedRequest(req);
-    delete req;
-
-    // Get or create reorder info for this destination
-    if ( reorder_info.find(ext_req->dest) == reorder_info.end() ) {
-        ReorderInfo* info = new ReorderInfo();
-        reorder_info[ext_req->dest] = info;
+    // Service packets use their own protocol ordering.  Sequencing one here
+    // would leave a permanent gap when a router consumes it in-network.
+    if ( req->hasService() ) {
+        NetworkServiceCapability capability;
+        if ( !queryServiceCapability(req->getServiceID(), capability) ||
+             !(capability.features & SERVICE_FEATURE_INTERMEDIATE_TERMINATION_SAFE) ) {
+            return false;
+        }
+        return link_control->send(req, vn);
     }
-    ReorderInfo* info = reorder_info[ext_req->dest];
 
-    // Set sequence number as metadata (preserves all other metadata!)
-    uint32_t seq = info->send++;
-    Merlin::ReorderMetadata reorder_meta(seq);
+    if ( req->size_in_bits > static_cast<size_t>(std::numeric_limits<int>::max()) ) return false;
+    if ( !link_control->spaceToSend(vn, static_cast<int>(req->size_in_bits)) ) return false;
+    const nid_t logical_dest = req->dest;
+    auto info_it = reorder_info.find(logical_dest);
+    const uint32_t sequence = info_it == reorder_info.end() ? 0 : info_it->second->send;
+
+    std::unique_ptr<Merlin::ExtendedRequest> ext_req(new Merlin::ExtendedRequest(req));
+    Merlin::ReorderMetadata reorder_meta(sequence);
     ext_req->setMetadata("Reorder", reorder_meta);
 
-    // std::cout << id << ": sending packet with sequence number " << seq << std::endl;
+    if ( !link_control->send(ext_req.get(), vn) ) {
+        merlin_abort_full.fatal(CALL_INFO, 1,
+            "ReorderLinkControl child rejected a preflight-approved ordinary packet\n");
+    }
+    ext_req.release();
 
-    return link_control->send(ext_req, vn);
+    if ( info_it == reorder_info.end() ) {
+        info_it = reorder_info.emplace(logical_dest, new ReorderInfo()).first;
+    }
+    ++info_it->second->send;
+    delete req;
+    return true;
 }
 
 
@@ -201,8 +219,40 @@ const UnitAlgebra& ReorderLinkControl::getLinkBW() const {
     return link_control->getLinkBW();
 }
 
+std::vector<SimpleNetwork::NetworkServiceID>
+ReorderLinkControl::getSupportedServices() const
+{
+    std::vector<NetworkServiceID> supported;
+    for ( NetworkServiceID service_id : link_control->getSupportedServices() ) {
+        NetworkServiceCapability capability;
+        if ( queryServiceCapability(service_id, capability) ) supported.push_back(service_id);
+    }
+    return supported;
+}
+
+bool
+ReorderLinkControl::queryServiceCapability(
+    NetworkServiceID service_id, NetworkServiceCapability& out) const
+{
+    NetworkServiceCapability capability;
+    if ( !link_control->queryServiceCapability(service_id, capability) ) return false;
+    constexpr NetworkServiceFeatureMask required =
+        SERVICE_FEATURE_FRESH_BASE_REQUEST_TAG_FIRST_RECEIVE |
+        SERVICE_FEATURE_INTERMEDIATE_TERMINATION_SAFE;
+    if ( (capability.features & required) != required ) return false;
+    out = std::move(capability);
+    return true;
+}
+
 bool ReorderLinkControl::handle_event(int vn) {
     SimpleNetwork::Request* req = link_control->recv(vn);
+
+    // Service responses were deliberately not wrapped or sequenced.
+    if ( req != nullptr && req->hasService() ) {
+        input_buf[vn].push(req);
+        if ( receiveFunctor != nullptr && !(*receiveFunctor)(vn) ) receiveFunctor = nullptr;
+        return true;
+    }
 
     // All packets reaching here passed through ReorderLinkControl::send(), which wraps every packet to ExtendedRequest before forwarding. static_cast is safe here.
     assert(dynamic_cast<Merlin::ExtendedRequest*>(req) != nullptr);
@@ -278,4 +328,3 @@ void ReorderLinkControl::serialize_order(SST::Core::Serialization::serializer& s
 
 } // namespace Merlin
 } // namespace SST
-

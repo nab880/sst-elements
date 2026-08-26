@@ -47,10 +47,12 @@ public:
 
 private:
     int num_ports = 0;
+    int num_output_ports = 0;
     int num_vcs = 0;
 
     int* rr_vcs = nullptr;
     int rr_port = 0;
+    int service_rr_port = 0;
 
 #if VERIFY_DECLOCKING
     int rr_port_shadow = 0;
@@ -77,24 +79,25 @@ public:
     void serialize_order(SST::Core::Serialization::serializer& ser) override {
         XbarArbitration::serialize_order(ser);
         SST_SER(num_ports);
+        SST_SER(num_output_ports);
         SST_SER(num_vcs);
         SST_SER(rr_port);
+        SST_SER(service_rr_port);
 #if VERIFY_DECLOCKING
         SST_SER(rr_port_shadow);
 #endif
 
-        SST_SER(SST::Core::Serialization::array(rr_vcs, num_vcs));
+        SST_SER(SST::Core::Serialization::array(rr_vcs, num_ports));
 
-        // vc_heads is a non-owning scratch buffer, re-allocated on UNPACK
-        if ( ser.mode() == SST::Core::Serialization::serializer::UNPACK ) {
-            vc_heads = new internal_router_event*[num_vcs];
-        }
+        // vc_heads is a non-owning scratch alias set during arbitration.
+        if ( ser.mode() == SST::Core::Serialization::serializer::UNPACK ) vc_heads = nullptr;
     }
     ImplementSerializable(SST::Merlin::xbar_arb_rr)
 
     void setPorts(int num_ports_s, int num_vcs_s) override
     {
         num_ports = num_ports_s;
+        num_output_ports = num_ports_s;
         num_vcs = num_vcs_s;
 
         rr_vcs = new int[num_ports];
@@ -103,10 +106,94 @@ public:
         }
 
         rr_port = 0;
+        service_rr_port = 0;
 #if VERIFY_DECLOCKING
         rr_port_shadow = 0;
 #endif
-        vc_heads = new internal_router_event*[num_vcs];
+        vc_heads = nullptr;
+    }
+
+    bool setNetworkServiceInputs(int num_inputs, int num_outputs, int num_vcs_s) override
+    {
+        if ( num_inputs != num_outputs + 1 || num_outputs <= 0 ) return false;
+        setPorts(num_inputs, num_vcs_s);
+        num_output_ports = num_outputs;
+        return true;
+    }
+
+#if VERIFY_DECLOCKING
+    bool arbitrateNetworkService(XbarInput** inputs, PortInterface** outputs, int* input_busy,
+        int* output_busy, int* progress_vc, bool clocking) override
+#else
+    bool arbitrateNetworkService(XbarInput** inputs, PortInterface** outputs, int* input_busy,
+        int* output_busy, int* progress_vc) override
+#endif
+    {
+        for ( int port = 0; port < num_ports; ++port ) progress_vc[port] = -1;
+
+        const int synthetic_port = num_output_ports;
+        internal_router_event** synthetic_heads = inputs[synthetic_port]->getVCHeads();
+        bool synthetic_has_head = false;
+        for ( int vc = 0; vc < num_vcs; ++vc ) {
+            if ( synthetic_heads[vc] != nullptr ) {
+                synthetic_has_head = true;
+                break;
+            }
+        }
+
+        auto arbitrate_port = [&](int port) -> bool {
+            internal_router_event** heads = inputs[port]->getVCHeads();
+            if ( input_busy[port] > 0 ) return true;
+            bool had_head = false;
+
+            for ( int vc = rr_vcs[port], checked = 0; checked < num_vcs;
+                  vc = (vc + 1 == num_vcs ? 0 : vc + 1), ++checked ) {
+                internal_router_event* event = heads[vc];
+                if ( event == nullptr ) continue;
+                had_head = true;
+                const int next_port = event->getNextPort();
+                const int next_vc   = event->getVC();
+                if ( next_port < 0 || next_port >= num_output_ports || next_vc < 0 || next_vc >= num_vcs ) {
+                    return false;
+                }
+                if ( output_busy[next_port] > 0 ||
+                     !outputs[next_port]->spaceToSend(next_vc, event->getFlitCount()) ) {
+                    continue;
+                }
+                progress_vc[port]     = vc;
+                input_busy[port]      = event->getFlitCount();
+                output_busy[next_port] = event->getFlitCount();
+                break;
+            }
+            if ( had_head && progress_vc[port] == -1 ) progress_vc[port] = -2;
+            rr_vcs[port] = (rr_vcs[port] + 1) % num_vcs;
+            return true;
+        };
+
+        // Preserve the exact physical-port RR order whenever the synthetic
+        // requester is empty.  While it is active, rotate first choice over
+        // every individual physical and synthetic input with equal weight.
+        if ( synthetic_has_head ) {
+            for ( int port = service_rr_port, count = 0; count < num_ports;
+                  port = (port + 1 == num_ports ? 0 : port + 1), ++count ) {
+                if ( !arbitrate_port(port) ) return false;
+            }
+            service_rr_port = (service_rr_port + 1) % num_ports;
+        }
+        else {
+            for ( int port = rr_port, count = 0; count < num_output_ports;
+                  port = (port + 1 == num_output_ports ? 0 : port + 1), ++count ) {
+                if ( !arbitrate_port(port) ) return false;
+            }
+            // Keep the per-VC cursor deterministic even while the requester
+            // is empty, matching the treatment of an empty physical input.
+            rr_vcs[synthetic_port] = (rr_vcs[synthetic_port] + 1) % num_vcs;
+        }
+        rr_port = (rr_port + 1) % num_output_ports;
+#if VERIFY_DECLOCKING
+        if ( clocking ) rr_port_shadow = rr_port;
+#endif
+        return true;
     }
 
     // Naming convention is from point of view of the xbar.  So,
@@ -165,7 +252,7 @@ public:
             // Increemnt rr_vcs for next time
             rr_vcs[port] = (rr_vcs[port] + 1) % num_vcs;
         }
-        rr_port = (rr_port + 1) % num_ports;
+        rr_port = (rr_port + 1) % num_output_ports;
 
 #if VERIFY_DECLOCKING
         if ( clocking ) {
@@ -179,12 +266,12 @@ public:
     void reportSkippedCycles(Cycle_t cycles) override
     {
 #if VERIFY_DECLOCKING
-        rr_port_shadow = (rr_port_shadow + cycles) % num_ports;
+        rr_port_shadow = (rr_port_shadow + cycles) % num_output_ports;
         if ( rr_port_shadow != rr_port ) std::cout << "  PROBLEM:  rr_port = "
                          << rr_port << ", rr_port_shadow = " << rr_port_shadow <<
                          ", cycles = " << cycles << std::endl;
 #else
-        rr_port = (rr_port + cycles) % num_ports;
+        rr_port = (rr_port + cycles) % num_output_ports;
 #endif
     }
 

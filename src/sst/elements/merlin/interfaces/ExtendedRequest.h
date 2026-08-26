@@ -23,6 +23,7 @@
 #include <vector>
 #include <variant>
 #include <deque>
+#include <utility>
 
 namespace SST {
 namespace Merlin {
@@ -77,23 +78,33 @@ public:
                     bool head, bool tail, Event* payload = nullptr) :
         Request(dest, src, size_in_bits, head, tail, payload) {}
 
-    // Create ExtendedRequest from a base Request
-    ExtendedRequest(Request* req) :
-        Request(req->dest, req->src, req->size_in_bits, req->head, req->tail)
+    // Deep-copy a base request without slicing its owned payload or service sidecar.
+    explicit ExtendedRequest(const Request& req) :
+        Request(req)
     {
-        givePayload(req->takePayload());
-        trace = req->getTraceType();
-        traceID = req->getTraceID();
-
-        // If req is already an ExtendedRequest, copy its metadata
-        ExtendedRequest* ext_req = dynamic_cast<ExtendedRequest*>(req);
+        const auto* ext_req = dynamic_cast<const ExtendedRequest*>(&req);
         if (ext_req) {
-            // Copy metadata (variant handles copying automatically)
             metadata = ext_req->metadata;
         }
     }
 
-    ~ExtendedRequest() {}
+    // Move all base ownership out of a request that the caller will delete.
+    explicit ExtendedRequest(Request* req) :
+        Request(std::move(*req))
+    {
+        auto* ext_req = dynamic_cast<ExtendedRequest*>(req);
+        if (ext_req) {
+            metadata = std::move(ext_req->metadata);
+        }
+    }
+
+    ExtendedRequest(const ExtendedRequest&) = default;
+    ExtendedRequest(ExtendedRequest&&) noexcept = default;
+    ExtendedRequest& operator=(const ExtendedRequest&) = default;
+    ExtendedRequest& operator=(ExtendedRequest&&) noexcept = default;
+    ~ExtendedRequest() override = default;
+
+    ExtendedRequest* clone() override { return new ExtendedRequest(*this); }
 
     // Set plugin-specific metadata
     template<typename T>
