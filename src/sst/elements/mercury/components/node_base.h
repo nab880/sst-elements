@@ -63,6 +63,10 @@ public:
 
   void setup() override;
 
+  void complete(unsigned int phase) override;
+
+  void finish() override;
+
   void endSim() {
     primaryComponentOKToEndSim();
   }

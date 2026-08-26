@@ -11,6 +11,8 @@
 # information, see the LICENSE file in the top level directory of the
 # distribution.
 
+import sys
+
 import sst
 from sst.merlin.base import *
 from sst.merlin.endpoint import *
@@ -34,7 +36,7 @@ if __name__ == "__main__":
 
     topo = topoSingle()
     topo.link_latency = "20ns"
-    topo.num_ports = 32
+    topo.num_ports = 2 if "multi-vn-observable" in sys.argv else 32
 
     ep = HgJob(0,2)
 

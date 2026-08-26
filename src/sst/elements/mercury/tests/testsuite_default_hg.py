@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import os
 import subprocess
+from pathlib import Path
 
 from sst_unittest import *
 from sst_unittest_support import *
@@ -28,6 +29,24 @@ class testcase_hg(SSTTestCase):
     @unittest.skipIf(testing_check_get_num_ranks() > 1, "ostest-nano skipped if ranks > 1 - single component in config")
     def test_os_nano(self):
         self.simple_components_template("ostest-nano")
+
+    def test_mercury_network_service_tag_first(self):
+        test_path = self.get_testsuite_dir()
+        outdir = self.get_test_output_run_dir()
+        output = f"{outdir}/network_service_tag_first.out"
+        error = f"{outdir}/network_service_tag_first.err"
+
+        self.run_sst(f"{test_path}/network_service_tag_first.py", output, error,
+            expected_rc=1, timeout_sec=5)
+        combined = Path(output).read_text(encoding="utf-8") + Path(error).read_text(encoding="utf-8")
+        self.assertIn("Mercury received unsupported network service 32768 on VN 0", combined)
+        self.assertNotIn("couldn't cast event to NetworkMessage", combined)
+        self.assertNotIn("Bye!", combined)
+
+    @unittest.skipIf(testing_check_get_num_threads() > 1, "manager VN smoke skipped if threads > 1")
+    @unittest.skipIf(testing_check_get_num_ranks() > 1, "manager VN smoke skipped if ranks > 1")
+    def test_manager_vn_smoke(self):
+        self.simple_components_template("manager_vn_smoke")
 
 #####
 

@@ -14,12 +14,21 @@
 // distribution.
 
 #include <mercury/components/operating_system_api.h>
+#include <mercury/components/node_base.h>
 
 namespace SST {
 namespace Hg {
 
 OperatingSystemAPI::OperatingSystemAPI(ComponentId_t id, SST::Params& params)
 : SST::Hg::SubComponent(id) {}
+
+SST::Collective::CollectiveEndpoint*
+OperatingSystemAPI::collectiveEndpoint() const
+{
+  NodeBase* parent = node();
+  NicAPI* nic = parent ? parent->nic() : nullptr;
+  return nic ? nic->collectiveEndpoint() : nullptr;
+}
 
 } // namespace Hg
 } // namespace SST

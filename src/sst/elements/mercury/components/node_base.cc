@@ -58,6 +58,18 @@ NodeBase::setup()
 }
 
 void
+NodeBase::complete(unsigned int phase)
+{
+  SST::Component::complete(phase);
+}
+
+void
+NodeBase::finish()
+{
+  SST::Component::finish();
+}
+
+void
 NodeBase::handle(Request* req)
 {
   os_->handleRequest(req);

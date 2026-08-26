@@ -35,8 +35,42 @@
 
 #include <functional>
 
+namespace SST::Collective {
+class CollectiveEndpoint;
+}
 
 namespace SST::Hg {
+
+/** Node-resolved virtual-network roles passed to a configurable Mercury NIC. */
+struct VirtualNetworkConfig
+{
+  int count = 1;
+  int ordinary = 0;
+  int manager = 0;
+  int reduce = -1;
+  int result = -1;
+};
+
+/** Resolves legacy defaults and named VN roles from node parameters. */
+VirtualNetworkConfig resolveVirtualNetworkConfig(const SST::Params& params);
+
+/** Optional capability for NICs which support nonlegacy virtual-network roles. */
+class VirtualNetworkConfigProvider
+{
+public:
+  virtual ~VirtualNetworkConfigProvider();
+
+  virtual bool configureVirtualNetworks(const VirtualNetworkConfig& config) = 0;
+};
+
+/** Optional capability implemented only by NICs hosting a neutral collective endpoint. */
+class CollectiveEndpointProvider
+{
+public:
+  virtual ~CollectiveEndpointProvider();
+
+  virtual SST::Collective::CollectiveEndpoint* collectiveEndpoint() const = 0;
+};
 
 class NicEvent :
   public Event, public SST::Hg::thread_safe_new<NicEvent>
@@ -97,6 +131,15 @@ public:
   NicAPI(uint32_t id, SST::Params& params);
 
   virtual ~NicAPI() = default;
+
+  /** Returns nullptr unless this NIC opts into CollectiveEndpointProvider. */
+  SST::Collective::CollectiveEndpoint* collectiveEndpoint() const;
+
+  /**
+   * Applies node-resolved VN roles before init.  Legacy NIC implementations
+   * accept only the original one-VN configuration.
+   */
+  bool configureVirtualNetworks(const VirtualNetworkConfig& config);
 
   /**
    * @return A unique ID for the NIC positions. Opaque typedef to an int.

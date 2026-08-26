@@ -69,8 +69,6 @@ Questions? Contact sst-macro-help@sandia.gov
   auto op = start##coll(#fxn, __VA_ARGS__); \
   addImmediateCollective(std::move(op), req);
 
-using SST::Iris::sumi::Collective;
-
 namespace SST::MASKMPI {
 
 MpiRequest*
@@ -200,22 +198,22 @@ MpiApi::finishCollective(CollectiveOpBase* op)
   switch(op->ty){
     case Iris::sumi::Collective::donothing:
       sst_hg_abort_printf("do nothing collective should not call finishCollective");
-    case Collective::reduce:
-    case Collective::alltoall:
-    case Collective::gather:
-    case Collective::scatter:
-    case Collective::allreduce:
-    case Collective::scan:
-    case Collective::allgather:
-    case Collective::barrier:
-    case Collective::reduce_scatter:
-    case Collective::bcast:
+    case Iris::sumi::Collective::reduce:
+    case Iris::sumi::Collective::alltoall:
+    case Iris::sumi::Collective::gather:
+    case Iris::sumi::Collective::scatter:
+    case Iris::sumi::Collective::allreduce:
+    case Iris::sumi::Collective::scan:
+    case Iris::sumi::Collective::allgather:
+    case Iris::sumi::Collective::barrier:
+    case Iris::sumi::Collective::reduce_scatter:
+    case Iris::sumi::Collective::bcast:
       finishCollectiveOp(op);
       break;
-    case Collective::alltoallv:
-    case Collective::gatherv:
-    case Collective::scatterv:
-    case Collective::allgatherv:
+    case Iris::sumi::Collective::alltoallv:
+    case Iris::sumi::Collective::gatherv:
+    case Iris::sumi::Collective::scatterv:
+    case Iris::sumi::Collective::allgatherv:
       finishVcollectiveOp(op);
       break;
   }
@@ -270,7 +268,7 @@ MpiApi::startAllgather(const char* name, MPI_Comm comm, int sendcount, MPI_Datat
 //    commStr(comm).c_str());
 
   auto op = CollectiveOp::create(sendcount, recvcount, getComm(comm));
-  startMpiCollective(Collective::allgather, sendbuf, recvbuf, sendtype, recvtype, op.get());
+  startMpiCollective(Iris::sumi::Collective::allgather, sendbuf, recvbuf, sendtype, recvtype, op.get());
   auto* msg = startAllgather(op.get());
   if (msg){
     op->complete = true;
@@ -354,7 +352,7 @@ MpiApi::startAlltoall(const char* name, MPI_Comm comm, int sendcount, MPI_Dataty
 //    commStr(comm).c_str());
 
   auto op = CollectiveOp::create(sendcount, recvcount, getComm(comm));
-  startMpiCollective(Collective::alltoall, sendbuf, recvbuf, sendtype, recvtype, op.get());
+  startMpiCollective(Iris::sumi::Collective::alltoall, sendbuf, recvbuf, sendtype, recvtype, op.get());
   auto* msg = startAlltoall(op.get());
   if (msg){
     op->complete = true;
@@ -435,7 +433,7 @@ MpiApi::startAllreduce(MpiComm* commPtr, int count, MPI_Datatype type,
   }
 
   op->op = mop;
-  startMpiCollective(Collective::allreduce, src, dst, type, type, op.get());
+  startMpiCollective(Iris::sumi::Collective::allreduce, src, dst, type, type, op.get());
   auto* msg = startAllreduce(op.get());
   if (msg){
     op->complete = true;
@@ -504,7 +502,7 @@ MpiApi::iallreduce(int count, MPI_Datatype type, MPI_Op op,
 Iris::sumi::CollectiveDoneMessage*
 MpiApi::startBarrier(CollectiveOp* op)
 {
-  op->ty = Collective::barrier;
+  op->ty = Iris::sumi::Collective::barrier;
   return engine_->barrier(op->tag, queue_->collCqId(), op->comm);
 }
 
@@ -584,7 +582,7 @@ MpiApi::startBcast(const char* name, MPI_Comm comm, int count, MPI_Datatype data
     recvtype = datatype;
   }
 
-  startMpiCollective(Collective::bcast, sendbuf, recvbuf, sendtype, recvtype, op.get());
+  startMpiCollective(Iris::sumi::Collective::bcast, sendbuf, recvbuf, sendtype, recvtype, op.get());
   auto* msg = startBcast(op.get());
   if (msg){
     op->complete = true;
@@ -674,7 +672,7 @@ MpiApi::startGather(const char* name, MPI_Comm comm, int sendcount, MPI_Datatype
     recvbuf = nullptr;
   }
 
-  startMpiCollective(Collective::gather, sendbuf, recvbuf, sendtype, recvtype, op.get());
+  startMpiCollective(Iris::sumi::Collective::gather, sendbuf, recvbuf, sendtype, recvtype, op.get());
   auto* msg = startGather(op.get());
   if (msg){
     op->complete = true;
@@ -786,7 +784,7 @@ MpiApi::startReduce(const char* name, MPI_Comm comm, int count, MPI_Datatype typ
     dst = nullptr;
   }
 
-  startMpiCollective(Collective::reduce, src, dst, sendtype, recvtype, op.get());
+  startMpiCollective(Iris::sumi::Collective::reduce, src, dst, sendtype, recvtype, op.get());
   auto* msg = startReduce(op.get());
   if (msg){
     op->complete = true;
@@ -918,7 +916,7 @@ MpiApi::startReduceScatterBlock(const char*  /*name*/, MPI_Comm  /*comm*/, int  
   SST::Hg::abort("sumi::reduce_scatter: not implemented");
 
   CollectiveOp::ptr op;
-  startMpiCollective(Collective::reduce_scatter, src, dst, type, type, op.get());
+  startMpiCollective(Iris::sumi::Collective::reduce_scatter, src, dst, type, type, op.get());
   auto* msg = startReduceScatter(op.get());
   op->op = mop;
   if (msg){
@@ -985,7 +983,7 @@ MpiApi::startScan(const char* name, MPI_Comm comm, int count, MPI_Datatype type,
   }
 
   op->op = mop;
-  startMpiCollective(Collective::scan, src, dst, type, type, op.get());
+  startMpiCollective(Iris::sumi::Collective::scan, src, dst, type, type, op.get());
   auto* msg = startScan(op.get());
   if (msg){
     op->complete = true;
@@ -1061,7 +1059,7 @@ MpiApi::startScatter(const char* name, MPI_Comm comm, int sendcount, MPI_Datatyp
     sendbuf = nullptr;
   }
 
-  startMpiCollective(Collective::scatter, sendbuf, recvbuf, sendtype, recvtype, op.get());
+  startMpiCollective(Iris::sumi::Collective::scatter, sendbuf, recvbuf, sendtype, recvtype, op.get());
   auto* msg = startScatter(op.get());
   if (msg){
     op->complete = true;

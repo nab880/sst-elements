@@ -24,6 +24,10 @@
 #include <cstdint>
 #include <memory>
 
+namespace SST::Collective {
+class CollectiveEndpoint;
+}
+
 namespace SST {
 namespace Hg {
 
@@ -47,6 +51,13 @@ public:
   virtual std::function<void(NetworkMessage*)> nicDataIoctl() = 0;
 
   virtual std::function<void(NetworkMessage*)> nicCtrlIoctl() = 0;
+
+  /**
+   * Returns the local NIC's neutral collective endpoint, or nullptr when
+   * collective offload is unavailable.  Callers must then retain the existing
+   * software path without transferring request ownership.
+   */
+  SST::Collective::CollectiveEndpoint* collectiveEndpoint() const;
 
    virtual void setParentNode(SST::Hg::NodeBase*) = 0;
 
