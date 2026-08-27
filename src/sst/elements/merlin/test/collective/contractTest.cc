@@ -208,7 +208,7 @@ void testDescriptor()
 
     SimpleNetwork::Request request(7, 9, 256, true, true);
     request.vn = 1;
-    request.giveServiceData(COLLECTIVE_SERVICE_ID, new CollectiveServiceData(data));
+    request.giveServiceData(new CollectiveServiceData(data));
     std::unique_ptr<SimpleNetwork::Request> cloned(request.clone());
     require(cloned->getServiceID() == COLLECTIVE_SERVICE_ID &&
                 cloned->inspectServiceData() != request.inspectServiceData() &&

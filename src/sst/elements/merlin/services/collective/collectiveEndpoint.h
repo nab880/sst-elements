@@ -20,6 +20,13 @@
 namespace SST::Collective {
 
 enum class CollectiveSubmitResult : uint8_t { Accepted = 1, Retry = 2, Unsupported = 3, Invalid = 4 };
+/**
+ * RecoverableError is legal only after an Accepted operation has failed
+ * collectively: every participant must receive the same status, all service
+ * traffic and reservations for the invocation must be quiescent, and native
+ * buffer owners must be able to restart the operation in software.  A local,
+ * partial, or still-in-flight failure is terminal and must not use this value.
+ */
 enum class CollectiveCompletionStatus : uint8_t { Success = 1, RecoverableError = 2 };
 enum class CollectivePendingState : uint8_t { Ready = 1, Consumed = 2 };
 
@@ -272,6 +279,7 @@ class CollectiveCompletionSink
 {
 public:
     virtual ~CollectiveCompletionSink() = default;
+    /** Returns ownership; RecoverableError additionally promises the collective-wide restart contract above. */
     virtual void complete(CollectiveCompletionToken&& token, CollectiveCompletionStatus status) = 0;
 };
 
