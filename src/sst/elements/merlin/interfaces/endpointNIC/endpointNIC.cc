@@ -40,7 +40,7 @@ EndpointNIC::EndpointNIC(ComponentId_t cid, Params& params, int vns) :
     loadPlugins(params);
 
     link_control = loadUserSubComponent<SST::Interfaces::SimpleNetwork>
-    ("networkIF", ComponentInfo::SHARE_NONE, vns);
+    ("networkIF", ComponentInfo::SHARE_NONE, 1 /* legacy EndpointNIC contract */);
 
     if (!link_control) {
         out.fatal(CALL_INFO, -1, "Failed to load LinkControl subcomponent\n");
@@ -125,16 +125,8 @@ bool EndpointNIC::send(Request* req, int vn)
         return link_control->send(req, vn);
     }
 
-    if ( plugin_pipeline.empty() ) return link_control->send(req, vn);
-
-    if ( req->size_in_bits > static_cast<size_t>(std::numeric_limits<int>::max()) ||
-         !link_control->spaceToSend(vn, static_cast<int>(req->size_in_bits)) ) {
-        return false;
-    }
-
-    // Legacy plugin pipelines retain their move-based ownership contract.
-    // Service capability remains disabled while plugins are configured
-    // because their protocol state is not transactional.
+    // Preserve the released ordinary pipeline contract, including wrapping
+    // through ExtendedRequest even when the configured pipeline is empty.
     Request* processed_req = processThroughPipeline(req, vn, true);
     if (!processed_req) {
         return false;

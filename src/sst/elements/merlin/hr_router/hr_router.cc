@@ -34,6 +34,30 @@ using namespace SST::Merlin;
 using namespace SST::Interfaces;
 using namespace std;
 
+namespace {
+
+class PortServiceIngressQueue final : public NetworkServiceIngressQueue
+{
+public:
+    explicit PortServiceIngressQueue(PortInterface& port) : port_(port) {}
+
+    NetworkServiceHeadIdentity inspectNetworkServiceHead(int vc) const override
+    {
+        return port_.inspectNetworkServiceHead(vc);
+    }
+
+    internal_router_event* recvNetworkServiceExpected(
+        int vc, const NetworkServiceHeadIdentity& expected) override
+    {
+        return port_.recvNetworkServiceExpected(vc, expected);
+    }
+
+private:
+    PortInterface& port_;
+};
+
+} // namespace
+
 NetworkServiceSyntheticRequester::NetworkServiceSyntheticRequester(int num_vcs, uint32_t capacity) :
     num_vcs_(num_vcs),
     capacity_(capacity),
@@ -178,17 +202,9 @@ hr_router::hr_router() :
     vn_remap_shm_size(0),
     num_vcs(0),
     flit_size_bits(0),
-    num_xbar_inputs(0),
     topo(nullptr),
     arb(nullptr),
-    accels(nullptr),
     ports(nullptr),
-    xbar_inputs(nullptr),
-    network_service_processor(nullptr),
-    network_service_requester(nullptr),
-    network_service_output_queue_depth(0),
-    network_service_scan_cursor(0),
-    network_service_tagged_heads(0),
     vc_heads(nullptr),
     xbar_in_credits(nullptr),
     output_queue_lengths(nullptr),
@@ -201,12 +217,6 @@ hr_router::hr_router() :
     unclocked_cycle(0),
     my_clock_handler(nullptr),
     xbar_stalls(nullptr),
-    network_service_pass(nullptr),
-    network_service_accept(nullptr),
-    network_service_busy(nullptr),
-    network_service_reject(nullptr),
-    network_service_synthetic(nullptr),
-    network_service_synthetic_stall(nullptr),
     output(getSimulationOutput())
 {}
 
@@ -220,28 +230,36 @@ void hr_router::serialize_order(SST::Core::Serialization::serializer& ser) {
     SST_SER(vn_remap_shm_size);
     SST_SER(num_vcs);
     SST_SER(flit_size_bits);
-    SST_SER(num_xbar_inputs);
     SST_SER(vcs_per_vn);
 
     SST_SER(topo);
     SST_SER(arb);
-    SST_SER(network_service_processor);
-    SST_SER(network_service_output_queue_depth);
-    SST_SER(network_service_scan_cursor);
-    SST_SER(network_service_tagged_heads);
 
-    bool has_network_service_requester = network_service_requester != nullptr;
-    SST_SER(has_network_service_requester);
+    bool has_network_service = network_service != nullptr;
+    SST_SER(has_network_service);
     if ( ser.mode() == SST::Core::Serialization::serializer::UNPACK ) {
-        if ( has_network_service_requester ) {
-            network_service_requester =
-                new NetworkServiceSyntheticRequester(num_vcs, network_service_output_queue_depth);
-        }
-        else {
-            network_service_requester = nullptr;
-        }
+        if ( has_network_service ) network_service.reset(new NetworkServiceRouterContext());
+        else network_service.reset();
     }
-    if ( has_network_service_requester ) network_service_requester->serialize_order(ser);
+    if ( has_network_service ) {
+        SST_SER(network_service->processor);
+        SST_SER(network_service->output_queue_depth);
+        SST_SER(network_service->scan_cursor);
+        SST_SER(network_service->tagged_heads);
+
+        if ( ser.mode() == SST::Core::Serialization::serializer::UNPACK ) {
+            network_service->requester.reset(new NetworkServiceSyntheticRequester(
+                num_vcs, network_service->output_queue_depth));
+        }
+        network_service->requester->serialize_order(ser);
+
+        SST_SER(network_service->pass);
+        SST_SER(network_service->accept);
+        SST_SER(network_service->busy);
+        SST_SER(network_service->reject);
+        SST_SER(network_service->synthetic);
+        SST_SER(network_service->synthetic_stall);
+    }
 
     size_t total_vcs = num_ports * num_vcs;
     SST_SER(SST::Core::Serialization::array(xbar_in_credits, total_vcs));
@@ -262,6 +280,7 @@ void hr_router::serialize_order(SST::Core::Serialization::serializer& ser) {
     SST_SER(clocking);
 #endif
 
+    int num_xbar_inputs = numXbarInputs();
     SST_SER(SST::Core::Serialization::array(in_port_busy, num_xbar_inputs));
     SST_SER(SST::Core::Serialization::array(out_port_busy, num_ports));
     SST_SER(SST::Core::Serialization::array(progress_vcs, num_xbar_inputs));
@@ -275,12 +294,6 @@ void hr_router::serialize_order(SST::Core::Serialization::serializer& ser) {
     SST_SER(inspector_names);
 
     SST_SER(SST::Core::Serialization::array(xbar_stalls, num_ports));
-    SST_SER(network_service_pass);
-    SST_SER(network_service_accept);
-    SST_SER(network_service_busy);
-    SST_SER(network_service_reject);
-    SST_SER(network_service_synthetic);
-    SST_SER(network_service_synthetic_stall);
 
     SST_SER(shared_array);
 
@@ -307,9 +320,7 @@ void hr_router::serialize_order(SST::Core::Serialization::serializer& ser) {
         topo->setOutputBufferCreditArray(xbar_in_credits, num_vcs);
         topo->setOutputQueueLengthsArray(output_queue_lengths, num_vcs);
 
-        xbar_inputs = new XbarInput*[num_xbar_inputs];
-        for ( int i = 0; i < num_ports; ++i ) xbar_inputs[i] = ports[i];
-        if ( network_service_requester ) xbar_inputs[num_ports] = network_service_requester;
+        if ( network_service ) network_service->rebuildInputs(ports, num_ports);
     }
 }
 
@@ -318,8 +329,6 @@ hr_router::~hr_router()
     delete [] in_port_busy;
     delete [] out_port_busy;
     delete [] progress_vcs;
-    delete [] xbar_inputs;
-    delete network_service_requester;
 
     // SST framework manages SubComponent lifecycle — do not delete ports[i], topo, or arb
     delete [] ports;
@@ -329,13 +338,6 @@ hr_router::hr_router(ComponentId_t cid, Params& params) :
     Router(cid),
     num_vcs(-1),
     flit_size_bits(0),
-    num_xbar_inputs(0),
-    xbar_inputs(nullptr),
-    network_service_processor(nullptr),
-    network_service_requester(nullptr),
-    network_service_output_queue_depth(0),
-    network_service_scan_cursor(0),
-    network_service_tagged_heads(0),
     output(getSimulationOutput())
 {
 
@@ -441,14 +443,6 @@ hr_router::hr_router(ComponentId_t cid, Params& params) :
     std::string output_buf_size = params.find<std::string>("output_buf_size", "0");
 
 
-    // Naming convention is from point of view of the xbar.  So,
-    // in_port_busy is >0 if someone is writing to that xbar port and
-    // out_port_busy is >0 if that xbar port being read.
-    in_port_busy = new int[num_ports + 1];
-    out_port_busy = new int[num_ports];
-
-    progress_vcs = new int[num_ports + 1];
-
     std::string inspector_config = params.find<std::string>("network_inspectors", "");
     split(inspector_config,",",inspector_names);
 
@@ -465,10 +459,6 @@ hr_router::hr_router(ComponentId_t cid, Params& params) :
     pc_params.insert("oql_track_remote", params.find<std::string>("oql_track_remote","false"));
 
     for ( int i = 0; i < num_ports; i++ ) {
-        in_port_busy[i] = 0;
-        out_port_busy[i] = 0;
-        progress_vcs[i] = -1;
-
         std::stringstream port_name;
         port_name << "port";
         port_name << i;
@@ -491,37 +481,53 @@ hr_router::hr_router(ComponentId_t cid, Params& params) :
         ports[i] = loadAnonymousSubComponent<PortInterface>
             ("merlin.portcontrol","portcontrol", i, ComponentInfo::SHARE_PORTS | ComponentInfo::SHARE_STATS | ComponentInfo::INSERT_STATS,
              pc_params,this,id,i,topo);
-
     }
-    in_port_busy[num_ports] = 0;
-    progress_vcs[num_ports] = -1;
     params.enableVerify(true);
 
-    // Get the Xbar arbitration
-    std::string xbar_arb = params.find<std::string>("xbar_arb","merlin.xbar_arb_lru");
-
-    Params empty_params; // Empty params sent to subcomponents
-    arb =
-        loadAnonymousSubComponent<XbarArbitration>(xbar_arb, "XbarArb", 0, ComponentInfo::INSERT_STATS, empty_params);
-
-    network_service_output_queue_depth =
+    const uint32_t network_service_output_queue_depth =
         params.find<uint32_t>("network_service_output_queue_depth", 8);
-    network_service_processor = loadUserSubComponent<NetworkServiceProcessor>(
+    NetworkServiceProcessor* network_service_processor = loadUserSubComponent<NetworkServiceProcessor>(
         "network_service", ComponentInfo::SHARE_NONE, this);
-    num_xbar_inputs = num_ports;
     if ( network_service_processor ) {
         if ( network_service_processor->getServiceID() == SimpleNetwork::NETWORK_SERVICE_NONE ||
-             network_service_output_queue_depth == 0 ) {
+             network_service_output_queue_depth == 0 ||
+             !network_service_processor->getRequestContract().valid() ||
+             network_service_processor->getRequestContract().service_id !=
+                 network_service_processor->getServiceID() ) {
             merlin_abort.fatal(CALL_INFO, 1,
                 "Network service processor requires a nonzero service ID and output queue depth\n");
         }
-        ++num_xbar_inputs;
-        network_service_requester =
-            new NetworkServiceSyntheticRequester(num_vcs, network_service_output_queue_depth);
+        network_service.reset(new NetworkServiceRouterContext());
+        network_service->processor = network_service_processor;
+        network_service->output_queue_depth = network_service_output_queue_depth;
+        network_service->requester.reset(
+            new NetworkServiceSyntheticRequester(num_vcs, network_service_output_queue_depth));
+        network_service->rebuildInputs(ports, num_ports);
     }
-    xbar_inputs = new XbarInput*[num_xbar_inputs];
-    for ( int i = 0; i < num_ports; ++i ) xbar_inputs[i] = ports[i];
-    if ( network_service_requester ) xbar_inputs[num_ports] = network_service_requester;
+
+    // Preserve the ordinary LRU default.  A router with a service processor
+    // gets the service-capable RR arbiter unless the model explicitly chooses
+    // another implementation.
+    const std::string default_xbar_arb =
+        network_service ? "merlin.xbar_arb_rr" : "merlin.xbar_arb_lru";
+    std::string xbar_arb = params.find<std::string>("xbar_arb", default_xbar_arb);
+    Params empty_params;
+    arb = loadAnonymousSubComponent<XbarArbitration>(
+        xbar_arb, "XbarArb", 0, ComponentInfo::INSERT_STATS, empty_params);
+
+    // Service-only input state is absent when no processor is installed.
+    in_port_busy = new int[numXbarInputs()];
+    out_port_busy = new int[num_ports];
+    progress_vcs = new int[numXbarInputs()];
+    for ( int i = 0; i < num_ports; ++i ) {
+        in_port_busy[i] = 0;
+        out_port_busy[i] = 0;
+        progress_vcs[i] = -1;
+    }
+    if ( network_service ) {
+        in_port_busy[num_ports] = 0;
+        progress_vcs[num_ports] = -1;
+    }
 
     my_clock_handler = new Clock::Handler<hr_router,&hr_router::clock_handler>(this);
     xbar_tc = registerClock( xbar_clock, my_clock_handler);
@@ -545,12 +551,14 @@ hr_router::hr_router(ComponentId_t cid, Params& params) :
         port_name = port_name + std::to_string(i);
         xbar_stalls[i] = registerStatistic<uint64_t>("xbar_stalls",port_name);
     }
-    network_service_pass = registerStatistic<uint64_t>("network_service_pass");
-    network_service_accept = registerStatistic<uint64_t>("network_service_accept");
-    network_service_busy = registerStatistic<uint64_t>("network_service_busy");
-    network_service_reject = registerStatistic<uint64_t>("network_service_reject");
-    network_service_synthetic = registerStatistic<uint64_t>("network_service_synthetic");
-    network_service_synthetic_stall = registerStatistic<uint64_t>("network_service_synthetic_stall");
+    if ( network_service ) {
+        network_service->pass = registerStatistic<uint64_t>("network_service_pass");
+        network_service->accept = registerStatistic<uint64_t>("network_service_accept");
+        network_service->busy = registerStatistic<uint64_t>("network_service_busy");
+        network_service->reject = registerStatistic<uint64_t>("network_service_reject");
+        network_service->synthetic = registerStatistic<uint64_t>("network_service_synthetic");
+        network_service->synthetic_stall = registerStatistic<uint64_t>("network_service_synthetic_stall");
+    }
 
     init_vcs();
 }
@@ -583,7 +591,7 @@ hr_router::notifyEvent()
     	if ( tmp < 0 ) out_port_busy[i] = 0;
         else out_port_busy[i] = tmp;
     }
-    if ( network_service_requester ) {
+    if ( network_service ) {
         const int64_t tmp = in_port_busy[num_ports] - elapsed_cycles;
         in_port_busy[num_ports] = tmp < 0 ? 0 : static_cast<int>(tmp);
     }
@@ -595,35 +603,45 @@ hr_router::notifyEvent()
 NetworkServiceID
 hr_router::getNetworkServiceID() const
 {
-    return network_service_processor == nullptr ? SimpleNetwork::NETWORK_SERVICE_NONE :
-                                                  network_service_processor->getServiceID();
+    return network_service == nullptr ? SimpleNetwork::NETWORK_SERVICE_NONE :
+                                        network_service->processor->getServiceID();
+}
+
+NetworkServiceRequestContract
+hr_router::getNetworkServiceRequestContract() const
+{
+    return network_service == nullptr ? NetworkServiceRequestContract{} :
+                                        network_service->processor->getRequestContract();
 }
 
 void
 hr_router::networkServiceHeadAppeared()
 {
-    ++network_service_tagged_heads;
+    if ( network_service == nullptr ) {
+        output.fatal(CALL_INFO, 1, "Merlin observed a service head without an installed processor\n");
+    }
+    ++network_service->tagged_heads;
 }
 
 void
 hr_router::networkServiceHeadRemoved()
 {
-    if ( network_service_tagged_heads == 0 ) {
+    if ( network_service == nullptr || network_service->tagged_heads == 0 ) {
         output.fatal(CALL_INFO, 1, "Merlin network-service head accounting underflow\n");
     }
-    --network_service_tagged_heads;
+    --network_service->tagged_heads;
 }
 
 bool
 hr_router::tryEnqueueNetworkServiceOutput(
     NetworkServiceID service_id, NetworkServiceSyntheticPacket& packet)
 {
-    if ( network_service_processor == nullptr || network_service_requester == nullptr ||
-         service_id != network_service_processor->getServiceID() || !packet.valid(service_id) ||
+    if ( network_service == nullptr || network_service->requester == nullptr ||
+         service_id != network_service->processor->getServiceID() || !packet.valid(service_id) ||
          packet.route_vn >= num_vns || packet.output_port >= num_ports || packet.output_vc >= num_vcs ||
          (topo->getPortState(packet.output_port) != Topology::R2N &&
              topo->getPortState(packet.output_port) != Topology::R2R) ||
-         !network_service_requester->canEnqueue(packet.output_vc) ) {
+         !network_service->requester->canEnqueue(packet.output_vc) ) {
         return false;
     }
 
@@ -654,9 +672,8 @@ hr_router::tryEnqueueNetworkServiceOutput(
     event->setNextPort(packet.output_port);
     event->setVC(packet.output_vc);
     event->setCreditReturnVC(packet.output_vc);
-    if ( !network_service_requester->enqueue(event, packet.output_vc) ) {
-        RtrEvent* returned_envelope = event->getEncapsulatedEvent();
-        event->setEncapsulatedEvent(nullptr);
+    if ( !network_service->requester->enqueue(event, packet.output_vc) ) {
+        RtrEvent* returned_envelope = event->takeEncapsulatedEvent();
         packet.request.reset(returned_envelope->takeRequest());
         delete returned_envelope;
         return false;
@@ -698,12 +715,73 @@ hr_router::printStatus(Output& out)
 bool
 hr_router::clock_handler(Cycle_t cycle)
 {
+    return network_service ? clock_handler_with_service(cycle) : clock_handler_no_service(cycle);
+}
+
+bool
+hr_router::clock_handler_no_service(Cycle_t cycle)
+{
+    // Keep the released ordinary path branch-for-branch once dispatched.
+    if ( get_vcs_with_data() == 0 ) {
+#if VERIFY_DECLOCKING
+        if ( clocking ) {
+            if ( arb->isOkayToPauseClock() ) {
+                setRequestNotifyOnEvent(true);
+                unclocked_cycle = cycle;
+                clocking = false;
+            }
+        }
+#else
+        if ( arb->isOkayToPauseClock() ) {
+            setRequestNotifyOnEvent(true);
+            unclocked_cycle = cycle;
+            return true;
+        }
+        else {
+            return false;
+        }
+#endif
+    }
+
+#if VERIFY_DECLOCKING
+    arb->arbitrate(ports, in_port_busy, out_port_busy, progress_vcs, clocking);
+#else
+    arb->arbitrate(ports, in_port_busy, out_port_busy, progress_vcs);
+#endif
+
+    for ( int i = 0; i < num_ports; ++i ) {
+        if ( progress_vcs[i] > -1 ) {
+            internal_router_event* ev = ports[i]->recv(progress_vcs[i]);
+            ports[ev->getNextPort()]->send(ev, ev->getVC());
+
+            if ( ev->getTraceType() == SimpleNetwork::Request::FULL ) {
+                output.output("TRACE(%d): %" PRIu64 " ns: Copying event (src = %d, dest = %d) "
+                              "over crossbar in router %d (%s) from port %d, VC %d to port"
+                              " %d, VC %d.\n",
+                              ev->getTraceID(), getCurrentSimTimeNano(), ev->getSrc(), ev->getDest(),
+                              id, getName().c_str(), i, progress_vcs[i], ev->getNextPort(), ev->getVC());
+            }
+        }
+        else if ( progress_vcs[i] == -2 ) {
+            xbar_stalls[i]->addData(1);
+        }
+
+        if ( in_port_busy[i] != 0 ) in_port_busy[i]--;
+        if ( out_port_busy[i] != 0 ) out_port_busy[i]--;
+    }
+
+    return false;
+}
+
+bool
+hr_router::clock_handler_with_service(Cycle_t cycle)
+{
     // If there are no events in the input queues, then we can remove
     // ourselves from the clock queue, as long as the arbitration unit
     // says it's okay.
-    const bool network_service_work = network_service_processor != nullptr &&
-        ((network_service_requester && network_service_requester->hasWork()) ||
-            network_service_processor->hasScheduledWork());
+    NetworkServiceRouterContext& service = *network_service;
+    const bool network_service_work = service.requester->hasWork() ||
+        service.processor->hasScheduledWork();
     if ( get_vcs_with_data() == 0 && !network_service_work ) {
 #if VERIFY_DECLOCKING
         if ( clocking ) {
@@ -733,74 +811,75 @@ hr_router::clock_handler(Cycle_t cycle)
     };
     std::vector<MaskedServiceHead> masked_service_heads;
 
-    // Tagged heads are withheld from ordinary arbitration until the
-    // registered processor explicitly returns Pass.  At most one tagged
-    // head is prepared each cycle, selected round-robin across port/VCs.
-    if ( network_service_tagged_heads != 0 ) {
+    // Every tagged head receives its own disposition before arbitration.
+    // Busy on one flow must not suppress an unrelated Pass on another port.
+    if ( service.tagged_heads != 0 ) {
         const uint64_t total_heads = static_cast<uint64_t>(num_ports) * static_cast<uint64_t>(num_vcs);
-        int selected_port = -1;
-        int selected_vc   = -1;
-        NetworkServiceHeadIdentity selected_identity;
-        uint64_t selected_index = 0;
+        const uint64_t scan_start = service.scan_cursor % total_heads;
+        std::vector<uint8_t> input_processed(static_cast<size_t>(num_ports), 0);
 
         for ( uint64_t offset = 0; offset < total_heads; ++offset ) {
-            const uint64_t index = (network_service_scan_cursor + offset) % total_heads;
+            const uint64_t index = (scan_start + offset) % total_heads;
             const int port = static_cast<int>(index / static_cast<uint64_t>(num_vcs));
             const int vc   = static_cast<int>(index % static_cast<uint64_t>(num_vcs));
             const NetworkServiceHeadIdentity identity = ports[port]->inspectNetworkServiceHead(vc);
             if ( !identity.valid() ) continue;
             const auto* request = identity.event->inspectRequest();
-            if ( request == nullptr || request->getServiceID() == SimpleNetwork::NETWORK_SERVICE_NONE ) continue;
+            if ( request == nullptr || !request->hasService() ) continue;
 
-            masked_service_heads.push_back({ port, vc, identity });
-            if ( selected_port == -1 && in_port_busy[port] == 0 ) {
-                selected_port     = port;
-                selected_vc       = vc;
-                selected_identity = identity;
-                selected_index    = index;
+            // A physical input can present at most one packet to the
+            // crossbar per cycle, but inputs are independent of each other.
+            if ( in_port_busy[port] != 0 || input_processed[static_cast<size_t>(port)] != 0 ) {
+                masked_service_heads.push_back({ port, vc, identity });
+                continue;
             }
-        }
+            input_processed[static_cast<size_t>(port)] = 1;
 
-        if ( selected_port != -1 ) {
-            const auto service_id = selected_identity.event->inspectRequest()->getServiceID();
+            const auto service_id = request->getServiceID();
             NetworkServicePrepared prepared;
-            if ( network_service_processor != nullptr &&
-                 service_id == network_service_processor->getServiceID() ) {
-                prepared = network_service_processor->prepare(
-                    { selected_port, selected_vc, selected_identity, selected_identity.event });
+            if ( service_id == service.processor->getServiceID() ) {
+                prepared = service.processor->prepare(
+                    { port, vc, identity, identity.event });
             }
             else {
                 prepared = NetworkServicePrepared(NetworkServiceDisposition::Reject, {}, service_id);
             }
 
             uint64_t diagnostic = 0;
+            PortServiceIngressQueue queue(*ports[port]);
             const NetworkServiceApplyResult result = applyNetworkServicePrepared(
-                *ports[selected_port], selected_vc, selected_identity, std::move(prepared), diagnostic);
-            network_service_scan_cursor = (selected_index + 1) % total_heads;
+                queue, vc, identity, std::move(prepared), diagnostic);
 
             switch ( result ) {
             case NetworkServiceApplyResult::Passed:
-                network_service_pass->addData(1);
-                masked_service_heads.erase(std::remove_if(masked_service_heads.begin(), masked_service_heads.end(),
-                    [selected_port, selected_vc](const MaskedServiceHead& head) {
-                        return head.port == selected_port && head.vc == selected_vc;
-                    }), masked_service_heads.end());
+                if ( service.pass ) service.pass->addData(1);
                 break;
             case NetworkServiceApplyResult::Accepted:
-                network_service_accept->addData(1);
-                // Exact dequeue may expose another head on this VC.  Keep it
-                // out of ordinary arbitration until the next service scan.
-                if ( auto next = ports[selected_port]->inspectNetworkServiceHead(selected_vc); next.valid() ) {
-                    masked_service_heads.push_back({ selected_port, selected_vc, next });
+                if ( service.accept ) service.accept->addData(1);
+                // Exact dequeue may expose another tagged head on this VC.
+                // Ordinary traffic remains eligible for this cycle.
+                if ( auto next = ports[port]->inspectNetworkServiceHead(vc); next.valid() ) {
+                    const auto* next_request = next.event->inspectRequest();
+                    if ( next_request != nullptr && next_request->hasService() ) {
+                        masked_service_heads.push_back({ port, vc, next });
+                    }
                 }
                 break;
             case NetworkServiceApplyResult::Busy:
-                network_service_busy->addData(1);
+                if ( service.busy ) service.busy->addData(1);
+                masked_service_heads.push_back({ port, vc, identity });
                 break;
-            case NetworkServiceApplyResult::HeadChanged:
+            case NetworkServiceApplyResult::HeadChanged: {
+                if ( auto next = ports[port]->inspectNetworkServiceHead(vc); next.valid() ) {
+                    const auto* next_request = next.event->inspectRequest();
+                    if ( next_request != nullptr && next_request->hasService() ) {
+                        masked_service_heads.push_back({ port, vc, next });
+                    }
+                }
                 break;
+            }
             case NetworkServiceApplyResult::Rejected:
-                network_service_reject->addData(1);
+                if ( service.reject ) service.reject->addData(1);
                 output.fatal(CALL_INFO, 1,
                     "Merlin router %d rejected network service %u (opaque diagnostic 0x%016" PRIx64 ")\n",
                     id, static_cast<unsigned>(service_id), diagnostic);
@@ -812,6 +891,7 @@ hr_router::clock_handler(Cycle_t cycle)
                 break;
             }
         }
+        service.scan_cursor = (scan_start + 1) % total_heads;
 
         for ( const auto& masked : masked_service_heads ) {
             internal_router_event** heads = ports[masked.port]->getVCHeads();
@@ -822,34 +902,26 @@ hr_router::clock_handler(Cycle_t cycle)
     // Arbitrate the crossbar.  A configured synthetic requester is a normal
     // fair input to the selected service-capable arbitration module.
 #if VERIFY_DECLOCKING
-    if ( network_service_processor ) {
-        if ( !arb->arbitrateNetworkService(
-                 xbar_inputs, ports, in_port_busy, out_port_busy, progress_vcs, clocking) ) {
-            output.fatal(CALL_INFO, 1, "Network-service crossbar arbitration failed\n");
-        }
-    }
-    else {
-        arb->arbitrate(ports,in_port_busy,out_port_busy,progress_vcs,clocking);
+    if ( !arb->arbitrateNetworkService(
+             service.xbar_inputs.data(), ports, in_port_busy, out_port_busy, progress_vcs, clocking) ) {
+        output.fatal(CALL_INFO, 1, "Network-service crossbar arbitration failed\n");
     }
 #else
-    if ( network_service_processor ) {
-        if ( !arb->arbitrateNetworkService(xbar_inputs, ports, in_port_busy, out_port_busy, progress_vcs) ) {
-            output.fatal(CALL_INFO, 1, "Network-service crossbar arbitration failed\n");
-        }
-    }
-    else {
-        arb->arbitrate(ports,in_port_busy,out_port_busy,progress_vcs);
+    if ( !arb->arbitrateNetworkService(
+             service.xbar_inputs.data(), ports, in_port_busy, out_port_busy, progress_vcs) ) {
+        output.fatal(CALL_INFO, 1, "Network-service crossbar arbitration failed\n");
     }
 #endif
 
     // Move the events and decrement the busy values
-    for ( int i = 0; i < num_xbar_inputs; i++ ) {
+    for ( int i = 0; i < numXbarInputs(); i++ ) {
         // if ( progress_vcs[i] != -1 ) {
         if ( progress_vcs[i] > -1 ) {
-            internal_router_event* ev = xbar_inputs[i]->recv(progress_vcs[i]);
+            XbarInput* input = service.xbar_inputs[static_cast<size_t>(i)];
+            internal_router_event* ev = input->recv(progress_vcs[i]);
             ports[ev->getNextPort()]->send(ev,ev->getVC());
 
-            if ( i == num_ports ) network_service_synthetic->addData(1);
+            if ( i == num_ports && service.synthetic ) service.synthetic->addData(1);
 
             if ( ev->getTraceType() == SimpleNetwork::Request::FULL ) {
                 output.output("TRACE(%d): %" PRIu64 " ns: Copying event (src = %d, dest = %d) "
@@ -872,7 +944,7 @@ hr_router::clock_handler(Cycle_t cycle)
                 xbar_stalls[i]->addData(1);
         }
         else if ( progress_vcs[i] == -2 ) {
-            network_service_synthetic_stall->addData(1);
+            if ( service.synthetic_stall ) service.synthetic_stall->addData(1);
         }
 
         // Should stop at zero, need to find a clean way to do this
@@ -1062,8 +1134,8 @@ hr_router::init_vcs()
 
     // Now that we have the number of VCs we can finish initializing
     // arbitration logic
-    if ( network_service_processor ) {
-        if ( !arb->setNetworkServiceInputs(num_xbar_inputs, num_ports, num_vcs) ) {
+    if ( network_service ) {
+        if ( !arb->setNetworkServiceInputs(numXbarInputs(), num_ports, num_vcs) ) {
             merlin_abort.fatal(CALL_INFO, 1,
                 "Configured crossbar arbiter does not support generic network-service synthetic input\n");
         }

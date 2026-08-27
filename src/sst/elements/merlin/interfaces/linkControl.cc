@@ -88,21 +88,25 @@ LinkControl::serialize_order(SST::Core::Serialization::serializer& ser) {
 
     SST_SER(SST::Core::Serialization::array(output_queues, used_vns));
     SST_SER(SST::Core::Serialization::array(router_credits, total_vns));
-    SST_SER(router_credit_capacity);
     SST_SER(SST::Core::Serialization::array(router_return_credits, total_vns));
     SST_SER(SST::Core::Serialization::array(input_queues, req_vns));
 
     if ( ser.mode() == SST::Core::Serialization::serializer::UNPACK ) {
-        vn_remap_out = new output_queue_bundle_t*[req_vns];
-        if ( vn_out_map != nullptr ) {
-            for ( int i = 0; i < req_vns; ++i ) {
-                vn_remap_out[i] = &output_queues[vn_out_map[i]];
-            }
+        vn_remap_out = new output_queue_bundle_t*[req_vns]();
+    }
+    // Preserve the actual queue-bundle projection, including unsupported
+    // logical VNs and many-to-one remaps, without a parallel validity vector.
+    for ( int i = 0; i < req_vns; ++i ) {
+        int output_index = -1;
+        if ( ser.mode() != SST::Core::Serialization::serializer::UNPACK &&
+             vn_remap_out != nullptr && vn_remap_out[i] != nullptr && output_queues != nullptr ) {
+            const auto index = vn_remap_out[i] - output_queues;
+            if ( index >= 0 && index < used_vns ) output_index = static_cast<int>(index);
         }
-        else {
-            for ( int i = 0; i < req_vns; ++i ) {
-                vn_remap_out[i] = &output_queues[i];
-            }
+        SST_SER(output_index);
+        if ( ser.mode() == SST::Core::Serialization::serializer::UNPACK &&
+             output_index >= 0 && output_index < used_vns ) {
+            vn_remap_out[i] = &output_queues[output_index];
         }
     }
 
@@ -113,9 +117,18 @@ LinkControl::serialize_order(SST::Core::Serialization::serializer& ser) {
     SST_SER(job_id);
     SST_SER(nid_map);
     SST_SER(use_nid_map);
-    SST_SER(supported_network_services);
-    SST_SER(router_network_service_id);
-    SST_SER(logical_vn_supported);
+    bool has_network_service = network_service != nullptr;
+    SST_SER(has_network_service);
+    if ( ser.mode() == SST::Core::Serialization::serializer::UNPACK ) {
+        if ( has_network_service ) network_service.reset(new NetworkServiceLinkContext());
+        else network_service.reset();
+    }
+    if ( has_network_service ) {
+        SST_SER(network_service->configured_id);
+        SST_SER(network_service->router_id);
+        SST_SER(network_service->router_contract);
+        SST_SER(network_service->router_credit_capacity);
+    }
     SST_SER(curr_out_vn);
     SST_SER(idle_start);
     SST_SER(is_idle);
@@ -149,7 +162,6 @@ LinkControl::LinkControl(ComponentId_t cid, Params &params, int vns) :
     vn_remap_out(nullptr), output_queues(nullptr), router_credits(nullptr),
     router_return_credits(nullptr), input_queues(nullptr),
     id(-1), logical_nid(-1), job_id(0), use_nid_map(false),
-    router_network_service_id(SimpleNetwork::NETWORK_SERVICE_NONE),
     curr_out_vn(0), waiting(true), have_packets(false), start_block(0),
     idle_start(0), is_idle(true),
     receiveFunctor(nullptr), sendFunctor(nullptr),
@@ -207,7 +219,6 @@ LinkControl::LinkControl(ComponentId_t cid, Params &params, int vns) :
     // now.  Others will wait until init when we find out the rest of
     // the VN usage.
     input_queues = new network_queue_t[req_vns];
-    logical_vn_supported.assign(static_cast<size_t>(req_vns), 1);
 
     // Need to wait to do output_queues, router_credits
 
@@ -226,19 +237,19 @@ LinkControl::LinkControl(ComponentId_t cid, Params &params, int vns) :
 
     std::vector<uint32_t> configured_service_ids;
     params.find_array<uint32_t>("network_service_ids", configured_service_ids);
-    supported_network_services.reserve(configured_service_ids.size());
-    for ( uint32_t service_id : configured_service_ids ) {
+    if ( configured_service_ids.size() > 1 ) {
+        merlin_abort.fatal(CALL_INFO, 1,
+            "LinkControl network_service_ids supports at most one service because a Merlin router hosts one processor\n");
+    }
+    if ( !configured_service_ids.empty() ) {
+        const uint32_t service_id = configured_service_ids.front();
         if ( service_id == SimpleNetwork::NETWORK_SERVICE_NONE ||
              service_id > SimpleNetwork::NETWORK_SERVICE_PLUGIN_MAX ) {
             merlin_abort.fatal(CALL_INFO, 1,
-                "LinkControl network_service_ids entries must be nonzero 16-bit values\n");
+                "LinkControl network_service_ids entry must be a nonzero 16-bit value\n");
         }
-        supported_network_services.push_back(static_cast<NetworkServiceID>(service_id));
-    }
-    std::sort(supported_network_services.begin(), supported_network_services.end());
-    if ( std::adjacent_find(supported_network_services.begin(), supported_network_services.end()) !=
-         supported_network_services.end() ) {
-        merlin_abort.fatal(CALL_INFO, 1, "LinkControl network_service_ids must be unique\n");
+        network_service.reset(new NetworkServiceLinkContext());
+        network_service->configured_id = static_cast<NetworkServiceID>(service_id);
     }
 
 
@@ -374,21 +385,21 @@ void LinkControl::init(unsigned int phase)
         init_ev = checkInitProtocol(ev, RtrInitEvent::REPORT_ID, CALL_INFO);
 
         id = init_ev->int_value;
+        if ( network_service ) {
+            network_service->router_contract = init_ev->network_service_contract;
+            network_service->router_id = network_service->router_contract.service_id;
+            if ( !network_service->router_contract.valid() ||
+                 network_service->configured_id != network_service->router_id ) {
+                merlin_abort_full.fatal(CALL_INFO, 1,
+                    "LinkControl configured network-service ID has no matching attached router processor\n");
+            }
+        }
         if ( logical_nid == -1 ) logical_nid = id;
         // If we have a nid_map, fill in my mapping
         if ( use_nid_map ) {
             nid_map.write(logical_nid,id);
             nid_map.publish();
         }
-        delete ev;
-
-        ev = rtr_link->recvUntimedData();
-        init_ev = checkInitProtocol(ev, RtrInitEvent::REPORT_NETWORK_SERVICE, CALL_INFO);
-        if ( init_ev->int_value < 0 ||
-             init_ev->int_value > static_cast<int>(SimpleNetwork::NETWORK_SERVICE_PLUGIN_MAX) ) {
-            merlin_abort_full.fatal(CALL_INFO, 1, "Router reported an invalid network-service ID\n");
-        }
-        router_network_service_id = static_cast<NetworkServiceID>(init_ev->int_value);
         delete ev;
 
         }
@@ -426,7 +437,9 @@ void LinkControl::init(unsigned int phase)
         // total_vns
         router_return_credits = new int[total_vns];
         router_credits = new int[total_vns];
-        router_credit_capacity.assign(static_cast<size_t>(total_vns), 0);
+        if ( network_service ) {
+            network_service->router_credit_capacity.assign(static_cast<size_t>(total_vns), 0);
+        }
         for ( int i = 0; i < total_vns; ++i ) {
             router_return_credits[i] = 0;
             router_credits[i] = 0;
@@ -439,7 +452,6 @@ void LinkControl::init(unsigned int phase)
         used_vns = 0;
         for ( int i = 0; i < req_vns; ++i ) {
             int vn = vn_out_map[i];
-            logical_vn_supported[static_cast<size_t>(i)] = vn == -1 ? 0 : 1;
             if ( vn != -1 ) {
                 // If this is the first time this VN was specified add
                 // one to used_vns
@@ -454,7 +466,7 @@ void LinkControl::init(unsigned int phase)
 
         // Instance the output queues
         int count = 0;
-        vn_remap_out = new output_queue_bundle_t*[req_vns];
+        vn_remap_out = new output_queue_bundle_t*[req_vns]();
         output_queues = new output_queue_bundle_t[used_vns];
         for ( int i = 0; i < total_vns; ++i ) {
             if ( vn_count[i] > 0 ) {
@@ -483,6 +495,11 @@ void LinkControl::init(unsigned int phase)
                 router_return_credits[i] = 0;
             }
         }
+        // Preserve the ordinary LinkControl contract: without an opted-in
+        // service, phase-2 VN negotiation is sufficient for initialization.
+        if ( !network_service ) {
+            network_initialized = true;
+        }
         }
         break;
     default:
@@ -496,7 +513,9 @@ void LinkControl::init(unsigned int phase)
             {
                 credit_event* ce = static_cast<credit_event*>(bev);
                 router_credits[ce->vc] += ce->credits;
-                router_credit_capacity[static_cast<size_t>(ce->vc)] += ce->credits;
+                if ( network_service ) {
+                    network_service->router_credit_capacity[static_cast<size_t>(ce->vc)] += ce->credits;
+                }
                 delete ev;
             }
             break;
@@ -511,11 +530,13 @@ void LinkControl::init(unsigned int phase)
                 break;
             }
         }
-        if ( !network_initialized && router_credit_capacity.size() == static_cast<size_t>(total_vns) ) {
+        if ( !network_initialized &&
+             network_service ) {
             bool ready = true;
             for ( int vn = 0; vn < req_vns; ++vn ) {
-                if ( logical_vn_supported[static_cast<size_t>(vn)] != 0 &&
-                     router_credit_capacity[static_cast<size_t>(vn_remap_out[vn]->vn)] <= 0 ) {
+                if ( vn_remap_out[vn] == nullptr ) continue;
+                const size_t real_vn = static_cast<size_t>(vn_remap_out[vn]->vn);
+                if ( network_service->router_credit_capacity[real_vn] <= 0 ) {
                     ready = false;
                     break;
                 }
@@ -582,13 +603,13 @@ void LinkControl::finish(void)
 // otherwise.
 bool LinkControl::send(SimpleNetwork::Request* req, int vn) {
     // Check to see if the VN is in range
-    if ( req == nullptr || vn < 0 || vn >= req_vns ||
-         logical_vn_supported.size() != static_cast<size_t>(req_vns) ||
-         logical_vn_supported[static_cast<size_t>(vn)] == 0 ) return false;
-    if ( req->hasService() ) {
-        if ( req->getServiceID() != router_network_service_id ||
-             !std::binary_search(supported_network_services.begin(), supported_network_services.end(),
-                 req->getServiceID()) ) {
+    if ( req == nullptr || vn < 0 || vn >= req_vns || vn_remap_out == nullptr ||
+         vn_remap_out[vn] == nullptr ) return false;
+    const bool service_request = req->hasService();
+    if ( service_request ) {
+        if ( !network_service || req->getServiceID() != network_service->router_id ||
+             req->getServiceID() != network_service->configured_id ||
+             !network_service->router_contract.accepts(*req) ) {
             return false;
         }
     }
@@ -596,6 +617,11 @@ bool LinkControl::send(SimpleNetwork::Request* req, int vn) {
     // Resolve transport metadata without mutating caller-owned state.  A
     // failed timed send is transactional for advertised network services.
     const nid_t physical_dest = use_nid_map ? nid_map[req->dest] : req->dest;
+    if ( !service_request ) {
+        // Preserve released ordinary failed-send observability.
+        req->vn = vn;
+        req->dest = physical_dest;
+    }
 
     // Get the output queue information for that vn
     output_queue_bundle_t& out_handle = *(vn_remap_out[vn]);
@@ -622,8 +648,10 @@ bool LinkControl::send(SimpleNetwork::Request* req, int vn) {
 
     // Update the credits
     out_handle.credits -= flits;
-    req->vn   = vn;
-    req->dest = physical_dest;
+    if ( service_request ) {
+        req->vn = vn;
+        req->dest = physical_dest;
+    }
     ev->setInjectionTime(getCurrentSimTimeNano());
     if ( !ev->markTransportMetadataValid() ) {
         merlin_abort_full.fatal(CALL_INFO, 1, "LinkControl produced invalid transport metadata\n");
@@ -649,9 +677,11 @@ LinkControl::getSupportedServices() const
 {
     std::vector<NetworkServiceID> supported;
     if ( !network_initialized ) return supported;
-    for ( NetworkServiceID service_id : supported_network_services ) {
+    if ( network_service ) {
         NetworkServiceCapability capability;
-        if ( queryServiceCapability(service_id, capability) ) supported.push_back(service_id);
+        if ( queryServiceCapability(network_service->configured_id, capability) ) {
+            supported.push_back(network_service->configured_id);
+        }
     }
     return supported;
 }
@@ -659,21 +689,24 @@ LinkControl::getSupportedServices() const
 bool
 LinkControl::queryServiceCapability(NetworkServiceID service_id, NetworkServiceCapability& out) const
 {
-    if ( !network_initialized || service_id != router_network_service_id ||
-         !std::binary_search(supported_network_services.begin(), supported_network_services.end(), service_id) ) {
+    if ( !network_initialized || !network_service || service_id != network_service->router_id ||
+         service_id != network_service->configured_id || !network_service->router_contract.valid() ) {
         return false;
     }
 
     const int64_t output_capacity_flits = (outbuf_size / flit_size_ua).getRoundedValue();
     if ( output_capacity_flits <= 0 || flit_size <= 0 ||
-         router_credit_capacity.size() != static_cast<size_t>(total_vns) ) {
+         network_service->router_credit_capacity.size() != static_cast<size_t>(total_vns) ) {
         return false;
     }
 
     NetworkServiceCapability capability;
     capability.service_id         = service_id;
-    capability.min_schema_version = 0;
-    capability.max_schema_version = std::numeric_limits<NetworkServiceVersion>::max();
+    capability.min_schema_version = network_service->router_contract.min_schema_version;
+    capability.max_schema_version = network_service->router_contract.max_schema_version;
+    capability.request_data_token = network_service->router_contract.data_token;
+    capability.min_request_schema_version = network_service->router_contract.min_schema_version;
+    capability.max_request_schema_version = network_service->router_contract.max_schema_version;
     capability.features = SERVICE_FEATURE_SIDECAR_PRESERVATION |
                           SERVICE_FEATURE_TRANSACTIONAL_TIMED_SEND |
                           SERVICE_FEATURE_UNTIMED_PRESERVATION |
@@ -682,10 +715,11 @@ LinkControl::queryServiceCapability(NetworkServiceID service_id, NetworkServiceC
                           SERVICE_FEATURE_FRESH_BASE_REQUEST_TAG_FIRST_RECEIVE;
     capability.max_atomic_request_bits_by_vn.resize(static_cast<size_t>(req_vns), 0);
     for ( int vn = 0; vn < req_vns; ++vn ) {
-        if ( logical_vn_supported[static_cast<size_t>(vn)] != 0 ) {
+        if ( vn_remap_out[vn] != nullptr ) {
             const int real_vn = vn_remap_out[vn]->vn;
             const int64_t capacity_flits = std::min<int64_t>(
-                output_capacity_flits, router_credit_capacity[static_cast<size_t>(real_vn)]);
+                output_capacity_flits,
+                network_service->router_credit_capacity[static_cast<size_t>(real_vn)]);
             if ( capacity_flits > 0 && static_cast<uint64_t>(capacity_flits) <=
                     std::numeric_limits<uint64_t>::max() / static_cast<uint64_t>(flit_size) ) {
                 capability.max_atomic_request_bits_by_vn[static_cast<size_t>(vn)] =
@@ -705,9 +739,8 @@ LinkControl::queryServiceCapability(NetworkServiceID service_id, NetworkServiceC
 // Returns true if there is space in the output buffer and false
 // otherwise.
 bool LinkControl::spaceToSend(int vn, int bits) {
-    if ( vn < 0 || vn >= req_vns || bits < 0 ||
-         logical_vn_supported.size() != static_cast<size_t>(req_vns) ||
-         logical_vn_supported[static_cast<size_t>(vn)] == 0 ) return false;
+    if ( vn < 0 || vn >= req_vns || bits < 0 || vn_remap_out == nullptr ||
+         vn_remap_out[vn] == nullptr ) return false;
     if ( static_cast<int64_t>(vn_remap_out[vn]->credits) * static_cast<int64_t>(flit_size) < bits ) return false;
     return true;
 }
@@ -962,6 +995,10 @@ void LinkControl::handle_output(Event* ev)
 
         curr_out_vn = vn_to_send + 1;
         if ( curr_out_vn == used_vns ) curr_out_vn = 0;
+
+        // Network age and packet_latency begin when the packet actually
+        // enters the router link, preserving the released Merlin contract.
+        send_event->setInjectionTime(getCurrentSimTimeNano());
 
         // Subtract credits
         router_credits[output_queues[vn_to_send].vn] -= size;

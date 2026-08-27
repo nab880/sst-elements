@@ -139,6 +139,7 @@ EXTRA_DIST = \
 	tests/polarstar_504_test.py \
 	tests/network_service_contract.py \
 	tests/network_service_missing_processor.py \
+	tests/network_service_multiple_ids.py \
 	tests/network_service_pass_tagged.py \
 	tests/network_service_pr2_integration.py \
 	tests/network_service_pass_baseline.py \

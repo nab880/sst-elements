@@ -22,6 +22,7 @@
 #include <sst/core/link.h>
 #include <sst/core/timeConverter.h>
 
+#include <algorithm>
 #include <vector>
 
 #include "sst/elements/merlin/router.h"
@@ -53,6 +54,7 @@ private:
     int* rr_vcs = nullptr;
     int rr_port = 0;
     int service_rr_port = 0;
+    std::vector<uint8_t> synthetic_target_outputs;
 
 #if VERIFY_DECLOCKING
     int rr_port_shadow = 0;
@@ -83,6 +85,7 @@ public:
         SST_SER(num_vcs);
         SST_SER(rr_port);
         SST_SER(service_rr_port);
+        SST_SER(synthetic_target_outputs);
 #if VERIFY_DECLOCKING
         SST_SER(rr_port_shadow);
 #endif
@@ -107,6 +110,7 @@ public:
 
         rr_port = 0;
         service_rr_port = 0;
+        synthetic_target_outputs.clear();
 #if VERIFY_DECLOCKING
         rr_port_shadow = 0;
 #endif
@@ -118,6 +122,7 @@ public:
         if ( num_inputs != num_outputs + 1 || num_outputs <= 0 ) return false;
         setPorts(num_inputs, num_vcs_s);
         num_output_ports = num_outputs;
+        synthetic_target_outputs.assign(static_cast<size_t>(num_outputs), 0);
         return true;
     }
 
@@ -134,10 +139,14 @@ public:
         const int synthetic_port = num_output_ports;
         internal_router_event** synthetic_heads = inputs[synthetic_port]->getVCHeads();
         bool synthetic_has_head = false;
+        std::fill(synthetic_target_outputs.begin(), synthetic_target_outputs.end(), 0);
         for ( int vc = 0; vc < num_vcs; ++vc ) {
             if ( synthetic_heads[vc] != nullptr ) {
                 synthetic_has_head = true;
-                break;
+                const int target = synthetic_heads[vc]->getNextPort();
+                if ( target >= 0 && target < num_output_ports ) {
+                    synthetic_target_outputs[static_cast<size_t>(target)] = 1;
+                }
             }
         }
 
@@ -174,11 +183,24 @@ public:
         // requester is empty.  While it is active, rotate first choice over
         // every individual physical and synthetic input with equal weight.
         if ( synthetic_has_head ) {
+            int first_contested_grant = -1;
             for ( int port = service_rr_port, count = 0; count < num_ports;
                   port = (port + 1 == num_ports ? 0 : port + 1), ++count ) {
                 if ( !arbitrate_port(port) ) return false;
+                if ( first_contested_grant == -1 && progress_vc[port] >= 0 ) {
+                    internal_router_event* granted = inputs[port]->getVCHeads()[progress_vc[port]];
+                    const int target = granted->getNextPort();
+                    if ( synthetic_target_outputs[static_cast<size_t>(target)] != 0 ) {
+                        first_contested_grant = port;
+                    }
+                }
             }
-            service_rr_port = (service_rr_port + 1) % num_ports;
+            // Only traffic competing with a synthetic head may consume its
+            // turn.  Unrelated grants during a blocked cycle otherwise
+            // phase-lock the synthetic input against periodic output credits.
+            if ( first_contested_grant != -1 ) {
+                service_rr_port = (first_contested_grant + 1) % num_ports;
+            }
         }
         else {
             for ( int port = rr_port, count = 0; count < num_output_ports;

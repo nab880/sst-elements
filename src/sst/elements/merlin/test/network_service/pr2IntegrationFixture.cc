@@ -78,12 +78,17 @@ PR2IntegrationProcessor::prepare(const NetworkServiceIngress& ingress)
 
     switch ( data->action() ) {
     case PR2IntegrationAction::Pass:
+        if ( data->sequence() == 1 &&
+             (!busy_once_seen_ || getCurrentSimTimeNano() != busy_probe_time_) ) {
+            return { NetworkServiceDisposition::Reject, {}, 5 };
+        }
         return { NetworkServiceDisposition::Pass };
     case PR2IntegrationAction::AcceptEcho:
         return { NetworkServiceDisposition::Accept, std::make_unique<Reservation>(this, data->sequence()) };
     case PR2IntegrationAction::BusyOnceEcho:
         if ( !busy_once_seen_ ) {
             busy_once_seen_ = true;
+            busy_probe_time_ = getCurrentSimTimeNano();
             return { NetworkServiceDisposition::Busy };
         }
         return { NetworkServiceDisposition::Accept, std::make_unique<Reservation>(this, data->sequence()) };
@@ -104,8 +109,7 @@ PR2IntegrationProcessor::handleTrigger(SST::Event* event)
     }
     auto echo = std::make_unique<SST::Interfaces::SimpleNetwork::Request>(0, 1, 64, true, true);
     echo->vn = 0;
-    echo->giveServiceData(PR2_INTEGRATION_SERVICE_ID,
-        new PR2IntegrationServiceData(PR2IntegrationAction::SyntheticEcho, 4));
+    echo->giveServiceData(new PR2IntegrationServiceData(PR2IntegrationAction::SyntheticEcho, 4));
 
     NetworkServiceSyntheticPacket packet;
     packet.request = std::move(echo);
@@ -141,8 +145,7 @@ PR2IntegrationProcessor::emitEcho(
         original->src, original->dest, original->size_in_bits, true, true);
     echo->vn = original->vn;
     echo->allow_adaptive = original->allow_adaptive;
-    echo->giveServiceData(PR2_INTEGRATION_SERVICE_ID,
-        new PR2IntegrationServiceData(PR2IntegrationAction::SyntheticEcho, sequence));
+    echo->giveServiceData(new PR2IntegrationServiceData(PR2IntegrationAction::SyntheticEcho, sequence));
 
     NetworkServiceSyntheticPacket packet;
     packet.trusted_src = echo->src;
@@ -209,15 +212,19 @@ PR2IntegrationEndpoint::setup()
         new SimpleNetwork::Handler<PR2IntegrationEndpoint, &PR2IntegrationEndpoint::handleReceive>(this));
 
     if ( endpoint_id_ == 0 ) {
-        pending_[0] = makeRequest(PR2IntegrationAction::Pass, 1, 1);
+        pending_[0] = makeRequest(PR2IntegrationAction::BusyOnceEcho, 3, 1);
         pending_[1] = makeRequest(PR2IntegrationAction::AcceptEcho, 2, 1);
-        pending_[2] = makeRequest(PR2IntegrationAction::BusyOnceEcho, 3, 1);
-        if ( handleSend(0) ) {
-            network_->setNotifyOnSend(
-                new SimpleNetwork::Handler<PR2IntegrationEndpoint, &PR2IntegrationEndpoint::handleSend>(this));
-        }
+        pending_count_ = 2;
         trigger_timer_->send(1, nullptr);
         drain_->send(1, nullptr);
+    }
+    else {
+        pending_[0] = makeRequest(PR2IntegrationAction::Pass, 1, 0);
+        pending_count_ = 1;
+    }
+    if ( handleSend(0) ) {
+        network_->setNotifyOnSend(
+            new SimpleNetwork::Handler<PR2IntegrationEndpoint, &PR2IntegrationEndpoint::handleSend>(this));
     }
 
     deadline_->send(1, nullptr);
@@ -238,11 +245,11 @@ PR2IntegrationEndpoint::finish()
 bool
 PR2IntegrationEndpoint::handleSend(int vn)
 {
-    if ( endpoint_id_ != 0 || vn != 0 ) {
+    if ( vn != 0 ) {
         getSimulationOutput().fatal(CALL_INFO, 1, "PR2 integration endpoint received an invalid send notification\n");
     }
 
-    while ( next_to_send_ < pending_.size() ) {
+    while ( next_to_send_ < pending_count_ ) {
         auto& request = pending_[next_to_send_];
         if ( !network_->send(request.get(), 0) ) return true;
         request.release();
@@ -279,8 +286,8 @@ PR2IntegrationEndpoint::handleReceive(int vn)
             getSimulationOutput().fatal(CALL_INFO, 1, "PR2 integration endpoint received malformed service data\n");
         }
 
-        if ( endpoint_id_ == 1 && data->action() == PR2IntegrationAction::Pass &&
-             data->sequence() == 1 && request->src == 0 && request->dest == 1 ) {
+        if ( endpoint_id_ == 0 && data->action() == PR2IntegrationAction::Pass &&
+             data->sequence() == 1 && request->src == 1 && request->dest == 0 ) {
             ++pass_received_;
         }
         else if ( endpoint_id_ == 0 && data->action() == PR2IntegrationAction::SyntheticEcho &&
@@ -325,9 +332,9 @@ PR2IntegrationEndpoint::handleDeadline(SST::Event* event)
 {
     delete event;
     const bool passed = endpoint_id_ == 0 ?
-        (sent_ == 3 && next_to_send_ == pending_.size() && pass_received_ == 0 && echo_received_ == 3 &&
+        (sent_ == 2 && next_to_send_ == pending_count_ && pass_received_ == 1 && echo_received_ == 3 &&
             echo_sequence_mask_ == ((1u << 2) | (1u << 3) | (1u << 4))) :
-        (sent_ == 0 && next_to_send_ == 0 && pass_received_ == 1 && echo_received_ == 0);
+        (sent_ == 1 && next_to_send_ == pending_count_ && pass_received_ == 0 && echo_received_ == 0);
     if ( !passed ) {
         getSimulationOutput().fatal(CALL_INFO, 1,
             "PR2 integration endpoint %d failed: sent=%u pass=%u echo=%u\n",
@@ -345,8 +352,7 @@ PR2IntegrationEndpoint::makeRequest(
 {
     auto request = std::make_unique<SimpleNetwork::Request>(destination, endpoint_id_, 64, true, true);
     request->vn = 0;
-    request->giveServiceData(PR2_INTEGRATION_SERVICE_ID,
-        new PR2IntegrationServiceData(action, sequence));
+    request->giveServiceData(new PR2IntegrationServiceData(action, sequence));
     return request;
 }
 
@@ -368,6 +374,9 @@ PR2IntegrationEndpoint::validateCapability() const
          (capability.features & required) != required ||
          capability.min_schema_version > PR2IntegrationServiceData::MIN_SCHEMA_VERSION ||
          capability.max_schema_version < PR2IntegrationServiceData::MAX_SCHEMA_VERSION ||
+         capability.request_data_token != PR2IntegrationServiceData::DATA_TOKEN ||
+         capability.min_request_schema_version != PR2IntegrationServiceData::MIN_SCHEMA_VERSION ||
+         capability.max_request_schema_version != PR2IntegrationServiceData::MAX_SCHEMA_VERSION ||
          capability.max_atomic_request_bits_by_vn.empty() ||
          capability.max_atomic_request_bits_by_vn[0] < 64 ||
          (capability.features & SimpleNetwork::SERVICE_FEATURE_CHECKPOINT_SAFE_CARRIAGE) ) {
@@ -416,8 +425,7 @@ PR2MissingProcessorEndpoint::setup()
             PR2MissingProcessorEndpoint, &PR2MissingProcessorEndpoint::handleReceive>(this));
         auto request = std::make_unique<SST::Interfaces::SimpleNetwork::Request>(0, 0, 64, true, true);
         request->vn = 0;
-        request->giveServiceData(PR2_INTEGRATION_SERVICE_ID,
-            new PR2IntegrationServiceData(PR2IntegrationAction::Pass, 100));
+        request->giveServiceData(new PR2IntegrationServiceData(PR2IntegrationAction::Pass, 100));
         if ( !network_->send(request.get(), 0) ) {
             getSimulationOutput().fatal(CALL_INFO, 1,
                 "Production PASS processor test could not inject its tagged packet\n");
@@ -447,8 +455,7 @@ PR2MissingProcessorEndpoint::setup()
 
     auto request = std::make_unique<SST::Interfaces::SimpleNetwork::Request>(0, 0, 64, true, true);
     request->vn = 7;
-    request->giveServiceData(PR2_INTEGRATION_SERVICE_ID,
-        new PR2IntegrationServiceData(PR2IntegrationAction::Pass, 99));
+    request->giveServiceData(new PR2IntegrationServiceData(PR2IntegrationAction::Pass, 99));
     const auto* sidecar = request->inspectServiceData();
     if ( network_->send(request.get(), 0) || request->dest != 0 || request->src != 0 ||
          request->vn != 7 || request->size_in_bits != 64 || request->inspectServiceData() != sidecar ) {

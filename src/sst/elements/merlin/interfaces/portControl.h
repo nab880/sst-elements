@@ -30,8 +30,9 @@
 #include <sst/core/statapi/stataccumulator.h>
 
 #include <cstring>
+#include <memory>
 
-#include "sst/elements/merlin/router.h"
+#include "../router.h"
 
 using namespace SST;
 
@@ -70,7 +71,7 @@ public:
         {"oql_track_port",     ""},
         {"oql_track_remote",   ""},
         {"output_arb",         "Arbitration unit to be used for port output", "merlin.arb.output.basic"},
-        {"mtu",                "Maximum transfer unit on network in b or B (can include SI prefix).","2kB"},
+        {"mtu",                "Maximum transfer unit on network in b or B (can include SI prefix).","8KB"},
         {"enable_congestion_management", "Turn on congestion management","false"},
         {"cm_outstanding_threshold", "Threshold for the amount of data outstanding to a host before congestion management can trigger","2*output_buf_size"},
         {"cm_pktsize_threshold", "Minimum size of a packet to be considered part of a stream with regards to congestion management","128B"},
@@ -155,7 +156,6 @@ private:
     // head of each of its VC queues into a single array to speed
     // things up.  This is an array passed into the constructor.
     internal_router_event** vc_heads = nullptr;
-    std::vector<uint64_t> vc_head_generations;
 
     int* input_buf_count = nullptr;
     int* output_buf_count = nullptr;
@@ -186,6 +186,11 @@ private:
 
     int* port_ret_credits = nullptr;
     int* port_out_credits = nullptr;
+    struct NetworkServicePortContext {
+        NetworkServiceHost* host = nullptr; // non-owning opt-in extension
+        std::vector<uint64_t> vc_head_generations;
+    };
+    std::unique_ptr<NetworkServicePortContext> network_service;
 
     // Represents the start of when a port was idle
     // If the buffer was empty we instantiate this to the current time

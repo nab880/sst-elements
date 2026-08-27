@@ -8,7 +8,7 @@
 #ifndef SST_ELEMENTS_MERLIN_TEST_NETWORK_SERVICE_PR2_INTEGRATION_FIXTURE_H
 #define SST_ELEMENTS_MERLIN_TEST_NETWORK_SERVICE_PR2_INTEGRATION_FIXTURE_H
 
-#include "sst/elements/merlin/networkService.h"
+#include "../../networkService.h"
 
 #include <sst/core/component.h>
 #include <sst/core/interfaces/simpleNetwork.h>
@@ -77,6 +77,12 @@ public:
     PR2IntegrationProcessor(ComponentId_t id, Params& params, NetworkServiceHost* host);
 
     NetworkServiceID getServiceID() const override { return PR2_INTEGRATION_SERVICE_ID; }
+    NetworkServiceRequestContract getRequestContract() const override
+    {
+        return { PR2IntegrationServiceData::SERVICE_ID, PR2IntegrationServiceData::DATA_TOKEN,
+            PR2IntegrationServiceData::MIN_SCHEMA_VERSION,
+            PR2IntegrationServiceData::MAX_SCHEMA_VERSION };
+    }
     NetworkServicePrepared prepare(const NetworkServiceIngress& ingress) override;
     bool hasScheduledWork() const override { return false; }
 
@@ -89,6 +95,7 @@ private:
     NetworkServiceHost* host_ = nullptr;
     SST::Link* trigger_ = nullptr;
     bool busy_once_seen_ = false;
+    SimTime_t busy_probe_time_ = 0;
 };
 
 /** Two-node endpoint driver for the real single-router integration test. */
@@ -138,6 +145,7 @@ private:
     SST::Link* trigger_ = nullptr;
     SST::Link* trigger_timer_ = nullptr;
     std::array<std::unique_ptr<SimpleNetwork::Request>, 3> pending_;
+    size_t pending_count_ = 0;
     size_t next_to_send_ = 0;
     uint32_t sent_ = 0;
     uint32_t pass_received_ = 0;

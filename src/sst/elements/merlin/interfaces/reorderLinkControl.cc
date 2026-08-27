@@ -137,28 +137,20 @@ bool ReorderLinkControl::send(SimpleNetwork::Request* req, int vn) {
         return link_control->send(req, vn);
     }
 
-    if ( req->size_in_bits > static_cast<size_t>(std::numeric_limits<int>::max()) ) return false;
-    if ( !link_control->spaceToSend(vn, static_cast<int>(req->size_in_bits)) ) return false;
-    const nid_t logical_dest = req->dest;
-    auto info_it = reorder_info.find(logical_dest);
-    const uint32_t sequence = info_it == reorder_info.end() ? 0 : info_it->second->send;
+    if ( !link_control->spaceToSend(vn, req->size_in_bits) ) return false;
 
-    std::unique_ptr<Merlin::ExtendedRequest> ext_req(new Merlin::ExtendedRequest(req));
-    Merlin::ReorderMetadata reorder_meta(sequence);
-    ext_req->setMetadata("Reorder", reorder_meta);
-
-    if ( !link_control->send(ext_req.get(), vn) ) {
-        merlin_abort_full.fatal(CALL_INFO, 1,
-            "ReorderLinkControl child rejected a preflight-approved ordinary packet\n");
-    }
-    ext_req.release();
-
-    if ( info_it == reorder_info.end() ) {
-        info_it = reorder_info.emplace(logical_dest, new ReorderInfo()).first;
-    }
-    ++info_it->second->send;
+    Merlin::ExtendedRequest* ext_req = new Merlin::ExtendedRequest(req);
     delete req;
-    return true;
+
+    // Preserve legacy ordinary sequencing and ownership behavior.
+    if ( reorder_info.find(ext_req->dest) == reorder_info.end() ) {
+        reorder_info[ext_req->dest] = new ReorderInfo();
+    }
+    ReorderInfo* info = reorder_info[ext_req->dest];
+    const uint32_t seq = info->send++;
+    ext_req->setMetadata("Reorder", Merlin::ReorderMetadata(seq));
+
+    return link_control->send(ext_req, vn);
 }
 
 

@@ -20,6 +20,7 @@
 #include <map>
 #include <string>
 #include <memory>
+#include <stdexcept>
 #include <vector>
 #include <variant>
 #include <deque>
@@ -82,29 +83,58 @@ public:
     explicit ExtendedRequest(const Request& req) :
         Request(req)
     {
+        // Request's released copy contract aliases the native payload.  Detach
+        // it before anything below can throw, then install an owned clone only
+        // after all potentially-throwing copies have completed.
+        takePayload();
+        std::unique_ptr<Event> payload_clone;
+        if ( const auto* original_payload = req.inspectPayload() ) {
+            payload_clone.reset(const_cast<Event*>(original_payload)->clone());
+            if ( payload_clone == nullptr ) {
+                throw std::runtime_error("ExtendedRequest native payload clone returned null");
+            }
+        }
         const auto* ext_req = dynamic_cast<const ExtendedRequest*>(&req);
+        if (ext_req) {
+            metadata = ext_req->metadata;
+        }
+        givePayload(payload_clone.release());
+    }
+
+    // Released wrapper contract: transfer the native payload, copy trace and
+    // plugin metadata, and retain Request's defaults for vn/allow_adaptive.
+    ExtendedRequest(Request* req) :
+        Request(req->dest, req->src, req->size_in_bits, req->head, req->tail)
+    {
+        givePayload(req->takePayload());
+        trace = req->getTraceType();
+        traceID = req->getTraceID();
+        auto* ext_req = dynamic_cast<ExtendedRequest*>(req);
         if (ext_req) {
             metadata = ext_req->metadata;
         }
     }
 
-    // Move all base ownership out of a request that the caller will delete.
-    explicit ExtendedRequest(Request* req) :
-        Request(std::move(*req))
-    {
-        auto* ext_req = dynamic_cast<ExtendedRequest*>(req);
-        if (ext_req) {
-            metadata = std::move(ext_req->metadata);
-        }
-    }
-
-    ExtendedRequest(const ExtendedRequest&) = default;
+    ExtendedRequest(const ExtendedRequest& other) :
+        ExtendedRequest(static_cast<const Request&>(other))
+    {}
     ExtendedRequest(ExtendedRequest&&) noexcept = default;
-    ExtendedRequest& operator=(const ExtendedRequest&) = default;
+    ExtendedRequest& operator=(const ExtendedRequest& other)
+    {
+        if ( this != &other ) {
+            ExtendedRequest copy(other);
+            Request::swap(copy);
+            metadata.swap(copy.metadata);
+        }
+        return *this;
+    }
     ExtendedRequest& operator=(ExtendedRequest&&) noexcept = default;
     ~ExtendedRequest() override = default;
 
-    ExtendedRequest* clone() override { return new ExtendedRequest(*this); }
+    ExtendedRequest* clone() override
+    {
+        return new ExtendedRequest(*this);
+    }
 
     // Set plugin-specific metadata
     template<typename T>

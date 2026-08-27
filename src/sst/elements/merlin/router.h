@@ -30,6 +30,7 @@
 #include "networkService.h"
 
 #include <limits>
+#include <memory>
 #include <queue>
 
 namespace SST {
@@ -80,13 +81,6 @@ public:
     virtual void recvCtrlEvent(int port, CtrlRtrEvent* ev) = 0;
 
     virtual void reportIncomingEvent(internal_router_event* ev) = 0;
-
-    virtual NetworkServiceID getNetworkServiceID() const
-    {
-        return SST::Interfaces::SimpleNetwork::NETWORK_SERVICE_NONE;
-    }
-    virtual void networkServiceHeadAppeared() {}
-    virtual void networkServiceHeadRemoved() {}
 
     void serialize_order(SST::Core::Serialization::serializer& ser) override {
         SST::Component::serialize_order(ser);
@@ -139,8 +133,7 @@ public:
         trusted_src(-1),
         route_vn(-1),
         injectionTime(0),
-        size_in_flits(0),
-        transport_metadata_valid(false)
+        size_in_flits(-1)
     {}
 
     RtrEvent(SST::Interfaces::SimpleNetwork::Request* req, SST::Interfaces::SimpleNetwork::nid_t trusted_src, int route_vn) :
@@ -149,9 +142,33 @@ public:
         trusted_src(trusted_src),
         route_vn(route_vn),
         injectionTime(0),
-        size_in_flits(0),
-        transport_metadata_valid(false)
+        size_in_flits(-1)
     {}
+
+    RtrEvent(const RtrEvent& other) :
+        BaseRtrEvent(other),
+        request(other.request ? other.request->clone() : nullptr),
+        trusted_src(other.trusted_src),
+        route_vn(other.route_vn),
+        injectionTime(other.injectionTime),
+        size_in_flits(other.size_in_flits)
+    {}
+
+    RtrEvent& operator=(const RtrEvent& other)
+    {
+        if ( this != &other ) {
+            std::unique_ptr<SST::Interfaces::SimpleNetwork::Request> request_copy(
+                other.request ? other.request->clone() : nullptr);
+            BaseRtrEvent::operator=(other);
+            delete request;
+            request       = request_copy.release();
+            trusted_src   = other.trusted_src;
+            route_vn      = other.route_vn;
+            injectionTime = other.injectionTime;
+            size_in_flits = other.size_in_flits;
+        }
+        return *this;
+    }
 
 
     ~RtrEvent()
@@ -162,12 +179,7 @@ public:
     inline void setInjectionTime(SimTime_t time) {injectionTime = time;}
     // inline void setTraceID(int id) {traceID = id;}
     // inline void setTraceType(TraceType type) {trace = type;}
-    virtual RtrEvent* clone(void)  override {
-        std::unique_ptr<RtrEvent> ret(new RtrEvent(*this));
-        ret->request = nullptr;
-        ret->request = this->request ? this->request->clone() : nullptr;
-        return ret.release();
-    }
+    virtual RtrEvent* clone(void) override { return new RtrEvent(*this); }
 
     inline SimTime_t getInjectionTime(void) const { return injectionTime; }
     inline SST::Interfaces::SimpleNetwork::Request::TraceType getTraceType() const {return request->getTraceType();}
@@ -188,16 +200,15 @@ public:
         if ( request == nullptr || route_vn < 0 || flits <= 0 ) return false;
         size_in_flits = flits;
         injectionTime = time;
-        transport_metadata_valid = true;
         return true;
     }
+    // Compatibility no-op: successful computeSizeInFlits() already establishes
+    // the complete transport metadata required by legacy senders.
     inline bool markTransportMetadataValid() {
-        if ( request == nullptr || route_vn < 0 || size_in_flits < 0 ) return false;
-        transport_metadata_valid = true;
-        return true;
+        return hasValidTransportMetadata();
     }
     inline bool hasValidTransportMetadata() const {
-        return transport_metadata_valid && request != nullptr && route_vn >= 0 && size_in_flits >= 0;
+        return request != nullptr && route_vn >= 0 && size_in_flits >= 0;
     }
     inline int getSizeInFlits() { return size_in_flits; }
     inline int getSizeInBits() { return request->size_in_bits; }
@@ -227,7 +238,6 @@ public:
         SST_SER(route_vn);
         SST_SER(size_in_flits);
         SST_SER(injectionTime);
-        SST_SER(transport_metadata_valid);
     }
 
 private:
@@ -237,7 +247,6 @@ private:
     int route_vn;
     SimTime_t injectionTime;
     int size_in_flits;
-    bool transport_metadata_valid;
 
     ImplementSerializable(SST::Merlin::RtrEvent)
 
@@ -435,8 +444,7 @@ public:
         REPORT_ID,
         REPORT_BW,
         REPORT_FLIT_SIZE,
-        REPORT_PORT,
-        REPORT_NETWORK_SERVICE
+        REPORT_PORT
     };
 
     // int num_vns;
@@ -445,6 +453,7 @@ public:
     Commands command;
     int int_value;
     UnitAlgebra ua_value;
+    NetworkServiceRequestContract network_service_contract;
 
     RtrInitEvent() :
         BaseRtrEvent(BaseRtrEvent::INITIALIZATION)
@@ -462,6 +471,12 @@ public:
         SST_SER(command);
         SST_SER(int_value);
         SST_SER(ua_value);
+        if ( command == REPORT_ID ) {
+            SST_SER(network_service_contract);
+        }
+        else if ( ser.mode() == SST::Core::Serialization::serializer::UNPACK ) {
+            network_service_contract = {};
+        }
     }
 
 
@@ -504,7 +519,21 @@ public:
         encap_ev(other.encap_ev ? other.encap_ev->clone() : nullptr)
     {}
 
-    internal_router_event& operator=(const internal_router_event&) = delete;
+    internal_router_event& operator=(const internal_router_event& other)
+    {
+        if ( this != &other ) {
+            std::unique_ptr<RtrEvent> envelope_copy(
+                other.encap_ev ? other.encap_ev->clone() : nullptr);
+            BaseRtrEvent::operator=(other);
+            delete encap_ev;
+            next_port        = other.next_port;
+            next_vc          = other.next_vc;
+            vc               = other.vc;
+            credit_return_vc = other.credit_return_vc;
+            encap_ev         = envelope_copy.release();
+        }
+        return *this;
+    }
 
     virtual ~internal_router_event() {
         if ( encap_ev != NULL ) delete encap_ev;
@@ -532,7 +561,13 @@ public:
 
     inline int getFlitCount() {return encap_ev->getSizeInFlits();}
 
-    inline void setEncapsulatedEvent(RtrEvent* ev) {encap_ev = ev;}
+    // Released assignment contract: this does not destroy the old pointer.
+    inline void setEncapsulatedEvent(RtrEvent* ev) { encap_ev = ev; }
+    inline RtrEvent* takeEncapsulatedEvent() {
+        RtrEvent* ret = encap_ev;
+        encap_ev = nullptr;
+        return ret;
+    }
     inline RtrEvent* getEncapsulatedEvent() {return encap_ev;}
     inline const RtrEvent* getEncapsulatedEvent() const {return encap_ev;}
     inline bool hasValidTransportMetadata() const {
@@ -662,7 +697,7 @@ public:
 
 // Class to manage link between NIC and router.  A single NIC can have
 // more than one link_control (and thus link to router).
-class PortInterface : public SubComponent, public XbarInput, public NetworkServiceIngressQueue {
+class PortInterface : public SubComponent {
 
 public:
 
@@ -682,8 +717,8 @@ public:
     virtual bool spaceToSend(int vc, int flits) = 0;
     // Returns NULL if no event in input_buf[vc]. Otherwise, returns
     // the next event.
-    virtual internal_router_event* recv(int vc) override = 0;
-    virtual internal_router_event** getVCHeads() override = 0;
+    virtual internal_router_event* recv(int vc) = 0;
+    virtual internal_router_event** getVCHeads() = 0;
 
     virtual void reportIncomingEvent(internal_router_event* ev) = 0;
 
@@ -718,6 +753,13 @@ public:
         SST::SubComponent::serialize_order(ser);
     }
     ImplementVirtualSerializable(SST::Merlin::PortInterface)
+
+    // Keep optional extensions after every released virtual so existing
+    // external PortInterface vtable slots retain their positions.
+    /** Disabled defaults preserve existing external PortInterface subclasses. */
+    virtual NetworkServiceHeadIdentity inspectNetworkServiceHead(int) const { return {}; }
+    virtual internal_router_event* recvNetworkServiceExpected(
+        int, const NetworkServiceHeadIdentity&) { return nullptr; }
 
     class OutputArbitration : public SubComponent {
     public:
@@ -760,6 +802,17 @@ public:
     virtual void arbitrate(PortInterface** ports, int* port_busy, int* out_port_busy, int* progress_vc) = 0;
 #endif
     virtual void setPorts(int num_ports, int num_vcs) = 0;
+    virtual bool isOkayToPauseClock() { return true; }
+    virtual void reportSkippedCycles(Cycle_t cycles) {};
+    virtual void dumpState(std::ostream& stream) {};
+
+    void serialize_order(SST::Core::Serialization::serializer& ser) override {
+        SST::SubComponent::serialize_order(ser);
+    }
+    ImplementVirtualSerializable(SST::Merlin::XbarArbitration)
+
+    // Keep optional extensions after every released virtual so existing
+    // external XbarArbitration vtable slots retain their positions.
     /**
      * Optional input/output split for a bounded synthetic requester.  The
      * default preserves compatibility and refuses service enablement.
@@ -772,14 +825,6 @@ public:
     virtual bool arbitrateNetworkService(XbarInput** inputs, PortInterface** outputs, int* input_busy,
         int* output_busy, int* progress_vc) { return false; }
 #endif
-    virtual bool isOkayToPauseClock() { return true; }
-    virtual void reportSkippedCycles(Cycle_t cycles) {};
-    virtual void dumpState(std::ostream& stream) {};
-
-    void serialize_order(SST::Core::Serialization::serializer& ser) override {
-        SST::SubComponent::serialize_order(ser);
-    }
-    ImplementVirtualSerializable(SST::Merlin::XbarArbitration)
 };
 
 

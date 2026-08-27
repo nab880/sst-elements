@@ -20,7 +20,6 @@ router.addParams({
     "output_latency": "0ns",
     "input_buf_size": "8B",
     "output_buf_size": "8B",
-    "xbar_arb": "merlin.xbar_arb_rr",
     "network_service_output_queue_depth": 2,
 })
 router.setSubComponent("topology", "merlin.singlerouter")

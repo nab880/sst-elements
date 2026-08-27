@@ -19,6 +19,41 @@ namespace SST::Merlin {
 class internal_router_event;
 
 using NetworkServiceID = SST::Interfaces::SimpleNetwork::NetworkServiceID;
+using NetworkServiceDataToken = SST::Interfaces::SimpleNetwork::NetworkServiceDataToken;
+using NetworkServiceVersion = SST::Interfaces::SimpleNetwork::NetworkServiceVersion;
+
+/** Request shape a processor can safely consume. */
+struct NetworkServiceRequestContract
+{
+    NetworkServiceID service_id = SST::Interfaces::SimpleNetwork::NETWORK_SERVICE_NONE;
+    NetworkServiceDataToken data_token = 0;
+    NetworkServiceVersion min_schema_version = 0;
+    NetworkServiceVersion max_schema_version = 0;
+
+    constexpr bool valid() const
+    {
+        if ( service_id == SST::Interfaces::SimpleNetwork::NETWORK_SERVICE_NONE ) {
+            return data_token == 0 && min_schema_version == 0 && max_schema_version == 0;
+        }
+        return data_token == 0 ? min_schema_version == 0 && max_schema_version == 0 :
+                                 min_schema_version <= max_schema_version;
+    }
+
+    bool accepts(const SST::Interfaces::SimpleNetwork::Request& request) const
+    {
+        return valid() && request.getServiceID() == service_id && request.inspectServiceData() != nullptr &&
+               (data_token == 0 || request.serviceDataMatches(
+                    service_id, data_token, min_schema_version, max_schema_version));
+    }
+
+    void serialize_order(SST::Core::Serialization::serializer& ser)
+    {
+        SST_SER(service_id);
+        SST_SER(data_token);
+        SST_SER(min_schema_version);
+        SST_SER(max_schema_version);
+    }
+};
 
 enum class NetworkServiceDisposition : uint8_t { Pass = 1, Accept = 2, Busy = 3, Reject = 4 };
 
@@ -125,6 +160,15 @@ public:
 
     /** Required after asynchronous work becomes ready while the router may be declocked. */
     virtual void wakeNetworkServiceProcessor() = 0;
+
+    /** Optional router-side discovery and head-accounting hooks. */
+    virtual NetworkServiceID getNetworkServiceID() const
+    {
+        return SST::Interfaces::SimpleNetwork::NETWORK_SERVICE_NONE;
+    }
+    virtual NetworkServiceRequestContract getNetworkServiceRequestContract() const { return {}; }
+    virtual void networkServiceHeadAppeared() {}
+    virtual void networkServiceHeadRemoved() {}
 };
 
 /** Service-neutral Merlin processor API. */
@@ -138,6 +182,10 @@ public:
     ~NetworkServiceProcessor() override = default;
 
     virtual NetworkServiceID getServiceID() const = 0;
+    virtual NetworkServiceRequestContract getRequestContract() const
+    {
+        return { getServiceID(), 0, 0, 0 };
+    }
     virtual NetworkServicePrepared prepare(const NetworkServiceIngress& ingress) = 0;
     virtual bool hasScheduledWork() const = 0;
 

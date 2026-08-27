@@ -20,6 +20,8 @@
 #include "output_arb_basic.h"
 #include "output_arb_qos_multi.h"
 
+#include <stdexcept>
+
 #define TRACK 0
 #define TRACK_ID 131
 #define TRACK_PORT 4
@@ -116,12 +118,16 @@ PortControl::recv(int vc)
 	if ( input_buf[vc].empty() ) return NULL;
 
 	internal_router_event* event = input_buf[vc].front();
-	const auto* removed_request = event->inspectRequest();
-	if ( removed_request != nullptr && removed_request->hasService() ) {
-	    parent->networkServiceHeadRemoved();
+	if ( network_service ) {
+	    const auto* removed_request = event->inspectRequest();
+	    if ( removed_request != nullptr && removed_request->hasService() ) {
+	        network_service->host->networkServiceHeadRemoved();
+	    }
 	}
 	input_buf[vc].pop();
-	if ( ++vc_head_generations[vc] == 0 ) ++vc_head_generations[vc];
+	if ( network_service && ++network_service->vc_head_generations[vc] == 0 ) {
+	    ++network_service->vc_head_generations[vc];
+	}
 
 	// Need to update vc_heads
 	if ( input_buf[vc].empty() ) {
@@ -132,9 +138,11 @@ PortControl::recv(int vc)
         auto event = input_buf[vc].front();
         topo->route_packet(port_number, event->getVC(), event);
 	    vc_heads[vc] = input_buf[vc].front();
-	    const auto* next_request = event->inspectRequest();
-	    if ( next_request != nullptr && next_request->hasService() ) {
-	        parent->networkServiceHeadAppeared();
+	    if ( network_service ) {
+	        const auto* next_request = event->inspectRequest();
+	        if ( next_request != nullptr && next_request->hasService() ) {
+	            network_service->host->networkServiceHeadAppeared();
+	        }
 	    }
 	}
 
@@ -159,8 +167,9 @@ PortControl::recv(int vc)
 NetworkServiceHeadIdentity
 PortControl::inspectNetworkServiceHead(int vc) const
 {
-    if ( !connected || vc < 0 || vc >= num_vcs || input_buf[vc].empty() ) return {};
-    return { input_buf[vc].front(), vc_head_generations[vc] };
+    if ( !network_service || !connected || vc < 0 || vc >= num_vcs ||
+         input_buf[vc].empty() ) return {};
+    return { input_buf[vc].front(), network_service->vc_head_generations[vc] };
 }
 
 internal_router_event*
@@ -284,6 +293,22 @@ PortControl::serialize_order(SST::Core::Serialization::serializer& ser) {
     SST_SER(remote_rtr_id);
     SST_SER(remote_port_number);
     SST_SER(connected);
+    bool has_network_service = network_service != nullptr;
+    SST_SER(has_network_service);
+    if ( ser.mode() == SST::Core::Serialization::serializer::UNPACK ) {
+        if ( has_network_service ) {
+            network_service.reset(new NetworkServicePortContext());
+            network_service->host = dynamic_cast<NetworkServiceHost*>(parent);
+            if ( network_service->host == nullptr ) {
+                throw std::runtime_error(
+                    "Serialized Merlin service port has no NetworkServiceHost parent");
+            }
+        }
+        else network_service.reset();
+    }
+    if ( has_network_service ) {
+        SST_SER(network_service->vc_head_generations);
+    }
 
     if ( ser.mode() == SST::Core::Serialization::serializer::UNPACK ) {
         if ( connected ) {
@@ -306,7 +331,6 @@ PortControl::serialize_order(SST::Core::Serialization::serializer& ser) {
             SST_SER(port_out_credits[i]);
         }
     }
-    SST_SER(vc_head_generations);
     // vc_heads, xbar_in_credits, output_queue_lengths are non-owning
     // pointers into hr_router arrays — re-established via initVCs post-UNPACK
 
@@ -529,7 +553,7 @@ PortControl::PortControl(ComponentId_t cid, Params& params,  Router* rif, int rt
     }
     cm_outstanding_threshold = (cm_ot / flit_size).getRoundedValue();
 
-    UnitAlgebra mtu = params.find<UnitAlgebra>("mtu", "2kB");
+    UnitAlgebra mtu = params.find<UnitAlgebra>("mtu", "8KB");
     if ( mtu.hasUnits("B") ) mtu *= UnitAlgebra("8b/B");
 
     // Get the serialization time for an mtu
@@ -621,7 +645,17 @@ PortControl::initVCs(int vns, int* vcs_per_vn, internal_router_event** vc_heads_
     for ( int i = 0; i < vns; ++i ) {
         num_vcs += vcs_per_vn[i];
     }
-    vc_head_generations.assign(num_vcs, 0);
+    NetworkServiceHost* service_host = dynamic_cast<NetworkServiceHost*>(parent);
+    const bool track_network_service_heads = connected && service_host != nullptr &&
+        service_host->getNetworkServiceID() != SST::Interfaces::SimpleNetwork::NETWORK_SERVICE_NONE;
+    if ( track_network_service_heads ) {
+        network_service.reset(new NetworkServicePortContext());
+        network_service->host = service_host;
+        network_service->vc_head_generations.assign(static_cast<size_t>(num_vcs), 0);
+    }
+    else {
+        network_service.reset();
+    }
 
     // If the port is not connected, we still need to initialize
     // vc_heads entries to NULL
@@ -788,11 +822,11 @@ PortControl::init(unsigned int phase) {
             RtrInitEvent* ev = new RtrInitEvent();
             ev->command = RtrInitEvent::REPORT_ID;
             ev->int_value = topo->getEndpointID(port_number);
-            port_link->sendUntimedData(ev);
-
-            ev = new RtrInitEvent();
-            ev->command = RtrInitEvent::REPORT_NETWORK_SERVICE;
-            ev->int_value = static_cast<int>(parent->getNetworkServiceID());
+            // Preserve the legacy three-frame host-port phase-0 sequence.
+            // Service information rides on the existing REPORT_ID frame.
+            if ( network_service ) {
+                ev->network_service_contract = network_service->host->getNetworkServiceRequestContract();
+            }
             port_link->sendUntimedData(ev);
         }
         else {
@@ -1112,12 +1146,18 @@ PortControl::handle_input_n2r(Event* ev)
 	    // If this becomes vc_head we need to put it into the vc_heads
 	    // array and do the routing decision here using route_packet()
 	    if ( was_empty ) {
-            if ( ++vc_head_generations[curr_vc] == 0 ) ++vc_head_generations[curr_vc];
+            if ( network_service && ++network_service->vc_head_generations[curr_vc] == 0 ) {
+                ++network_service->vc_head_generations[curr_vc];
+            }
             topo->route_packet(port_number, rtr_event->getVC(), rtr_event);
             vc_heads[curr_vc] = rtr_event;
             parent->inc_vcs_with_data();
-	        const auto* request = rtr_event->inspectRequest();
-	        if ( request != nullptr && request->hasService() ) parent->networkServiceHeadAppeared();
+	        if ( network_service ) {
+	            const auto* request = rtr_event->inspectRequest();
+	            if ( request != nullptr && request->hasService() ) {
+	                network_service->host->networkServiceHeadAppeared();
+	            }
+	        }
 	    }
 
 	    if ( event->getTraceType() != SST::Interfaces::SimpleNetwork::Request::NONE ) {
@@ -1203,12 +1243,18 @@ PortControl::handle_input_r2r(Event* ev)
 	    // If this becomes vc_head (there isn't an event already
 	    // in the array) we need to put it into the vc_heads array
 	    if ( was_empty ) {
-            if ( ++vc_head_generations[curr_vc] == 0 ) ++vc_head_generations[curr_vc];
+            if ( network_service && ++network_service->vc_head_generations[curr_vc] == 0 ) {
+                ++network_service->vc_head_generations[curr_vc];
+            }
             topo->route_packet(port_number, event->getVC(), event);
             vc_heads[curr_vc] = event;
             parent->inc_vcs_with_data();
-	        const auto* request = event->inspectRequest();
-	        if ( request != nullptr && request->hasService() ) parent->networkServiceHeadAppeared();
+	        if ( network_service ) {
+	            const auto* request = event->inspectRequest();
+	            if ( request != nullptr && request->hasService() ) {
+	                network_service->host->networkServiceHeadAppeared();
+	            }
+	        }
 	    }
 
 	    if ( event->getTraceType() != SimpleNetwork::Request::NONE ) {
@@ -1324,8 +1370,7 @@ PortControl::handle_output(Event* ev) {
             if ( enable_congestion_management ) {
                 updateCongestionState(send_event);
             }
-            port_link->send(1,send_event->getEncapsulatedEvent());
-            send_event->setEncapsulatedEvent(NULL);
+	        port_link->send(1,send_event->takeEncapsulatedEvent());
             delete send_event;
 	    }
 	    else {
