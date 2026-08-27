@@ -109,6 +109,7 @@ hr_router::hr_router() :
     num_vcs(0),
     topo(nullptr),
     arb(nullptr),
+    accels(nullptr),
     ports(nullptr),
     vc_heads(nullptr),
     xbar_in_credits(nullptr),
@@ -138,6 +139,7 @@ void hr_router::serialize_order(SST::Core::Serialization::serializer& ser) {
 
     SST_SER(topo);
     SST_SER(arb);
+    SST_SER(SST::Core::Serialization::array(accels, num_ports));
 
     size_t total_vcs = num_ports * num_vcs;
     SST_SER(SST::Core::Serialization::array(xbar_in_credits, total_vcs));
@@ -205,10 +207,8 @@ hr_router::~hr_router()
     delete [] out_port_busy;
     delete [] progress_vcs;
 
-    // SST framework manages SubComponent lifecycle — do not delete ports[i], topo, or arb
-    for ( int i = 0 ; i < num_ports ; i++ ) {
-        delete accels[i];
-    }
+    // SST framework manages SubComponent lifecycle — only delete the pointer arrays.
+    delete [] accels;
     delete [] ports;
 }
 
