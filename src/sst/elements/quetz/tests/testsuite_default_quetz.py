@@ -1245,6 +1245,10 @@ class testcase_quetz_sysmode(SSTTestCase):
 
         self.assertIn("GPU FFT offload correct_words=512/512", raw,
             "device-computed FFT result not bit-exact on the big-endian guest")
+        self.assertIn("GPU FFT status_polls=0", raw,
+            "blocking compatibility mode returned before writeback")
+        self.assertIn("GPU FFT completion_id=1", raw,
+            "device completion counter did not advance exactly once")
         self.assertIn("TESTFINISH[0]", raw,
             "TestFinisher sentinel not triggered; sim may have hung")
 

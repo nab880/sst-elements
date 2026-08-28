@@ -136,7 +136,7 @@ gpu.addParams({
     "base_addr": mmio_start,
     "mmio_size": (mmio_end - mmio_start + 1),
     "clock": "1GHz",
-    "doorbell_blocking": 1,   # required when a kernel is loaded
+    "doorbell_blocking": 1,   # this demo waits in the doorbell write
     # Kernel DMA may only touch the SST-backed window: a guest-programmed
     # buffer address outside it rejects the op (gpu.ops_rejected) instead
     # of crashing the simulation in memHierarchy routing.

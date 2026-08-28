@@ -37,6 +37,8 @@ review-coldfire-stack-correctness.md:
   test_xt_dma_window_escape      - guest-programmed kernel-op buffers outside
                                     the SST window are rejected non-fatally
                                     (dma_range_start/end), never a sim abort
+  test_xt_dma_window_escape_nonblocking - rejected async submissions leave
+                                    KERNEL_ID unchanged and recovery still works
   test_xt_kernel_dma_zero_latency - zero-latency kernel DMA reaches writeback
   test_xt_kernel_overflow_reject - ScaleOffset and FFT input ceilings reject
                                     over-limit arg2 values
@@ -50,11 +52,9 @@ review-coldfire-stack-correctness.md:
                                     (general robustness, not tied to a fix)
   test_xt_smp_guard_fatal        - system_mode=1 + vcpu_count=2 must fatal with
                                     a clear message, not silently corrupt (finding 5)
-  test_xt_kernel_posted_doorbell_reject - kernel slot populated with
-                                    doorbell_blocking=0 must fatal at
-                                    construction (documents an existing,
-                                    NOT-yet-fixed guardrail from the original
-                                    review's finding #7)
+  test_xt_kernel_nonblocking_poll - a real compute kernel may acknowledge its
+                                    doorbell immediately while the guest polls
+                                    BUSY through DMA, compute, and writeback
 
 Some tests deliberately pin supported legacy/misconfiguration behavior (the
 explicit LE alias case and mismatched flags), but every test must pass.
@@ -440,8 +440,7 @@ class testcase_expanded_coldfire(SSTTestCase):
     def _compute_deck_run(self, exe_abs, outdir_name, extra_env=None,
                           timeout_sec=120):
         """One basic_quetz_gpu_compute_coldfire.py run with the standard
-        MMIO/window env; extra_env entries are set for the run and popped
-        after."""
+        MMIO/window env; extra_env entries are restored after the run."""
         test_path = self.get_testsuite_dir()
         sst_prefix, sst_bindir, sst_libexec, qemu_bin = self._qemu_system_m68k()
 
@@ -463,6 +462,7 @@ class testcase_expanded_coldfire(SSTTestCase):
         os.environ["QUETZ_SST_WIN_START"] = "0x71000000"
         os.environ["QUETZ_SST_WIN_END"]   = "0x7100FFFF"
         extra_env = extra_env or {}
+        saved_env = {k: os.environ.get(k) for k in extra_env}
         for k, v in extra_env.items():
             os.environ[k] = v
         enable_mmio_payload_delivery()
@@ -474,8 +474,11 @@ class testcase_expanded_coldfire(SSTTestCase):
         finally:
             os.environ.pop("QUETZ_SST_WIN_START", None)
             os.environ.pop("QUETZ_SST_WIN_END", None)
-            for k in extra_env:
-                os.environ.pop(k, None)
+            for k, old_value in saved_env.items():
+                if old_value is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = old_value
 
         return self._read(sst_outfile) + "\n" + self._read(sst_errfile)
 
@@ -507,6 +510,33 @@ class testcase_expanded_coldfire(SSTTestCase):
             "dst straddle)")
         # The dst-straddle op is only caught at writeback, after compute
         # counted it as launched — so 2 launches (it + the valid op).
+        self.assertEqual(stat_sum(raw, "gpu.kernels_launched", 0), 2)
+
+    # -------------------------------------------------------------------------
+    def test_xt_dma_window_escape_nonblocking(self):
+        """Nonblocking rejection reaches idle without advancing KERNEL_ID,
+        including a late output-range reject, then accepts a valid op."""
+        test_path = self.get_testsuite_dir()
+        exe_abs = self._expanded_fw(test_path, "coldfire_xt_dma_escape")
+        raw = self._compute_deck_run(
+            exe_abs, "dma_escape_nonblocking",
+            extra_env={"QUETZ_KERNEL": "quetz.ScaleOffsetKernel",
+                       "QUETZ_DOORBELL_BLOCKING": "0",
+                       "QUETZ_SCALE_LATENCY_COEFF": "10",
+                       "QUETZ_GPU_LATENCY": "5000",
+                       "QUETZ_CLOCK": "1GHz",
+                       "QUETZ_GPU_CLOCK": "1GHz",
+                       "QUETZ_WIN_BIG_ENDIAN": "1",
+                       "QUETZ_KERNEL_BIG_ENDIAN": "1"})
+
+        self.assertNotIn("FATAL", raw)
+        self.assertIn("rejected probes: kernel_id=0,0,0,0", raw,
+            "a rejected nonblocking op advanced KERNEL_ID or did not retire")
+        self.assertIn("valid op after rejects: kernel_id=1 correct=64/64", raw,
+            "the device did not recover for a valid nonblocking op")
+        self.assertIn("DMA ESCAPE PASS", raw)
+        self.assertIn("TESTFINISH[0]", raw)
+        self.assertEqual(stat_sum(raw, "gpu.ops_rejected", 0), 4)
         self.assertEqual(stat_sum(raw, "gpu.kernels_launched", 0), 2)
 
     # -------------------------------------------------------------------------
@@ -728,54 +758,37 @@ class testcase_expanded_coldfire(SSTTestCase):
             "the guest should never have started executing")
 
     # -------------------------------------------------------------------------
-    def test_xt_kernel_posted_doorbell_reject(self):
-        """A 'kernel' subcomponent with doorbell_blocking=0 must fatal at
-        device construction (documents an EXISTING guardrail from the
-        original review's finding #7 -- not one of the five fixes applied
-        this session, just confirming it still catches the misconfiguration
-        rather than silently misbehaving)."""
+    def test_xt_kernel_nonblocking_poll(self):
+        """A real compute doorbell can return before DMA writeback while the
+        guest observes BUSY and polls to the same bit-exact FFT result."""
         test_path = self.get_testsuite_dir()
-        sst_prefix, sst_bindir, sst_libexec, qemu_bin = self._qemu_system_m68k()
         exe_abs = os.path.normpath(os.path.join(
             test_path, "sysmode/firmware/coldfire_gpu_fft_offload"))
         if not os.path.exists(exe_abs):
             self.skipTest("coldfire_gpu_fft_offload not found at {}".format(exe_abs))
 
-        outdir = os.path.join(self.get_test_output_run_dir(),
-                              "expanded_coldfire_tests", "kernel_posted_reject")
-        os.makedirs(outdir, exist_ok=True)
-
-        sdlfile = os.path.join(test_path, "sysmode",
-                               "basic_quetz_gpu_compute_coldfire.py")
-        sst_outfile = os.path.join(outdir, "kernel_posted_reject.out")
-        sst_errfile = os.path.join(outdir, "kernel_posted_reject.err")
-        mpifiles    = os.path.join(outdir, "kernel_posted_reject.testfile")
-
-        os.environ["QUETZ_EXE"] = exe_abs
-        os.environ["QUETZ_QEMU"] = qemu_bin
-        os.environ["QUETZ_PLUGIN"] = os.path.join(sst_libexec, "libqemu_sst_plugin.so")
-        os.environ["QUETZ_QEMU_ARGS"] = ("-machine mcf5208evb -display none "
-                                        "-serial stdio -m 128M")
-        os.environ["QUETZ_LOADER"] = "-kernel"
-        os.environ["SST_HOME"] = sst_prefix
-        os.environ["QUETZ_MMIO_START"] = "0x70000000"
-        os.environ["QUETZ_MMIO_END"]   = "0x700003FF"
-        os.environ["QUETZ_SST_WIN_START"] = "0x71000000"
-        os.environ["QUETZ_SST_WIN_END"]   = "0x7100FFFF"
-        os.environ["QUETZ_DOORBELL_BLOCKING"] = "0"   # misconfig: kernel + non-blocking
-        enable_mmio_payload_delivery()   # standalone determinism (no env leakage)
-
-        try:
-            self.run_sst(sdlfile, sst_outfile, sst_errfile,
-                         mpi_out_files=mpifiles, set_cwd=outdir, timeout_sec=60)
-        finally:
-            os.environ.pop("QUETZ_SST_WIN_START", None)
-            os.environ.pop("QUETZ_SST_WIN_END", None)
-            os.environ.pop("QUETZ_DOORBELL_BLOCKING", None)
-
-        raw = self._read(sst_outfile) + "\n" + self._read(sst_errfile)
-        self.assertIn("FATAL", raw,
-            "a kernel slot with doorbell_blocking=0 should fatal at "
-            "construction instead of silently running")
-        self.assertIn("doorbell_blocking=1", raw)
-        self.assertNotIn("TESTFINISH", raw)
+        raw = self._compute_deck_run(
+            exe_abs, "kernel_nonblocking_poll",
+            extra_env={
+                "QUETZ_KERNEL": "quetz.FFTKernel",
+                "QUETZ_DOORBELL_BLOCKING": "0",
+                "QUETZ_FFT_LATENCY_COEFF": "100",
+                "QUETZ_GPU_LATENCY": "5000",
+                "QUETZ_CLOCK": "1GHz",
+                "QUETZ_GPU_CLOCK": "1GHz",
+                "QUETZ_WIN_BIG_ENDIAN": "1",
+                "QUETZ_KERNEL_BIG_ENDIAN": "1",
+            })
+        self.assertNotIn("FATAL", raw)
+        self.assertIn("GPU FFT offload correct_words=512/512", raw)
+        self.assertIn("GPU FFT completion_id=1", raw)
+        self.assertIn("TESTFINISH[0]", raw)
+        match = re.search(r"GPU FFT status_polls=(\d+)", raw)
+        self.assertIsNotNone(match, "firmware did not report its BUSY polling evidence")
+        self.assertGreater(int(match.group(1)), 0,
+            "nonblocking doorbell returned only after completion; BUSY was never observed")
+        self.assertGreater(stat_sum(raw, "gpu.status_polls"), 1,
+            "device did not receive the expected BUSY-to-idle polling sequence")
+        self.assertEqual(stat_sum(raw, "gpu.doorbell_writes", 0), 1)
+        self.assertEqual(stat_sum(raw, "gpu.kernels_launched", 0), 1)
+        self.assertEqual(stat_sum(raw, "gpu.ops_rejected", 0), 0)

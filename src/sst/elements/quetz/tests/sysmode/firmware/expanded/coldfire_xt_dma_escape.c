@@ -1,25 +1,4 @@
-/*
- * coldfire_xt_dma_escape.c — guest-programmed kernel-op registers must not
- * be able to crash the simulator. Pre-fix, a src/dst outside the SST-backed
- * window sent kernel DMA to an address no memHierarchy endpoint owns (MemNIC
- * routing FATAL, the whole simulation dies), and N=0 hit an out.fatal in the
- * device. Post-fix (dma_range_start/end + non-fatal rejection) each bad op
- * is abandoned: the blocking doorbell completes, REG_KERNEL_ID does not
- * advance, gpu.ops_rejected counts it — and the device still runs a valid
- * op afterwards.
- *
- * Probes (all doorbells blocking; KERNEL_ID checked after each):
- *   1. N=0                                  -> kernel rejects the args
- *   2. src=0x20000000 (wild base)           -> input range reject
- *   3. src=WIN+0xFF00, N=512 (1 KiB)        -> input straddles window end
- *   4. src ok, dst=WIN+0xFF00, N=512        -> OUTPUT straddles window end
- *                                              (rejected at writeback, after
- *                                              the compute+busy phases)
- *   5. valid 64-sample scale=2/offset=100   -> must still work; KERNEL_ID=1
- *
- * SDL: sysmode/basic_quetz_gpu_compute_coldfire.py
- *   (QUETZ_KERNEL=quetz.ScaleOffsetKernel, default BE window).
- */
+/* Malformed kernel DMA must reject safely; a subsequent valid operation must still complete. */
 
 #include <stdint.h>
 
@@ -37,7 +16,7 @@
 #define SCALE             2
 #define OFFSET            100
 
-/* Ring the (blocking) doorbell for src/dst/n; returns KERNEL_ID after. */
+/* Poll completion in either submit mode, including late output-range rejection. */
 static uint32_t submit(uint32_t src, uint32_t dst, uint32_t n)
 {
     mmio_write32(GPU_ARG0, src);
@@ -46,6 +25,8 @@ static uint32_t submit(uint32_t src, uint32_t dst, uint32_t n)
     mmio_write32(GPU_ARG3, (uint32_t)(uint16_t)SCALE
                          | ((uint32_t)(uint16_t)OFFSET << 16));
     mmio_write32(GPU_DOORBELL, 0);
+    while (mmio_read32(GPU_STATUS) != 0)
+        ;
     return mmio_read32(GPU_KERNEL_ID);
 }
 

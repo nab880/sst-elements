@@ -121,8 +121,7 @@ QuetzGpuDevice::QuetzGpuDevice(ComponentId_t id, Params& params)
     kernel_ = loadUserSubComponent<QuetzKernel>("kernel");
 
     if (kernel_) {
-        // A kernel needs a memory initiator to DMA the guest buffers, and it
-        // must hold the doorbell response until the result is written back.
+        // Kernel DMA requires a memory initiator in either submit mode.
         mem_iface_ = loadUserSubComponent<StandardMem>(
             "mem_iface", ComponentInfo::SHARE_NONE, tc_,
             new StandardMem::Handler<QuetzGpuDevice, &QuetzGpuDevice::handleEvent>(this));
@@ -132,16 +131,27 @@ QuetzGpuDevice::QuetzGpuDevice(ComponentId_t id, Params& params)
                 "(memHierarchy.standardInterface) to DMA the kernel buffers.\n",
                 getName().c_str());
         }
-        if (!doorbell_blocking_) {
-            out.fatal(CALL_INFO, -1,
-                "%s: a 'kernel' subcomponent requires doorbell_blocking=1 (the "
-                "guest must block until the result is in memory).\n",
-                getName().c_str());
-        }
         // The device owns the buffer byte layout; push it into whatever
         // kernel was loaded so a kernel can never be configured out of step
         // with the device (kernels take no endianness param of their own).
         kernel_->setDataBigEndian(params.find<bool>("data_big_endian", false));
+    }
+
+    const std::string event_file = params.find<std::string>("event_file", "");
+    if (!event_file.empty() && !kernel_) {
+        out.fatal(CALL_INFO, -1,
+            "%s: event_file requires a real 'kernel' subcomponent; the "
+            "synthetic latency model does not produce accelerator lifecycle "
+            "claims.\n", getName().c_str());
+    }
+    std::string event_error;
+    if (!event_writer_.configure(
+            event_file,
+            params.find<std::string>("event_source", "accelerator.quetz"),
+            params.find<std::string>("event_operation", "kernel"),
+            event_error)) {
+        out.fatal(CALL_INFO, -1, "%s: %s.\n",
+            getName().c_str(), event_error.c_str());
     }
 
     // Completion IRQ: raise irq_line on op retire, lower on REG_IRQ_ACK.
@@ -357,10 +367,7 @@ void QuetzGpuDevice::mmioHandlers::handle(StandardMem::Write* write) {
         "%s: Write offset=0x%" PRIx64 " size=%zu\n",
         gpu->getName().c_str(), offset, write->size);
 
-    // Kernel slot populated: the doorbell kicks off a real compute op (DMA-read
-    // the input, run the kernel, DMA-write the result). The doorbell response is
-    // held for the whole op so the guest's STATUS/blocking read only completes
-    // once the result is in memory. One op in flight at a time.
+    // Kernel slot populated: the doorbell kicks off a real compute op (DMA-read the input, run the kernel, DMA-write the result).
     if (offset == REG_DOORBELL && gpu->kernel_) {
         gpu->stat_doorbell_writes_->addData(1);
         if (gpu->op_phase_ != QuetzGpuDevice::OpPhase::IDLE || gpu->isBusyAt(gpu->gpu_clk_)) {
@@ -368,12 +375,15 @@ void QuetzGpuDevice::mmioHandlers::handle(StandardMem::Write* write) {
                 "%s: doorbell while a kernel op is in flight (guest must "
                 "wait for STATUS idle).\n", gpu->getName().c_str());
         }
-        if (!write->posted)
+        if (!write->posted && gpu->doorbell_blocking_)
             gpu->op_doorbell_resp_ = write->makeResponse();
         gpu->submit_id_++;
         gpu->op_args_ = { gpu->arg_regs_[0], gpu->arg_regs_[1],
                           gpu->arg_regs_[2], gpu->arg_regs_[3] };
+        gpu->emitOpRequested();
         gpu->opStartDma();
+        if (!write->posted && !gpu->doorbell_blocking_)
+            gpu->iface->send(write->makeResponse());
         return;
     }
 
@@ -502,21 +512,43 @@ void QuetzGpuDevice::mmioHandlers::handle(StandardMem::WriteResp* resp) {
     gpu->opOnWriteResp(resp);
 }
 
-// --- kernel-slot ops: DMA around the plugged compute ---------------------------
-//
-// Sequence per doorbell: READING (DMA-read kernel_->inputBytes() from ARG0) ->
-// kernel_->compute() -> BUSY for the modeled latency -> WRITING (DMA-write the
-// kernel's output to ARG1) -> opFinish (release the held doorbell response).
-// Data format and latency model are the kernel's business; the device only
-// moves bytes.
+// Each operation reads input, computes, waits, writes output, then retires.
 
-// The op arguments are guest-programmed registers: buggy firmware — the code
-// a user is here to test — must not be able to crash the simulator with them.
-// A bad op is abandoned: counted, logged, doorbell response released so the
-// guest unblocks, and kernel_id does NOT advance (the guest-visible signal
-// that the op never ran) — analogous to real hardware ignoring a malformed
-// descriptor rather than wedging the bus.
+// Configured lifecycle output is mandatory evidence: write failure stops simulation.
+void QuetzGpuDevice::emitOpRequested() {
+    std::string error;
+    if (!event_writer_.emitRequested(
+            getCurrentSimTimeNano(), submit_id_, error)) {
+        out.fatal(CALL_INFO, -1,
+            "%s: accelerator-requested event was not durable: %s.\n",
+            getName().c_str(), error.c_str());
+    }
+}
+
+void QuetzGpuDevice::emitOpCompleted() {
+    std::string error;
+    if (!event_writer_.emitCompleted(
+            getCurrentSimTimeNano(), submit_id_, error)) {
+        out.fatal(CALL_INFO, -1,
+            "%s: accelerator-completed event was not durable: %s.\n",
+            getName().c_str(), error.c_str());
+    }
+}
+
+void QuetzGpuDevice::emitOpError() {
+    std::string error;
+    if (!event_writer_.emitError(
+            getCurrentSimTimeNano(), submit_id_, "operation-rejected", error)) {
+        out.fatal(CALL_INFO, -1,
+            "%s: accelerator-error event was not durable: %s.\n",
+            getName().c_str(), error.c_str());
+    }
+}
+
+// The op arguments are guest-programmed registers: buggy firmware — the code a user is here to test — must not be able to crash the simulator with them.
 void QuetzGpuDevice::opReject(const char* why) {
+    // Flush the terminal event before exposing IDLE or releasing the guest.
+    emitOpError();
     stat_ops_rejected_->addData(1);
     out.verbose(CALL_INFO, 1, 0,
         "%s: kernel op REJECTED (src=0x%" PRIx64 " dst=0x%" PRIx64
@@ -529,7 +561,7 @@ void QuetzGpuDevice::opReject(const char* why) {
         iface->send(op_doorbell_resp_);
         op_doorbell_resp_ = nullptr;
     }
-    updatePrimaryHold(false);
+    updatePrimaryHold(true);
 }
 
 bool QuetzGpuDevice::dmaRangeOk(uint64_t addr, uint64_t len) const {
@@ -683,6 +715,8 @@ void QuetzGpuDevice::opOnWriteResp(StandardMem::WriteResp* ) {
 }
 
 void QuetzGpuDevice::opFinish() {
+    // After all DMA responses, flush completion before guest-visible status, count, response or IRQ.
+    emitOpCompleted();
     op_phase_ = OpPhase::IDLE;
     kernel_id_++;
     out.verbose(CALL_INFO, 2, 0,
