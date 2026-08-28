@@ -4,11 +4,10 @@
  * window sent kernel DMA to an address no memHierarchy endpoint owns (MemNIC
  * routing FATAL, the whole simulation dies), and N=0 hit an out.fatal in the
  * device. Post-fix (dma_range_start/end + non-fatal rejection) each bad op
- * is abandoned: the blocking doorbell completes, REG_KERNEL_ID does not
- * advance, gpu.ops_rejected counts it — and the device still runs a valid
- * op afterwards.
+ * is abandoned: the doorbell completes, REG_KERNEL_ID does not advance,
+ * gpu.ops_rejected counts it — and the device still runs a valid op afterwards.
  *
- * Probes (all doorbells blocking; KERNEL_ID checked after each):
+ * Probes (STATUS reaches idle and KERNEL_ID is checked after each):
  *   1. N=0                                  -> kernel rejects the args
  *   2. src=0x20000000 (wild base)           -> input range reject
  *   3. src=WIN+0xFF00, N=512 (1 KiB)        -> input straddles window end
@@ -37,7 +36,8 @@
 #define SCALE             2
 #define OFFSET            100
 
-/* Ring the (blocking) doorbell for src/dst/n; returns KERNEL_ID after. */
+/* Ring the doorbell for src/dst/n. Polling makes this valid for both blocking
+ * and nonblocking device modes, including the late output-range rejection. */
 static uint32_t submit(uint32_t src, uint32_t dst, uint32_t n)
 {
     mmio_write32(GPU_ARG0, src);
@@ -46,6 +46,8 @@ static uint32_t submit(uint32_t src, uint32_t dst, uint32_t n)
     mmio_write32(GPU_ARG3, (uint32_t)(uint16_t)SCALE
                          | ((uint32_t)(uint16_t)OFFSET << 16));
     mmio_write32(GPU_DOORBELL, 0);
+    while (mmio_read32(GPU_STATUS) != 0)
+        ;
     return mmio_read32(GPU_KERNEL_ID);
 }
 

@@ -12,8 +12,8 @@
 #ifndef _H_SST_QUETZ_FFT
 #define _H_SST_QUETZ_FFT
 
-// Pure, host-side radix-2 FFT used by QuetzGpuDevice's kernel_type=fft compute
-// path (see quetz_gpu_device.cc). Deliberately header-only and free of any SST
+// Pure, host-side radix-2 FFT used by the quetz.FFTKernel subcomponent
+// (see quetz_fft_kernel.cc). Deliberately header-only and free of any SST
 // dependency so the exact math the device runs can be unit-tested on the host
 // (tests/unit/test_fft_compute.cc) instead of only through the sim, where an
 // impulse input can't validate the twiddle factors.
@@ -24,8 +24,8 @@
 namespace SST {
 namespace Quetz {
 
-// Interleaved complex float, matching the device's little-endian float32 wire
-// format {re, im} per point.
+// Host-side interleaved complex float. FFTKernel marshals the configured guest
+// byte layout to and from this {re, im} representation.
 struct QuetzCf { float re, im; };
 
 // In-place radix-2 decimation-in-time FFT of n complex points; n must be a

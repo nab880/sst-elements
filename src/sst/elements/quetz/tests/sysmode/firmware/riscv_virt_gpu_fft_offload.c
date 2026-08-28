@@ -1,7 +1,8 @@
 /*
  * riscv_virt_gpu_fft_offload.c — 256-pt FFT computed ON THE DEVICE (not the CPU).
- * QuetzGpuDevice kernel_type=fft: the guest fills the input, points the device at
- * the buffers (REG_FFT_IN_ADDR/OUT_ADDR/N), rings the doorbell, reads the result;
+ * QuetzGpuDevice with quetz.FFTKernel: the guest fills the input, points the
+ * device at the buffers (REG_FFT_IN_ADDR/OUT_ADDR/N), rings the doorbell, and
+ * reads the result;
  * the device DMAs + computes in C++ so the guest issues ~no compute (the test
  * asserts that). Buffers are LE float32 cfloat[N] in the SST window at 0x90000000.
  */

@@ -464,13 +464,21 @@ pure latency model: a doorbell write starts a BUSY window
 completions.  With a `kernel` subcomponent loaded the device really
 computes: DMA-read the input from `REG_ARG0`, run the kernel, hold BUSY for
 the kernel's modeled latency, DMA-write the result to `REG_ARG1`, and only
-then release the (blocking) doorbell.
+then report completion. With `doorbell_blocking=1`, a non-posted doorbell
+response is held through writeback. With `doorbell_blocking=0`, a non-posted
+submit is acknowledged immediately and the guest observes completion through
+STATUS, KERNEL_ID, or the optional IRQ. Posted writes have no response in either
+mode.
+
+Kernel mode allows one operation in flight and has no queue: a second doorbell
+while STATUS is busy is a fatal firmware error and is not queued. The
+pure-latency mode retains its bounded synthetic queue.
 
 Register map (`quetz_gpu_device.h`):
 
 | offset | reg | dir | behavior |
 |-------:|-----|-----|----------|
-| 0x00 | DOORBELL | W | submit an op (blocking when `doorbell_blocking=1`) |
+| 0x00 | DOORBELL | W | submit an op (non-posted response blocks when `doorbell_blocking=1`) |
 | 0x08 | STATUS | R | 1 = busy (kernel ops: busy for the whole doorbell-to-writeback lifetime) |
 | 0x10 | KERNEL_ID | R | completed-op counter |
 | 0x18 | LATENCY_OVERRIDE | W | cycles for the *next* op (0 = use default/kernel opinion) |
@@ -480,13 +488,17 @@ Register map (`quetz_gpu_device.h`):
 | 0x50 | IRQ_ACK | R/W | R: completion line raised; W: consume *N* completion events (~0 = all); line lowers when count hits zero |
 
 Key parameters: `base_addr`, `mmio_size`, `kernel_latency`,
-`doorbell_blocking` (required =1 when a kernel is loaded), `irq_line` /
-`irq_vcpu` (completion IRQ, −1 = disabled).  Slots: `iface` (MMIO target,
+`doorbell_blocking` (1 = hold a non-posted submit response through writeback;
+0 = acknowledge it immediately and expose asynchronous completion), `irq_line` /
+`irq_vcpu` (completion IRQ, −1 = disabled). In real-kernel mode, `event_file`
+optionally enables schema-v1 lifecycle JSONL; set the schema identifiers
+`event_source` and `event_operation` for the modeled accelerator. Each record
+is flushed before terminal state becomes guest-visible. Slots: `iface` (MMIO target,
 `memHierarchy.standardInterface`), `mem_iface` (memory initiator for kernel
 DMA), `kernel` (`SST::Quetz::QuetzKernel`).  Port: `irq` (see § IRQ
 injection).  Stats: `kernels_launched`, `busy_cycles`, `doorbell_writes`,
 `status_polls`, `latency_overrides`, `doorbell_while_busy`, `irqs_raised`,
-`wrong_direction_accesses`, `bad_offset_accesses`.
+`ops_rejected`, `wrong_direction_accesses`, `bad_offset_accesses`.
 
 Shipped kernels for the `kernel` slot (write your own by subclassing
 `QuetzKernel` — two methods, `quetz_kernel_api.h`; tutorial in

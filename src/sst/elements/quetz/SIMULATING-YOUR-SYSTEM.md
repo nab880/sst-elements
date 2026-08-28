@@ -312,10 +312,11 @@ sources against the same startup files.
 
 The accelerator's compute is a subcomponent: subclass `QuetzKernel`
 (`quetz_kernel_api.h`), implement two methods, register it, and select it in
-the SDL — the device's doorbell, DMA, blocking, and BUSY-timing machinery are
-already done. Shipped examples: `quetz.FFTKernel` (LE float32, latency
-`coeff·N·log₂N`) and `quetz.ScaleOffsetKernel` (saturating int16 sensor
-transform, latency `coeff·N`). A minimal custom kernel:
+the SDL — the device's doorbell, DMA, completion-mode, and BUSY-timing
+machinery are already done. Shipped examples: `quetz.FFTKernel`
+(configured-endian float32, latency `coeff·N·log₂N`) and
+`quetz.ScaleOffsetKernel` (saturating int16 sensor transform, latency
+`coeff·N`). A minimal custom kernel:
 
 ```cpp
 #include "quetz_kernel_api.h"
@@ -349,12 +350,23 @@ public:
 ```
 
 SDL: `gpu.setSubComponent("kernel", "myelem.ChecksumKernel")` — plus the
-device needs `mem_iface` wired and `doorbell_blocking=1` (it fatals with
-instructions if you forget). Guest contract: program `REG_ARG0..3`, ring the
-doorbell (blocking — it returns when the result is in memory), read the
-output buffer. Keep your kernel's math in a standalone header so it can be
-unit-tested on the host without SST — see `quetz_fft.h` /
+device needs `mem_iface` wired. Guest contract: program `REG_ARG0..3`, ring
+the doorbell, wait for completion, then read the output buffer. Set
+`doorbell_blocking=1` to make a non-posted submit return after writeback, or
+leave it at 0 and poll `REG_STATUS`/`REG_KERNEL_ID` (or use the completion
+IRQ). Posted writes have no response to hold. Keep your kernel's math in a
+standalone header so it can be unit-tested on the host without SST — see
+`quetz_fft.h` /
 `quetz_scale_offset.h` and their tests under `tests/unit/`.
+
+For oracle-visible lifecycle evidence, set `event_file` to the run's JSONL
+artifact path and configure schema-safe `event_source` / `event_operation`
+identifiers (for example, `accelerator.fft` / `fft`). The device emits a
+requested record at the accepted doorbell and a completed record only after
+all writeback responses arrive, or an error record on rejection. It flushes
+the terminal record before STATUS becomes idle, KERNEL_ID advances, a held
+doorbell releases, or an IRQ is raised. These are lifecycle claims only; the
+producer does not fabricate separate DMA-bound events.
 
 ## Adding your own device
 

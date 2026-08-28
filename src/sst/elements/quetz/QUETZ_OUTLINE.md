@@ -454,33 +454,49 @@ sst.Link("cpu_mmio").connect((cpu, "mmio_link_0", "1ns"), (mmio_dev, "highlink",
 - `cache_link` and `mmio_link` are **not coherent** with each other; packet scratch for GPU/balar (P3) must share a coherent path or use explicit flush/filter rules.
 - Place the MMIO handler **before** broad `FilteredRegionHandler` entries so doorbell addresses are not swallowed by a larger filtered range.
 
-### 4.3.2 GPU device endpoint (P2.a)
+### 4.3.2 GPU device endpoint
 
-`quetz.QuetzGpuDevice` is a lightweight synthetic GPU MMIO slave for system-mode studies without GPGPU-Sim. It models a doorbell write that starts a configurable **kernel latency** (busy window in device clock cycles), a **STATUS** register (`0` = IDLE, `1` = BUSY), and a monotonic **KERNEL_ID** counter incremented when each kernel completes.
+`quetz.QuetzGpuDevice` is a lightweight accelerator MMIO slave for studies
+without GPGPU-Sim. With its `kernel` slot empty, it is a pure-latency model.
+With a `QuetzKernel` loaded, it DMA-reads the input, computes, models a BUSY
+interval, and DMA-writes the result before reporting completion.
+`doorbell_blocking=1` holds a non-posted submit response through writeback;
+`doorbell_blocking=0` acknowledges an accepted non-posted submit immediately
+while STATUS remains BUSY. Posted writes have no response in either mode.
+Kernel mode allows one operation in flight and has no queue; a second submit
+while BUSY is fatal. Pure-latency mode retains its bounded queue.
 
-**Register map** (8-byte aligned, offsets from `base_addr`):
+**Register map** (offsets from `base_addr`):
 
 | Offset | Name | Access | Behavior |
 |--------|------|--------|----------|
-| `0x00` | DOORBELL | Write | Start kernel; optional payload is not dereferenced in P2.a |
-| `0x08` | STATUS | Read | `1` while busy, `0` when idle |
-| `0x10` | KERNEL_ID | Read | Count of completed kernels |
-| `0x18` | LATENCY_OVERRIDE | Write | Per-launch override of `kernel_latency` (cleared after doorbell) |
+| `0x00` | DOORBELL | Write | Submit an operation |
+| `0x08` | STATUS | Read | `1` through kernel DMA-read, compute, and writeback; `0` when idle |
+| `0x10` | KERNEL_ID | Read | Count of completed operations |
+| `0x18` | LATENCY_OVERRIDE | Write | Per-launch override of modeled latency |
+| `0x20` | TICKET | Read | Most recent submit ticket |
+| `0x28` | RESULT | Read | Completion latch; mirrors KERNEL_ID in the synthetic model |
+| `0x30–0x48` | ARG0–ARG3 | Write | Captured kernel operands |
+| `0x50` | IRQ_ACK | Read/Write | Read pending level; write consumes completion events |
 
-**Params:** `base_addr`, `mmio_size` (default `0x400`), `kernel_latency` (cycles, default `5000`), `clock`, `verbose`. `dma_bytes_per_kernel` must be `0` in P2.a (`fatal` if nonzero).
+**Params and slots:** Alongside `base_addr`, `mmio_size`, `kernel_latency`,
+`clock`, and `verbose`, the device exposes `doorbell_blocking`, completion IRQ,
+DMA-range, and buffer-byte-order controls. `iface` is the MMIO target;
+`mem_iface` is required when the `kernel` slot is populated. The legacy
+`dma_bytes_per_kernel` parameter remains unsupported and must be zero.
 
-**Topology (P2.a):** point-to-point — `mmio_link_0` → `gpu.iface` (`memHierarchy.standardInterface`) with `setMemoryMappedAddressRegion(base_addr, mmio_size)`. DRAM stays on `cache_link_0`. See `tests/sysmode/basic_quetz_gpu.py` and firmware `riscv_virt_gpu_kernel.c`; testsuite entry `test_quetz_sysmode_gpu_kernel`.
+**Topology:** `iface` connects to the CPU's MMIO path. A real kernel's
+`mem_iface` connects to the hierarchy that owns its reviewed DMA buffer window.
+That window must be SST-backed; ordinary QEMU RAM is only trace-observed and is
+not a coherent second copy for SST device writeback. See
+`tests/sysmode/basic_quetz_gpu.py` for the pure-latency model and
+`basic_quetz_gpu_compute*.py` for real compute.
 
 **User-mode (same C++ path):** `MmioForwardRegionHandler`, `GpuTraceRegionHandler`, and `QuetzGpuDevice` do not depend on `system_mode`. Wire `tests/usermode/basic_quetz_gpu.py` (device + `mmio_link_0`) or `basic_quetz_gpu_trace.py` (CONSUME only). The guest must `mmap(MAP_FIXED | MAP_ANONYMOUS, …)` at the MMIO base so QEMU user-mode does not fault before the plugin sees loads/stores; host page contents are irrelevant for trace, while the device path needs STATUS reads on `mmio_link`. Test programs: `tests/usermode/sources/gpu_kernel_user.c`, `gpu_trace_user.c`; build with `tests/usermode/sources/build.sh`; testsuite `test_quetz_usermode_gpu_kernel`, `test_quetz_usermode_gpu_trace_capture`. Follow-up: plugin-side address intercept could remove the mmap requirement.
 
-**Stats:** `kernels_launched`, `busy_cycles`, `doorbell_writes`, `status_polls`, `latency_overrides`, `bad_offset_accesses`.
-
-**P2.b — deferred:**
-
-- **DMA path:** add `dma_iface` subcomponent slot and honor `dma_bytes_per_kernel` by issuing `StandardMem::Read` traffic to a shared DRAM bus during the BUSY window.
-- **Shared-bus SDL:** attach `cache_link_0`, `mmio_link_0`, and `dma_iface` to one `memHierarchy.Bus` in front of the DRAM controller (pattern from `balarBlock.buildTestCPU`).
-- **Coherence:** when wiring P3 / `balar.balarMMIO`, DMA and packet reads must observe CPU writeback data — target option (c): shared coherent bus so L1 snoops device reads.
-- **Wide payloads:** doorbell pointers fit in 16 bytes (`QuetzCommand::data`); whole-packet MMIO writes still need scatter/gather or a multi-write protocol.
+**Stats:** `kernels_launched`, `busy_cycles`, `doorbell_writes`, `status_polls`,
+`latency_overrides`, `doorbell_while_busy`, `irqs_raised`, `ops_rejected`,
+`wrong_direction_accesses`, and `bad_offset_accesses`.
 
 ### 4.4 Implementation problems
 

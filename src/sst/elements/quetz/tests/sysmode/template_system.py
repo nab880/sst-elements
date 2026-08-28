@@ -124,7 +124,8 @@ accel.addParams({
     "mmio_size": 0x400,
     "kernel_latency": ACCEL_LATENCY_CYCLES,
     "clock": "1GHz",
-    # A compute kernel requires blocking doorbells (+ mem_iface below).
+    # Choose blocking submit for this minimal template; a polling/IRQ guest may
+    # set 0. Either compute mode also requires mem_iface below.
     "doorbell_blocking": 1 if ACCEL_KERNEL else 0,
 })
 accel.enableAllStatistics()

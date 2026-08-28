@@ -45,6 +45,7 @@ libquetz_la_SOURCES = \
     quetz_region_table.h \
     quetz_region_handlers.cc \
     quetz_region_handlers.h \
+    quetz_accelerator_event_writer.h \
     quetz_gpu_device.cc \
     quetz_gpu_device.h \
     quetz_kernel_api.h \
@@ -225,6 +226,7 @@ EXTRA_DIST =	GETTING-STARTED.md \
 	tests/sysmode/basic_quetz_gpu_compute.py \
 	tests/sysmode/basic_quetz_gpu.py \
 	tests/sysmode/basic_quetz_mmio.py \
+	tests/sysmode/basic_quetz_raptor_fft_reference.py \
 	tests/sysmode/basic_quetz_sysmode.py \
 	tests/sysmode/firmware/arm_m7_hello \
 	tests/sysmode/firmware/bsp_torture \
@@ -318,6 +320,7 @@ EXTRA_DIST =	GETTING-STARTED.md \
 	tests/unit/doctest.h \
 	tests/unit/run_unit_tests.sh \
 	tests/unit/sst_stubs.h \
+	tests/unit/test_accelerator_event_writer.cc \
 	tests/unit/test_command_buffer.cc \
 	tests/unit/test_config_manager.cc \
 	tests/unit/test_decoder_aarch64.cc \

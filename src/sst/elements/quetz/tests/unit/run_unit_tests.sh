@@ -46,6 +46,7 @@ compile test_mem_issue_split.cc test_mem_issue_split
 compile test_balar_flush_range.cc test_balar_flush_range
 compile test_quetz_config.cc test_quetz_config
 compile test_command_buffer.cc test_command_buffer
+compile test_accelerator_event_writer.cc test_accelerator_event_writer
 compile test_config_manager.cc test_config_manager \
     "${QUETZ_DIR}/quetz_platform_profiles.cc"
 compile test_fft_compute.cc test_fft_compute
@@ -62,6 +63,7 @@ TESTS=(
     test_balar_flush_range
     test_quetz_config
     test_command_buffer
+    test_accelerator_event_writer
     test_config_manager
     test_fft_compute
     test_scale_offset

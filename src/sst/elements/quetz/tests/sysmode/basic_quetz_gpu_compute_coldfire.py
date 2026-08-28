@@ -174,8 +174,8 @@ gpu.addParams({
                  else (mmio_end - mmio_start + 1),
     "clock": os.environ.get("QUETZ_GPU_CLOCK", "1GHz"),
     "kernel_latency": int(os.environ.get("QUETZ_GPU_LATENCY", "5000")),
-    # Required when a kernel is loaded; override only to probe the device's
-    # ctor-time misconfiguration guard (kernel + doorbell_blocking=0 fatals).
+    # Blocking preserves the original demo. Set 0 to acknowledge the submit
+    # immediately and exercise guest STATUS polling through DMA writeback.
     "doorbell_blocking": int(os.environ.get("QUETZ_DOORBELL_BLOCKING", "1")),
     # Kernel DMA may only touch the SST-backed window: a guest-programmed
     # buffer address outside it rejects the op (gpu.ops_rejected) instead

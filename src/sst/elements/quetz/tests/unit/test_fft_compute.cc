@@ -1,6 +1,6 @@
-// Unit tests for the device-side radix-2 FFT (quetz_fft.h) that QuetzGpuDevice
-// runs in kernel_type=fft mode. The in-sim firmware test only checks an impulse
-// input, whose FFT is all-ones regardless of the twiddle factors; these tests
+// Unit tests for the device-side radix-2 FFT (quetz_fft.h) that
+// quetz.FFTKernel runs. The in-sim firmware test checks an impulse input, whose
+// FFT is all-ones regardless of the twiddle factors; these tests
 // validate the actual butterfly math against a naive DFT so a twiddle-factor
 // regression is caught here rather than slipping through the sim.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
@@ -8,6 +8,7 @@
 
 #include <cmath>
 #include <complex>
+#include <cstring>
 #include <vector>
 
 #include "../../quetz_fft.h"
@@ -45,6 +46,100 @@ double max_err_vs_dft(std::vector<QuetzCf> in) {
     }
     return e;
 }
+
+float f32_from_bits(uint32_t bits) {
+    float value;
+    std::memcpy(&value, &bits, sizeof(value));
+    return value;
+}
+
+std::vector<QuetzCf> raptor_reference_input() {
+    const float s = f32_from_bits(0x3f3504f3u); // binary32 sqrt(1/2)
+    const QuetzCf phases[] = {
+        { 1.0f,  0.0f}, { s,  s}, { 0.0f,  1.0f}, {-s,  s},
+        {-1.0f,  0.0f}, {-s, -s}, { 0.0f, -1.0f}, { s, -s},
+    };
+    std::vector<QuetzCf> input(256);
+    for (uint32_t n = 0; n < input.size(); n++)
+        input[n] = phases[n % 8u];
+    return input;
+}
+
+bool raptor_reference_output_matches(const std::vector<QuetzCf>& output) {
+    for (uint32_t k = 0; k < output.size(); k++) {
+        const float expected_real = k == output.size() / 8u ? 256.0f : 0.0f;
+        if (std::fabs(output[k].re - expected_real) > 0.001f ||
+            std::fabs(output[k].im) > 0.001f)
+            return false;
+    }
+    return true;
+}
+
+uint32_t fnv1a_network_word(uint32_t checksum, uint32_t word) {
+    for (uint32_t byte_index = 0; byte_index < 4u; byte_index++) {
+        uint32_t shift = 24u - byte_index * 8u;
+        checksum = (checksum ^ ((word >> shift) & 0xffu)) * 16777619u;
+    }
+    return checksum;
+}
+
+uint32_t canonical_reference_checksum(uint32_t peak_bin) {
+    uint32_t checksum = 2166136261u;
+    for (uint32_t k = 0; k < 256u; k++) {
+        checksum = fnv1a_network_word(
+            checksum, k == peak_bin ? 0x43800000u : 0u);
+        checksum = fnv1a_network_word(checksum, 0u);
+    }
+    return checksum;
+}
+
+// Deliberate mutation of the production radix-2 loop: every twiddle outside
+// {1, -i, -1, i} is replaced with zero. A useful reference vector must reject
+// this implementation; the previous four-phase vector did not.
+uint32_t fft_with_non_quadrant_twiddles_zeroed(QuetzCf* a, uint32_t n) {
+    uint32_t logn = 0;
+    while ((1u << logn) < n) logn++;
+
+    for (uint32_t i = 0; i < n; i++) {
+        uint32_t r = 0, x = i;
+        for (uint32_t b = 0; b < logn; b++) {
+            r = (r << 1) | (x & 1u);
+            x >>= 1;
+        }
+        if (r > i) {
+            QuetzCf tmp = a[i];
+            a[i] = a[r];
+            a[r] = tmp;
+        }
+    }
+
+    uint32_t active_mutations = 0;
+    for (uint32_t stage = 1; stage <= logn; stage++) {
+        uint32_t half = 1u << (stage - 1u);
+        for (uint32_t k = 0; k < n / 2u; k++) {
+            uint32_t j = k & (half - 1u);
+            uint32_t group = k >> (stage - 1u);
+            uint32_t i0 = group * (half << 1u) + j;
+            uint32_t i1 = i0 + half;
+            uint32_t twiddle_index = j << (logn - stage);
+            bool non_quadrant = n >= 4u && (twiddle_index % (n / 4u)) != 0u;
+            double angle = -2.0 * kPi * (double)twiddle_index / (double)n;
+            float wr = non_quadrant ? 0.0f : (float)std::cos(angle);
+            float wi = non_quadrant ? 0.0f : (float)std::sin(angle);
+            QuetzCf v = a[i1];
+            if (non_quadrant && (v.re != 0.0f || v.im != 0.0f))
+                active_mutations++;
+            float tr = wr * v.re - wi * v.im;
+            float ti = wr * v.im + wi * v.re;
+            QuetzCf u = a[i0];
+            a[i0].re = u.re + tr;
+            a[i0].im = u.im + ti;
+            a[i1].re = u.re - tr;
+            a[i1].im = u.im - ti;
+        }
+    }
+    return active_mutations;
+}
 } // namespace
 
 TEST_CASE("impulse -> all ones (bit-exact; matches the firmware check)") {
@@ -56,6 +151,54 @@ TEST_CASE("impulse -> all ones (bit-exact; matches the firmware check)") {
         CHECK(a[k].re == 1.0f);
         CHECK(a[k].im == 0.0f);
     }
+}
+
+TEST_CASE("Raptor reference eighth-rate complex tone selects forward bin") {
+    const uint32_t N = 256;
+    std::vector<QuetzCf> a = raptor_reference_input();
+    quetz_fft_radix2(a.data(), N);
+
+    uint32_t checksum = 2166136261u;
+    for (uint32_t k = 0; k < N; k++) {
+        const bool peak = k == N / 8u;
+        uint32_t real_bits;
+        uint32_t imag_bits;
+        std::memcpy(&real_bits, &a[k].re, sizeof(real_bits));
+        std::memcpy(&imag_bits, &a[k].im, sizeof(imag_bits));
+        const bool real_matches = peak
+            ? (real_bits & 0x80000000u) == 0u &&
+              (real_bits >= 0x43800000u
+                   ? real_bits - 0x43800000u <= 64u
+                   : 0x43800000u - real_bits <= 64u)
+            : (real_bits & 0x7fffffffu) <= 0x3a83126fu;
+        const bool imag_matches =
+            (imag_bits & 0x7fffffffu) <= 0x3a83126fu;
+        CHECK(real_matches);
+        CHECK(imag_matches);
+
+        const uint32_t canonical_real = peak ? 0x43800000u : 0u;
+        checksum = fnv1a_network_word(checksum, canonical_real);
+        checksum = fnv1a_network_word(checksum, 0u);
+    }
+    CHECK(checksum == 0xb9b06c06u);
+}
+
+TEST_CASE("Raptor reference checksum encodes peak-bin placement") {
+    const uint32_t bin32_checksum = canonical_reference_checksum(32u);
+    const uint32_t bin64_checksum = canonical_reference_checksum(64u);
+
+    CHECK(bin32_checksum == 0xb9b06c06u);
+    CHECK(bin64_checksum == 0x5087c806u);
+    CHECK(bin32_checksum != bin64_checksum);
+}
+
+TEST_CASE("Raptor reference rejects zeroed non-quadrant twiddles") {
+    std::vector<QuetzCf> a = raptor_reference_input();
+    uint32_t active_mutations =
+        fft_with_non_quadrant_twiddles_zeroed(a.data(), (uint32_t)a.size());
+
+    CHECK(active_mutations > 0u);
+    CHECK_FALSE(raptor_reference_output_matches(a));
 }
 
 TEST_CASE("DC -> N at bin 0, zero elsewhere") {

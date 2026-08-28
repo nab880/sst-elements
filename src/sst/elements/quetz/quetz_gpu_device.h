@@ -21,6 +21,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "quetz_accelerator_event_writer.h"
 #include "quetz_kernel_api.h"
 
 namespace SST {
@@ -47,11 +48,12 @@ public:
           "(used when no kernel is loaded, or when the loaded kernel returns "
           "no latency opinion)", "5000" },
         { "doorbell_blocking",
-          "(bool) If 1, defer the doorbell write response until the kernel "
-          "retires (mimics balar's blocked_response). Lets the Quetz async "
-          "engine's COMPLETED counter track real kernel completion. Default 0 "
-          "(respond immediately; guest polls REG_STATUS). Required when the "
-          "'kernel' slot is populated.", "0" },
+          "(bool) If 1, defer a non-posted doorbell write response until the kernel "
+          "retires (mimics balar's blocked_response). If 0, acknowledge an "
+          "accepted doorbell immediately while REG_STATUS remains busy until "
+          "DMA writeback completes; the guest polls REG_STATUS or "
+          "REG_KERNEL_ID. Posted writes have no response in either mode. "
+          "Default 0.", "0" },
         { "irq_line",
           "(int) Machine interrupt-controller input raised when an op "
           "retires. Level semantics with event counting: each retire adds one "
@@ -82,7 +84,18 @@ public:
           "'kernel' subcomponent at load — kernels take no endianness param "
           "of their own. Set alongside the QuetzCPU's window_big_endian=1 "
           "when the buffers live in a BE-packed SST window. Default 0 (LE).",
-          "0" })
+          "0" },
+        { "event_file",
+          "(string) Optional accelerator lifecycle JSONL output. Empty disables "
+          "event production. A configured file is truncated at construction; "
+          "every requested/completed/error record is flushed before the guest "
+          "can observe the corresponding terminal state.", "" },
+        { "event_source",
+          "(string) Event-schema identifier used as the lifecycle event source.",
+          "accelerator.quetz" },
+        { "event_operation",
+          "(string) Event-schema identifier naming the configured kernel operation.",
+          "kernel" })
 
     SST_ELI_DOCUMENT_PORTS(
         { "irq",
@@ -109,7 +122,10 @@ public:
         { "status_polls", "Reads of the status register", "requests", 1 },
         { "latency_overrides", "Writes to the latency-override register", "requests", 1 },
         { "doorbell_while_busy",
-          "Doorbell writes while BUSY (queued or dropped if queue full)", "requests", 1 },
+          "Pure-latency-mode doorbells while BUSY (queued or dropped if its "
+          "queue is full); a second kernel-mode submit is fatal and is not "
+          "counted here",
+          "requests", 1 },
         { "irqs_raised",
           "Completion IRQs raised (0->1 line transitions; irq_line >= 0 only)",
           "interrupts", 1 },
@@ -172,8 +188,11 @@ protected:
     void opOnWriteResp(Interfaces::StandardMem::WriteResp* resp);
     void opComputeAndStartBusy(); // input fully read: compute, then go BUSY
     void opBeginWriteback();      // busy done: DMA-write the result
-    void opFinish();              // writeback done: retire + release doorbell
+    void opFinish();              // writeback done: retire + release held response, if any
     void opReject(const char* why);  // abandon the op non-fatally
+    void emitOpRequested();
+    void emitOpCompleted();
+    void emitOpError();
     bool dmaRangeOk(uint64_t addr, uint64_t len) const;
     Output out;
 
@@ -222,7 +241,9 @@ protected:
     uint64_t op_in_bytes_;
     uint64_t op_dma_outstanding_;                    // in-flight mem requests
     uint64_t op_next_dma_off_;                       // next byte not yet issued
-    // held doorbell response for the whole op (released at opFinish)
+    AcceleratorEventWriter event_writer_;            // optional durable JSONL lifecycle
+    // Blocking-mode doorbell response held for the whole op; nullptr in
+    // nonblocking mode. Released at opFinish() or opReject().
     Interfaces::StandardMem::Request* op_doorbell_resp_;
     // map mem request id -> byte offset into op_in_ (for read reassembly)
     std::unordered_map<Interfaces::StandardMem::Request::id_t, uint64_t> op_req_off_;
