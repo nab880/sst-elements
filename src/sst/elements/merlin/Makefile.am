@@ -12,7 +12,9 @@ libsstmerlincollective_la_SOURCES = \
 	services/collective/collectiveTypes.h \
 	services/collective/collectiveServiceData.h \
 	services/collective/collectiveServiceData.cc \
-	services/collective/collectiveEndpoint.h
+	services/collective/collectiveEndpoint.h \
+	services/collective/staticCollectiveEndpoint.h \
+	services/collective/staticCollectiveEndpoint.cc
 libsstmerlincollective_la_LDFLAGS = -avoid-version
 
 compdir = $(pkglibdir)
@@ -161,7 +163,8 @@ nobase_sst_HEADERS = \
 	networkService.h \
 	services/collective/collectiveTypes.h \
 	services/collective/collectiveServiceData.h \
-	services/collective/collectiveEndpoint.h
+	services/collective/collectiveEndpoint.h \
+	services/collective/staticCollectiveEndpoint.h
 
 libmerlin_la_LDFLAGS = -module -avoid-version $(PYTHON_LDFLAGS)
 libmerlin_la_LIBADD = libsstmerlincollective.la

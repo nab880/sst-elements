@@ -534,30 +534,10 @@ void Nic::tryPublishCollectiveRoute()
         return;
     }
 
-    SimpleNetwork::NetworkServiceCapability capability;
-    constexpr SimpleNetwork::NetworkServiceFeatureMask required =
-        SimpleNetwork::SERVICE_FEATURE_SIDECAR_PRESERVATION |
-        SimpleNetwork::SERVICE_FEATURE_TRANSACTIONAL_TIMED_SEND |
-        SimpleNetwork::SERVICE_FEATURE_SERIALIZATION |
-        SimpleNetwork::SERVICE_FEATURE_INTERMEDIATE_TERMINATION_SAFE |
-        SimpleNetwork::SERVICE_FEATURE_FRESH_BASE_REQUEST_TAG_FIRST_RECEIVE;
-    const auto request_bits = staticCollectiveRequestBits(STATIC_COLLECTIVE_SIGNATURE_V1);
     const SimpleNetwork::nid_t physical_endpoint_id = m_linkControl->getEndpointID();
-    if ( !request_bits || m_linkBytesPerSec == 0 || physical_endpoint_id != m_myNodeId ||
-            !m_linkControl->queryServiceCapability(COLLECTIVE_SERVICE_ID, capability) ||
-            !capability.isValidFor(COLLECTIVE_SERVICE_ID) ||
-            (capability.features & required) != required ||
-            capability.min_schema_version > COLLECTIVE_SERVICE_SCHEMA_V1 ||
-            capability.max_schema_version < COLLECTIVE_SERVICE_SCHEMA_V1 ||
-            capability.request_data_token != CollectiveServiceData::DATA_TOKEN ||
-            capability.min_request_schema_version > CollectiveServiceData::MIN_SCHEMA_VERSION ||
-            capability.max_request_schema_version < CollectiveServiceData::MAX_SCHEMA_VERSION ||
-            capability.max_atomic_request_bits_by_vn.size() <=
-                static_cast<size_t>(collective->result_vn) ||
-            capability.max_atomic_request_bits_by_vn[collective->reduce_vn] <
-                *request_bits ||
-            capability.max_atomic_request_bits_by_vn[collective->result_vn] <
-                *request_bits ) {
+    if ( m_linkBytesPerSec == 0 || physical_endpoint_id != m_myNodeId ||
+            !supportsStaticCollectiveTransport(
+                *m_linkControl, collective->reduce_vn, collective->result_vn) ) {
         m_dbg.fatal(CALL_INFO, -1,
             "collectiveEnable=true but no validated collective service route is available\n");
     }

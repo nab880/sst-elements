@@ -11,9 +11,9 @@
 #include <sst/elements/merlin/hr_router/xbar_arb_rr.h>
 #include <sst/elements/merlin/interfaces/ExtendedRequest.h>
 #include <sst/elements/merlin/networkService.h>
-#include <sst/elements/merlin/services/collective/collectiveEndpoint.h>
 #include <sst/elements/merlin/services/collective/collectiveServiceData.h>
 #include <sst/elements/merlin/services/collective/merlinStaticCollectiveProcessor.h>
+#include <sst/elements/merlin/services/collective/staticCollectiveEndpoint.h>
 
 #include <sst/core/component.h>
 #include <sst/core/interfaces/simpleNetwork.h>
@@ -23,10 +23,9 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
-#include <limits>
 #include <deque>
+#include <limits>
 #include <memory>
-#include <optional>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
@@ -421,66 +420,44 @@ CollectivePending pending(const AcceptedParticipantHandle& owner, uint64_t invoc
     CollectivePending value;
     value.participant = owner;
     value.invocation_id = invocation;
-    value.signature = STATIC_COLLECTIVE_SIGNATURE_V1;
+    value.signature = { CollectiveOperation::Sum, CollectiveDatatype::F64, 1 };
     value.source = { reinterpret_cast<const uint8_t*>(&source), sizeof(source) };
     value.result = { reinterpret_cast<uint8_t*>(&result), sizeof(result) };
     value.completion = CollectiveCompletionToken(0, request, 1);
     return value;
 }
 
-class Endpoint final : public CollectiveEndpoint
+class Endpoint final : public StaticCollectiveEndpointBase
 {
 public:
-    bool supportsCollective(const CollectiveSignatureV1& signature) const override
+    bool install(const AcceptedParticipantHandle& value) { return installParticipant(value); }
+    void setReady(bool value) { ready = value; }
+    bool finish(uint64_t invocation, double result)
     {
-        return signature.valid() && signature == STATIC_COLLECTIVE_SIGNATURE_V1;
+        StaticCollectiveResult completed;
+        completed.route = acceptedParticipant().route;
+        completed.invocation_id = invocation;
+        completed.signature = STATIC_COLLECTIVE_SIGNATURE_V1;
+        completed.value.resize(sizeof(result));
+        std::memcpy(completed.value.data(), &result, sizeof(result));
+        return completeSuccess(completed);
     }
+    bool ready = false;
+    uint32_t commits = 0;
+    uint64_t committed_invocation = 0;
+    bool committed_value_valid = false;
 
-    bool bindParticipant(const AcceptedParticipantHandle& value, CollectiveCompletionSink& completion,
-        CollectiveReadySink& ready) override
+protected:
+    bool transportReady(const CollectiveSignatureV1&) const override { return ready; }
+    void commitContribution(const AcceptedParticipantHandle& participant,
+        StaticCollectiveContribution&& contribution) noexcept override
     {
-        if ( !value.valid() || participant_ != nullptr ) return false;
-        participant_ = &value;
-        completion_ = &completion;
-        ready_ = &ready;
-        return true;
+        ++commits;
+        committed_invocation = contribution.invocation_id;
+        committed_value_valid = contribution.valid() &&
+            contribution.route == participant.route &&
+            contribution.signature == STATIC_COLLECTIVE_SIGNATURE_V1;
     }
-    CollectiveSubmitResult trySubmitCollective(CollectivePending& value) override
-    {
-        if ( !value.readyForSubmit() || participant_ == nullptr ||
-             value.participant.route != participant_->route || !value.signature.valid() )
-            return CollectiveSubmitResult::Invalid;
-        if ( !supportsCollective(value.signature) ) return CollectiveSubmitResult::Unsupported;
-        if ( retry_ || token_ ) return CollectiveSubmitResult::Retry;
-        result_ = value.result;
-        invocation_ = value.invocation_id;
-        token_.emplace(value.consumeAfterAcceptance());
-        return CollectiveSubmitResult::Accepted;
-    }
-    void requestCollectiveReady(const AcceptedParticipantHandle& value,
-        const CollectiveSignatureV1& signature) override
-    {
-        if ( ready_ != nullptr && value.route == participant_->route && supportsCollective(signature) )
-            ready_->ready(value);
-    }
-    void setRetry(bool value) { retry_ = value; }
-    bool finish(uint64_t invocation, double value)
-    {
-        if ( !token_ || invocation != invocation_ || result_.bytes != sizeof(value) ) return false;
-        std::memcpy(result_.data, &value, sizeof(value));
-        completion_->complete(std::move(*token_), CollectiveCompletionStatus::Success);
-        token_.reset();
-        return true;
-    }
-
-private:
-    const AcceptedParticipantHandle* participant_ = nullptr;
-    CollectiveCompletionSink* completion_ = nullptr;
-    CollectiveReadySink* ready_ = nullptr;
-    std::optional<CollectiveCompletionToken> token_;
-    MutableBufferView result_;
-    uint64_t invocation_ = 0;
-    bool retry_ = false;
 };
 
 class Sink final : public CollectiveCompletionSink, public CollectiveReadySink
@@ -489,23 +466,40 @@ public:
     void complete(CollectiveCompletionToken&& token, CollectiveCompletionStatus status) override
     {
         ++completions;
-        request = token.nativeRequestId();
-        visible = observed != nullptr && *observed == expected;
-        success = status == CollectiveCompletionStatus::Success;
+        last_request = token.nativeRequestId();
+        visible = observed == nullptr || *observed == expected;
+        status_ok = status == CollectiveCompletionStatus::Success;
+        if ( complete_next != nullptr ) {
+            CollectivePending* next = std::exchange(complete_next, nullptr);
+            complete_submit = endpoint->trySubmitCollective(*next);
+        }
     }
-    void ready(const AcceptedParticipantHandle&) override { ++readies; }
+    void ready(const AcceptedParticipantHandle&) override
+    {
+        ++readies;
+        if ( ready_next != nullptr ) {
+            CollectivePending* next = std::exchange(ready_next, nullptr);
+            ready_submit = endpoint->trySubmitCollective(*next);
+        }
+    }
+    Endpoint* endpoint = nullptr;
+    CollectivePending* ready_next = nullptr;
+    CollectivePending* complete_next = nullptr;
     const double* observed = nullptr;
     double expected = 0;
-    uint64_t request = 0;
+    uint64_t last_request = 0;
     uint32_t completions = 0;
     uint32_t readies = 0;
+    CollectiveSubmitResult ready_submit = static_cast<CollectiveSubmitResult>(0);
+    CollectiveSubmitResult complete_submit = static_cast<CollectiveSubmitResult>(0);
     bool visible = false;
-    bool success = false;
+    bool status_ok = false;
 };
 
 void testCollectiveSignature()
 {
-    const CollectiveSignatureV1 scalar = STATIC_COLLECTIVE_SIGNATURE_V1;
+    const CollectiveSignatureV1 scalar {
+        CollectiveOperation::Sum, CollectiveDatatype::F64, 1 };
     const CollectiveSignatureV1 vector {
         CollectiveOperation::Max, CollectiveDatatype::I32, 128 };
     const CollectiveSignatureV1 overflow { CollectiveOperation::Min, CollectiveDatatype::U64,
@@ -517,35 +511,90 @@ void testCollectiveSignature()
         "collective signature validation or sizing changed");
 }
 
-void testEndpoint()
+void testStaticEndpoint()
 {
-    const AcceptedParticipantHandle owner = participant();
     Endpoint endpoint;
+    SST::Merlin::Test::require(endpoint.install(participant()), "static endpoint install failed");
+    const AcceptedParticipantHandle* installed = endpoint.participant(0);
+    SST::Merlin::Test::require(installed != nullptr, "static endpoint participant missing");
     Sink sink;
-    SST::Merlin::Test::require(endpoint.bindParticipant(owner, sink, sink),
-        "collective endpoint binding failed");
-    double source = 2.0, result = -1.0;
-    endpoint.setRetry(true);
-    CollectivePending retry = pending(owner, 7, 41, source, result);
-    SST::Merlin::Test::require(endpoint.trySubmitCollective(retry) == CollectiveSubmitResult::Retry &&
-            retry.readyForSubmit(), "Retry consumed collective ownership");
-    endpoint.requestCollectiveReady(owner, retry.signature);
-    SST::Merlin::Test::require(sink.readies == 1, "collective ready callback was not delivered");
-    CollectivePending unsupported = pending(owner, 7, 42, source, result);
-    unsupported.signature.operation = CollectiveOperation::Min;
-    SST::Merlin::Test::require(endpoint.trySubmitCollective(unsupported) ==
-            CollectiveSubmitResult::Unsupported && unsupported.readyForSubmit(),
-        "Unsupported consumed collective ownership");
-    endpoint.setRetry(false);
-    CollectivePending accepted = pending(owner, 7, 43, source, result);
-    SST::Merlin::Test::require(endpoint.trySubmitCollective(accepted) == CollectiveSubmitResult::Accepted &&
-            !accepted.readyForSubmit(), "Accepted did not consume collective ownership");
-    sink.observed = &result;
+    sink.endpoint = &endpoint;
+    AcceptedParticipantHandle copy = *installed;
+    SST::Merlin::Test::require(!endpoint.bindParticipant(copy, sink, sink) &&
+            endpoint.bindParticipant(*installed, sink, sink),
+        "static endpoint binding identity changed");
+
+    double unsupported_source = 2.0, unsupported_result = -1.0;
+    CollectivePending unsupported = pending(
+        *installed, 6, 40, unsupported_source, unsupported_result);
+    unsupported.signature = {
+        CollectiveOperation::Max, CollectiveDatatype::I32, 128 };
+    SST::Merlin::Test::require(
+        endpoint.supportsCollective(unsupported.signature) == false &&
+            endpoint.trySubmitCollective(unsupported) == CollectiveSubmitResult::Unsupported &&
+            unsupported.readyForSubmit(),
+        "unsupported collective signature consumed ownership");
+
+    CollectivePending malformed = pending(
+        *installed, 6, 40, unsupported_source, unsupported_result);
+    malformed.signature.element_count = 0;
+    SST::Merlin::Test::require(
+        endpoint.trySubmitCollective(malformed) == CollectiveSubmitResult::Invalid &&
+            malformed.readyForSubmit(),
+        "malformed collective signature was not rejected");
+
+    double source1 = 2.0, result1 = -1.0;
+    CollectivePending first = pending(*installed, 7, 41, source1, result1);
+    SST::Merlin::Test::require(endpoint.trySubmitCollective(first) == CollectiveSubmitResult::Retry &&
+            first.readyForSubmit(), "unready static endpoint consumed Retry ownership");
+    endpoint.setReady(true);
+    sink.ready_next = &first;
+    endpoint.requestCollectiveReady(*installed, first.signature);
+    SST::Merlin::Test::require(sink.readies == 1 && sink.ready_submit == CollectiveSubmitResult::Accepted &&
+            !first.readyForSubmit() && endpoint.commits == 1 && endpoint.committed_value_valid,
+        "ready callback was not reentrant after arming");
+
+    double source2 = 3.0, result2 = -1.0;
+    CollectivePending second = pending(*installed, 8, 42, source2, result2);
+    SST::Merlin::Test::require(endpoint.trySubmitCollective(second) == CollectiveSubmitResult::Retry &&
+            second.readyForSubmit(), "active static endpoint consumed Retry ownership");
+    sink.observed = &result1;
     sink.expected = 9.0;
-    SST::Merlin::Test::require(endpoint.finish(7, 9.0) && !endpoint.finish(7, 10.0) &&
-            sink.completions == 1 && sink.request == 43 && sink.visible && sink.success,
-        "collective completion was not visible and exactly once");
+    sink.complete_next = &second;
+    SST::Merlin::Test::require(endpoint.finish(7, 9.0) && result1 == 9.0 && sink.visible && sink.status_ok &&
+            sink.last_request == 41 && sink.complete_submit == CollectiveSubmitResult::Accepted &&
+            endpoint.commits == 2 && endpoint.committed_invocation == 8,
+        "completion did not publish before reentrant submission");
+    SST::Merlin::Test::require(endpoint.finish(8, 10.0) && result2 == 10.0 && endpoint.quiescent(),
+        "reentrant static invocation did not complete");
+
+    double replay_result = -1.0;
+    CollectivePending replay = pending(*installed, 7, 43, source1, replay_result);
+    SST::Merlin::Test::require(endpoint.trySubmitCollective(replay) == CollectiveSubmitResult::Invalid &&
+            replay.readyForSubmit(), "retired static invocation reopened or consumed ownership");
 }
+
+class Host final : public NetworkServiceHost
+{
+public:
+    bool supportsNetworkServiceOutput(const NetworkServiceOutputSpec& spec) const override
+    {
+        return spec.valid() && spec.route_vn < 2 && spec.output_port < 3 &&
+               spec.output_vc == spec.route_vn &&
+               spec.size_in_bits == CollectiveServiceData::MODELED_REQUEST_BITS && spec.size_in_flits == 13;
+    }
+    bool tryEnqueueNetworkServiceOutput(NetworkServiceID service, NetworkServiceSyntheticPacket& packet) override
+    {
+        SST::Merlin::Test::require(service == CollectiveServiceData::SERVICE_ID, "wrong static service ID");
+        if ( packets.size() >= capacity ) return false;
+        packets.push_back(std::move(packet));
+        return true;
+    }
+    void wakeNetworkServiceProcessor() override { ++wakes; }
+    size_t capacity = 0;
+    uint32_t wakes = 0;
+    std::deque<NetworkServiceSyntheticPacket> packets;
+};
 
 RouteIdV1 route() { return { 1, 1 }; }
 
@@ -587,28 +636,6 @@ void testServiceDataContract()
             decoded_data->value == bytes && request_decoded.dest == 7 && request_decoded.vn == 1,
         "Request clone or serialization lost the collective sidecar");
 }
-
-class Host final : public NetworkServiceHost
-{
-public:
-    bool supportsNetworkServiceOutput(const NetworkServiceOutputSpec& spec) const override
-    {
-        return spec.valid() && spec.route_vn < 2 && spec.output_port < 3 &&
-               spec.output_vc == spec.route_vn &&
-               spec.size_in_bits == CollectiveServiceData::MODELED_REQUEST_BITS && spec.size_in_flits == 13;
-    }
-    bool tryEnqueueNetworkServiceOutput(NetworkServiceID service, NetworkServiceSyntheticPacket& packet) override
-    {
-        SST::Merlin::Test::require(service == CollectiveServiceData::SERVICE_ID, "wrong static service ID");
-        if ( packets.size() >= capacity ) return false;
-        packets.push_back(std::move(packet));
-        return true;
-    }
-    void wakeNetworkServiceProcessor() override { ++wakes; }
-    size_t capacity = 0;
-    uint32_t wakes = 0;
-    std::deque<NetworkServiceSyntheticPacket> packets;
-};
 
 MerlinStaticCollectiveRouteProjection projection()
 {
@@ -706,7 +733,7 @@ public:
             SST::Merlin::Test::testOwnership();
             SST::Merlin::Test::testRoundRobin();
             testCollectiveSignature();
-            testEndpoint();
+            testStaticEndpoint();
             testServiceDataContract();
             testStaticProcessor();
         }
