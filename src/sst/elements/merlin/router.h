@@ -756,6 +756,11 @@ public:
 
     // Keep optional extensions after every released virtual so existing
     // external PortInterface vtable slots retain their positions.
+    /** Construction-time facts used to reject static service routes that can never progress. */
+    virtual bool isConnected() const { return true; }
+    virtual int getFixedOutputCapacityInFlits() const { return std::numeric_limits<int>::max(); }
+    /** -1 before initialization; otherwise the immutable initial downstream credits for this VC. */
+    virtual int getFixedDownstreamCapacityInFlits(int) const { return -1; }
     /** Disabled defaults preserve existing external PortInterface subclasses. */
     virtual const internal_router_event* inspectNetworkServiceHead(int) const { return nullptr; }
     /** Remove and return exactly expected, or return null without modifying the queue. */

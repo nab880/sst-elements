@@ -11,8 +11,8 @@
 #include <sst/core/interfaces/simpleNetwork.h>
 #include <sst/core/subcomponent.h>
 
+#include <cstddef>
 #include <cstdint>
-#include <exception>
 #include <memory>
 
 namespace SST::Merlin {
@@ -116,10 +116,29 @@ struct NetworkServiceSyntheticPacket
     bool valid(NetworkServiceID service_id) const;
 };
 
+/** Immutable transport requirements used to reject bad static routes before timed execution. */
+struct NetworkServiceOutputSpec
+{
+    int    route_vn      = -1;
+    int    output_port   = -1;
+    int    output_vc     = -1;
+    size_t size_in_bits  = 0;
+    int    size_in_flits = 0;
+
+    constexpr bool valid() const
+    {
+        return route_vn >= 0 && output_port >= 0 && output_vc >= 0 && size_in_bits > 0 &&
+               size_in_flits > 0;
+    }
+};
+
 class NetworkServiceHost
 {
 public:
     virtual ~NetworkServiceHost() = default;
+
+    /** Pure validation: no queue-capacity check and no ownership transfer. */
+    virtual bool supportsNetworkServiceOutput(const NetworkServiceOutputSpec& spec) const = 0;
 
     /** Consumes packet.request only on success. */
     virtual bool tryEnqueueNetworkServiceOutput(
@@ -153,6 +172,8 @@ public:
     {
         return { getServiceID(), 0, 0, 0 };
     }
+    /** Re-check transport facts learned during init before timed execution. */
+    virtual bool validateInstalledTransport() const { return true; }
     /** Inspect only; implementations must not mutate processor or router state. */
     virtual NetworkServiceDecision inspect(const NetworkServiceIngress& ingress) const = 0;
     /** Terminal ownership transfer after the router dequeues the exact accepted head. */
@@ -165,38 +186,6 @@ public:
     }
 
     ImplementVirtualSerializable(SST::Merlin::NetworkServiceProcessor)
-};
-
-/** Generic processor used to validate transparent tagged carriage. */
-class NetworkServicePassProcessor final : public NetworkServiceProcessor
-{
-public:
-    SST_ELI_REGISTER_SUBCOMPONENT(NetworkServicePassProcessor, "merlin", "network_service_pass",
-        SST_ELI_ELEMENT_VERSION(1, 0, 0), "Pass tagged packets through ordinary Merlin routing",
-        SST::Merlin::NetworkServiceProcessor)
-
-    SST_ELI_DOCUMENT_PARAMS(
-        { "service_id", "Nonzero 16-bit network-service ID to pass", "" }
-    )
-
-    NetworkServicePassProcessor(ComponentId_t id, Params& params, NetworkServiceHost* host);
-    NetworkServicePassProcessor() = default;
-
-    NetworkServiceID getServiceID() const override { return service_id_; }
-    NetworkServiceDecision inspect(const NetworkServiceIngress& ingress) const override;
-    void consume(NetworkServiceOwnedIngress) noexcept override { std::terminate(); }
-    bool hasScheduledWork() const override { return false; }
-
-    void serialize_order(SST::Core::Serialization::serializer& ser) override
-    {
-        NetworkServiceProcessor::serialize_order(ser);
-        SST_SER(service_id_);
-    }
-
-private:
-    NetworkServiceID service_id_ = SST::Interfaces::SimpleNetwork::NETWORK_SERVICE_NONE;
-
-    ImplementSerializable(SST::Merlin::NetworkServicePassProcessor)
 };
 
 } // namespace SST::Merlin

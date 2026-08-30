@@ -6,6 +6,7 @@
 // All rights reserved.
 
 #include "networkService.h"
+#include "networkServicePass.h"
 
 #include "router.h"
 

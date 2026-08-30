@@ -247,6 +247,7 @@ public:
     void serialize_order(SST::Core::Serialization::serializer& ser) override;
     ImplementSerializable(SST::Merlin::hr_router)
 
+    bool supportsNetworkServiceOutput(const NetworkServiceOutputSpec& spec) const override;
     bool tryEnqueueNetworkServiceOutput(
         NetworkServiceID service_id, NetworkServiceSyntheticPacket& packet) override;
     void wakeNetworkServiceProcessor() override;

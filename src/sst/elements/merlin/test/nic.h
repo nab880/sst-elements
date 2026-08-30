@@ -46,6 +46,7 @@ public:
     SST_ELI_DOCUMENT_PARAMS(
         {"id",           "Network ID of endpoint."},
         {"num_peers",    "Total number of endpoints in network."},
+        {"num_vns",      "Number of virtual networks requested from networkIF.", "1"},
         {"num_messages", "Total number of messages to send to each endpoint."},
         {"message_size", "Size of each message to be sent specified in either b or B (can include SI prefix)."},
         {"send_untimed_broadcast",   "Controls whether data is sent in init and complete.","false"},

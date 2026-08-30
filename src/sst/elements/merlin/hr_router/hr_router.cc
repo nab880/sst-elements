@@ -633,28 +633,46 @@ hr_router::networkServiceHeadRemoved()
 }
 
 bool
-hr_router::tryEnqueueNetworkServiceOutput(
-    NetworkServiceID service_id, NetworkServiceSyntheticPacket& packet)
+hr_router::supportsNetworkServiceOutput(const NetworkServiceOutputSpec& spec) const
 {
-    if ( network_service == nullptr || network_service->requester == nullptr ||
-         service_id != network_service->processor->getServiceID() || !packet.valid(service_id) ||
-         packet.route_vn >= num_vns || packet.output_port >= num_ports || packet.output_vc >= num_vcs ||
-         (topo->getPortState(packet.output_port) != Topology::R2N &&
-             topo->getPortState(packet.output_port) != Topology::R2R) ||
-         !network_service->requester->canEnqueue(packet.output_vc) ) {
+    const int downstream_capacity =
+        spec.output_port >= 0 && spec.output_port < num_ports && ports != nullptr &&
+                ports[spec.output_port] != nullptr ?
+            ports[spec.output_port]->getFixedDownstreamCapacityInFlits(spec.output_vc) : 0;
+    if ( !spec.valid() || spec.route_vn >= num_vns || spec.output_port >= num_ports ||
+         spec.output_vc >= num_vcs || flit_size_bits <= 0 ||
+         ports == nullptr || ports[spec.output_port] == nullptr ||
+         !ports[spec.output_port]->isConnected() ||
+         spec.size_in_flits > ports[spec.output_port]->getFixedOutputCapacityInFlits() ||
+         downstream_capacity == 0 ||
+         (downstream_capacity > 0 && spec.size_in_flits > downstream_capacity) ||
+         (topo->getPortState(spec.output_port) != Topology::R2N &&
+             topo->getPortState(spec.output_port) != Topology::R2R) ) {
         return false;
     }
 
     int64_t first_vc = 0;
-    for ( int vn = 0; vn < packet.route_vn; ++vn ) first_vc += vcs_per_vn[static_cast<size_t>(vn)];
-    const int64_t end_vc = first_vc + vcs_per_vn[static_cast<size_t>(packet.route_vn)];
-    if ( packet.output_vc < first_vc || packet.output_vc >= end_vc ) return false;
+    for ( int vn = 0; vn < spec.route_vn; ++vn ) first_vc += vcs_per_vn[static_cast<size_t>(vn)];
+    const int64_t end_vc = first_vc + vcs_per_vn[static_cast<size_t>(spec.route_vn)];
+    if ( spec.output_vc < first_vc || spec.output_vc >= end_vc ) return false;
 
     const size_t flit_bits = static_cast<size_t>(flit_size_bits);
-    if ( packet.request->size_in_bits > std::numeric_limits<size_t>::max() - (flit_bits - 1) ) return false;
-    const size_t required_flits = (packet.request->size_in_bits + flit_bits - 1) / flit_bits;
-    if ( required_flits == 0 || required_flits > static_cast<size_t>(std::numeric_limits<int>::max()) ||
-         packet.size_in_flits != static_cast<int>(required_flits) ) {
+    if ( spec.size_in_bits > std::numeric_limits<size_t>::max() - (flit_bits - 1) ) return false;
+    const size_t required_flits = (spec.size_in_bits + flit_bits - 1) / flit_bits;
+    return required_flits != 0 && required_flits <= static_cast<size_t>(std::numeric_limits<int>::max()) &&
+           spec.size_in_flits == static_cast<int>(required_flits);
+}
+
+bool
+hr_router::tryEnqueueNetworkServiceOutput(
+    NetworkServiceID service_id, NetworkServiceSyntheticPacket& packet)
+{
+    const NetworkServiceOutputSpec spec { packet.route_vn, packet.output_port, packet.output_vc,
+        packet.request ? packet.request->size_in_bits : 0, packet.size_in_flits };
+    if ( network_service == nullptr || network_service->requester == nullptr ||
+         service_id != network_service->processor->getServiceID() || !packet.valid(service_id) ||
+         !supportsNetworkServiceOutput(spec) ||
+         !network_service->requester->canEnqueue(packet.output_vc) ) {
         return false;
     }
 
@@ -978,6 +996,10 @@ void hr_router::setup()
 {
     for ( int i = 0; i < num_ports; i++ ) {
     	ports[i]->setup();
+    }
+    if ( network_service && !network_service->processor->validateInstalledTransport() ) {
+        merlin_abort.fatal(CALL_INFO, 1,
+            "Network-service processor transport is unsupported by initialized downstream credits\n");
     }
 }
 

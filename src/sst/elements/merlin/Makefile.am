@@ -12,7 +12,6 @@ libsstmerlincollective_la_SOURCES = \
 	services/collective/collectiveTypes.h \
 	services/collective/collectiveServiceData.h \
 	services/collective/collectiveServiceData.cc \
-	services/collective/collectiveEndpoint.h \
 	services/collective/collectiveEndpoint.h
 libsstmerlincollective_la_LDFLAGS = -avoid-version
 
@@ -25,6 +24,9 @@ libmerlin_la_SOURCES = \
 	router.h \
 	networkService.h \
 	networkService.cc \
+	networkServicePass.h \
+	services/collective/merlinStaticCollectiveProcessor.h \
+	services/collective/merlinStaticCollectiveProcessor.cc \
 	bridge.h \
 	background_traffic/background_traffic.h \
 	background_traffic/background_traffic.cc \
@@ -38,6 +40,7 @@ libmerlin_la_SOURCES = \
 	test/nic.h \
 	test/nic.cc \
 	test/collective/contractTest.cc \
+	test/collective/merlinStaticCollectiveProcessorTest.cc \
 	test/route_test/route_test.h \
 	test/route_test/route_test.cc \
 	test/pt2pt/pt2pt_test.h \
@@ -104,6 +107,7 @@ libmerlin_la_SOURCES = \
 	pymerlin-base.py \
 	pymerlin-endpoint.py \
 	pymerlin-router.py \
+	pymerlin-collective.py \
 	interfaces/pymerlin-interface.py \
 	target_generator/pymerlin-targetgen.py \
 	topology/pymerlin-topo-any.py \
@@ -116,8 +120,6 @@ libmerlin_la_SOURCES = \
 
 EXTRA_DIST = \
 	tests/testsuite_default_merlin.py \
-	tests/testsuite_default_collective.py \
-	tests/collective_contract.py \
 	tests/hyperx_128_test.py \
 	tests/dragon_128_test.py \
 	tests/dragon_72_test.py \
@@ -134,6 +136,12 @@ EXTRA_DIST = \
 	tests/polarfly_455_test.py \
 	tests/polarstar_504_test.py \
 	tests/network_service_model.py \
+	tests/testsuite_default_collective.py \
+	tests/collective_contract.py \
+	tests/merlin_static_plan_contract.py \
+	tests/merlin_static_ordinary_baseline.py \
+	tests/merlin_static_processor_contract.py \
+	services/collective/README.md \
 	tests/refFiles/test_merlin_dragon_128_platform_test.out \
 	tests/refFiles/test_merlin_dragon_128_platform_test_cm.out \
 	tests/refFiles/test_merlin_dragon_128_test.out \
@@ -147,6 +155,7 @@ EXTRA_DIST = \
 	tests/refFiles/test_merlin_torus_5_trafficgen.out \
 	tests/refFiles/test_merlin_torus_64_test.out \
 	tests/refFiles/test_merlin_polarfly_455_test.out \
+	tests/refFiles/merlin_static_processor_contract.out \
 	tests/refFiles/test_merlin_polarstar_504_test.out
 
 sstdir = $(includedir)/sst/elements/merlin
@@ -165,6 +174,7 @@ BUILT_SOURCES = \
 	pymerlin-base.inc \
 	pymerlin-endpoint.inc \
 	pymerlin-router.inc \
+	pymerlin-collective.inc \
 	interfaces/pymerlin-interface.inc \
 	target_generator/pymerlin-targetgen.inc \
 	topology/pymerlin-topo-dragonfly.inc \
