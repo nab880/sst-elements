@@ -14,47 +14,21 @@
 
 namespace SST::Merlin {
 
-NetworkServiceApplyResult
-applyNetworkServicePrepared(NetworkServiceIngressQueue& queue, int vc,
-    const NetworkServiceHeadIdentity& expected, NetworkServicePrepared&& prepared,
-    uint64_t& opaque_diagnostic) noexcept
+NetworkServiceTakeResult
+takeNetworkServiceIngressExpected(NetworkServiceIngressQueue& queue, int input_port, int input_vc,
+    const internal_router_event* expected, NetworkServiceOwnedIngress& ingress) noexcept
 {
-    opaque_diagnostic = prepared.opaque_diagnostic;
-    if ( !expected.valid() || !isValid(prepared.disposition) ) {
-        if ( prepared.reservation ) prepared.reservation->rollback();
-        return NetworkServiceApplyResult::InvalidPrepared;
+    if ( expected == nullptr || input_port < 0 || input_vc < 0 || ingress.event ) {
+        return NetworkServiceTakeResult::InvalidExpected;
     }
-
-    if ( prepared.disposition != NetworkServiceDisposition::Accept && prepared.reservation ) {
-        prepared.reservation->rollback();
-        return NetworkServiceApplyResult::InvalidPrepared;
-    }
-
-    switch ( prepared.disposition ) {
-    case NetworkServiceDisposition::Pass:
-        return NetworkServiceApplyResult::Passed;
-    case NetworkServiceDisposition::Busy:
-        return NetworkServiceApplyResult::Busy;
-    case NetworkServiceDisposition::Accept:
-    {
-        if ( !prepared.reservation ) return NetworkServiceApplyResult::InvalidPrepared;
-        std::unique_ptr<internal_router_event> event(queue.recvNetworkServiceExpected(vc, expected));
-        if ( !event || event.get() != expected.event ) {
-            prepared.reservation->rollback();
-            return event ? NetworkServiceApplyResult::InvalidPrepared : NetworkServiceApplyResult::HeadChanged;
-        }
-        prepared.reservation->commit(std::move(event));
-        return NetworkServiceApplyResult::Accepted;
-    }
-    case NetworkServiceDisposition::Reject:
-    {
-        std::unique_ptr<internal_router_event> event(queue.recvNetworkServiceExpected(vc, expected));
-        if ( !event ) return NetworkServiceApplyResult::HeadChanged;
-        if ( event.get() != expected.event ) return NetworkServiceApplyResult::InvalidPrepared;
-        return NetworkServiceApplyResult::Rejected;
-    }
-    }
-    return NetworkServiceApplyResult::InvalidPrepared;
+    std::unique_ptr<internal_router_event> event(
+        queue.recvNetworkServiceExpected(input_vc, expected));
+    if ( !event ) return NetworkServiceTakeResult::HeadChanged;
+    if ( event.get() != expected ) return NetworkServiceTakeResult::InvalidExpected;
+    ingress.input_port = input_port;
+    ingress.input_vc = input_vc;
+    ingress.event = std::move(event);
+    return NetworkServiceTakeResult::Taken;
 }
 
 bool
@@ -79,15 +53,15 @@ NetworkServicePassProcessor::NetworkServicePassProcessor(
     service_id_ = static_cast<NetworkServiceID>(configured_id);
 }
 
-NetworkServicePrepared
-NetworkServicePassProcessor::prepare(const NetworkServiceIngress& ingress)
+NetworkServiceDecision
+NetworkServicePassProcessor::inspect(const NetworkServiceIngress& ingress) const
 {
-    if ( !ingress.head.valid() || ingress.event == nullptr || ingress.event != ingress.head.event ) {
-        return { NetworkServiceDisposition::Reject, {}, 1 };
+    if ( ingress.input_port < 0 || ingress.input_vc < 0 || ingress.event == nullptr ) {
+        return { NetworkServiceDisposition::Reject, 1 };
     }
     const auto* request = ingress.event->inspectRequest();
     if ( request == nullptr || request->getServiceID() != service_id_ ) {
-        return { NetworkServiceDisposition::Reject, {}, 2 };
+        return { NetworkServiceDisposition::Reject, 2 };
     }
     return { NetworkServiceDisposition::Pass };
 }

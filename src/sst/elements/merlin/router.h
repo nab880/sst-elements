@@ -757,9 +757,10 @@ public:
     // Keep optional extensions after every released virtual so existing
     // external PortInterface vtable slots retain their positions.
     /** Disabled defaults preserve existing external PortInterface subclasses. */
-    virtual NetworkServiceHeadIdentity inspectNetworkServiceHead(int) const { return {}; }
+    virtual const internal_router_event* inspectNetworkServiceHead(int) const { return nullptr; }
+    /** Remove and return exactly expected, or return null without modifying the queue. */
     virtual internal_router_event* recvNetworkServiceExpected(
-        int, const NetworkServiceHeadIdentity&) { return nullptr; }
+        int, const internal_router_event*) { return nullptr; }
 
     class OutputArbitration : public SubComponent {
     public:

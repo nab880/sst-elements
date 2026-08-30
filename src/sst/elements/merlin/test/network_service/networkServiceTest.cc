@@ -78,63 +78,28 @@ class FakeIngressQueue final : public NetworkServiceIngressQueue
 public:
     explicit FakeIngressQueue(std::unique_ptr<internal_router_event> event) : event_(std::move(event)) {}
 
-    NetworkServiceHeadIdentity inspectNetworkServiceHead(int vc) const override
+    const internal_router_event* inspectNetworkServiceHead(int vc) const override
     {
-        if ( vc != kTestVC || !event_ ) return {};
-        return { event_.get(), generation_ };
+        return vc == kTestVC ? event_.get() : nullptr;
     }
 
     internal_router_event* recvNetworkServiceExpected(
-        int vc, const NetworkServiceHeadIdentity& expected) override
+        int vc, const internal_router_event* expected) override
     {
         ++recv_calls_;
-        const NetworkServiceHeadIdentity actual = inspectNetworkServiceHead(vc);
-        if ( !expected.valid() || actual.event != expected.event || actual.generation != expected.generation ) {
-            return nullptr;
-        }
-        advanceGeneration();
+        if ( expected == nullptr || inspectNetworkServiceHead(vc) != expected ) return nullptr;
         return event_.release();
     }
 
-    void makeExpectedStale() { advanceGeneration(); }
+    void replace(std::unique_ptr<internal_router_event> event) { event_ = std::move(event); }
 
     bool owns(const internal_router_event* event) const { return event_.get() == event; }
     bool empty() const { return !event_; }
     int recvCalls() const { return recv_calls_; }
 
 private:
-    void advanceGeneration()
-    {
-        if ( ++generation_ == 0 ) ++generation_;
-    }
-
     std::unique_ptr<internal_router_event> event_;
-    uint64_t generation_ = 1;
     int recv_calls_ = 0;
-};
-
-struct ReservationState
-{
-    int commits = 0;
-    int rollbacks = 0;
-    std::unique_ptr<internal_router_event> committed_event;
-};
-
-class TrackingReservation final : public NetworkServiceReservation
-{
-public:
-    explicit TrackingReservation(std::shared_ptr<ReservationState> state) : state_(std::move(state)) {}
-
-    void commit(std::unique_ptr<internal_router_event> event) noexcept override
-    {
-        ++state_->commits;
-        state_->committed_event = std::move(event);
-    }
-
-    void rollback() noexcept override { ++state_->rollbacks; }
-
-private:
-    std::shared_ptr<ReservationState> state_;
 };
 
 std::unique_ptr<internal_router_event>
@@ -181,26 +146,15 @@ makeArbitrationEvent(int next_port = 0)
 void
 testPassAndBusy()
 {
-    int destructions = 0;
-    FakeIngressQueue queue(makeTrackedEvent(destructions));
-    const NetworkServiceHeadIdentity expected = queue.inspectNetworkServiceHead(kTestVC);
-
-    uint64_t diagnostic = 0;
-    NetworkServicePrepared pass(NetworkServiceDisposition::Pass, {}, 0x11);
-    require(applyNetworkServicePrepared(queue, kTestVC, expected, std::move(pass), diagnostic) ==
-            NetworkServiceApplyResult::Passed,
-        "PASS returned the wrong apply result");
-    require(diagnostic == 0x11, "PASS did not preserve its opaque diagnostic");
-    require(queue.recvCalls() == 0 && queue.owns(expected.event) && destructions == 0,
-        "PASS changed queue ownership");
-
-    NetworkServicePrepared busy(NetworkServiceDisposition::Busy, {}, 0x22);
-    require(applyNetworkServicePrepared(queue, kTestVC, expected, std::move(busy), diagnostic) ==
-            NetworkServiceApplyResult::Busy,
-        "BUSY returned the wrong apply result");
-    require(diagnostic == 0x22, "BUSY did not preserve its opaque diagnostic");
-    require(queue.recvCalls() == 0 && queue.owns(expected.event) && destructions == 0,
-        "BUSY changed queue ownership");
+    const NetworkServiceDecision pass { NetworkServiceDisposition::Pass, 0x11 };
+    const NetworkServiceDecision busy { NetworkServiceDisposition::Busy, 0x22 };
+    require(isValid(pass.disposition) && pass.opaque_diagnostic == 0x11,
+        "PASS decision did not preserve its disposition or diagnostic");
+    require(isValid(busy.disposition) && busy.opaque_diagnostic == 0x22,
+        "BUSY decision did not preserve its disposition or diagnostic");
+    require(!isValid(static_cast<NetworkServiceDisposition>(0)) &&
+            !isValid(static_cast<NetworkServiceDisposition>(5)),
+        "invalid dispositions were accepted");
 }
 
 void
@@ -208,46 +162,38 @@ testAccept()
 {
     int destructions = 0;
     FakeIngressQueue queue(makeTrackedEvent(destructions));
-    const NetworkServiceHeadIdentity expected = queue.inspectNetworkServiceHead(kTestVC);
-    auto state = std::make_shared<ReservationState>();
-
-    uint64_t diagnostic = 0;
-    NetworkServicePrepared accept(NetworkServiceDisposition::Accept,
-        std::make_unique<TrackingReservation>(state), 0x33);
-    require(applyNetworkServicePrepared(queue, kTestVC, expected, std::move(accept), diagnostic) ==
-            NetworkServiceApplyResult::Accepted,
-        "ACCEPT returned the wrong apply result");
-    require(diagnostic == 0x33, "ACCEPT did not preserve its opaque diagnostic");
+    const internal_router_event* expected = queue.inspectNetworkServiceHead(kTestVC);
+    NetworkServiceOwnedIngress owned;
+    require(takeNetworkServiceIngressExpected(queue, 3, kTestVC, expected, owned) ==
+            NetworkServiceTakeResult::Taken,
+        "accepted head was not taken");
     require(queue.recvCalls() == 1 && queue.empty(), "ACCEPT did not dequeue exactly once");
-    require(state->commits == 1 && state->rollbacks == 0,
-        "ACCEPT did not commit its reservation exactly once");
-    require(state->committed_event.get() == expected.event && destructions == 0,
-        "ACCEPT did not transfer the exact head to its reservation");
+    require(owned.input_port == 3 && owned.input_vc == kTestVC && owned.event.get() == expected &&
+            destructions == 0,
+        "ACCEPT did not transfer the exact owned ingress");
 
-    state->committed_event.reset();
-    require(destructions == 1, "accepted event was not owned by the committed reservation");
+    owned.event.reset();
+    require(destructions == 1, "accepted event was not owned by the consumed ingress");
 }
 
 void
-testStaleAcceptRollsBack()
+testStaleAcceptLeavesNewHead()
 {
-    int destructions = 0;
-    FakeIngressQueue queue(makeTrackedEvent(destructions));
-    const NetworkServiceHeadIdentity stale = queue.inspectNetworkServiceHead(kTestVC);
-    queue.makeExpectedStale();
-    auto state = std::make_shared<ReservationState>();
+    int stale_destructions = 0;
+    int current_destructions = 0;
+    FakeIngressQueue queue(makeTrackedEvent(stale_destructions));
+    const internal_router_event* stale = queue.inspectNetworkServiceHead(kTestVC);
+    auto current = makeTrackedEvent(current_destructions);
+    const internal_router_event* current_ptr = current.get();
+    queue.replace(std::move(current));
+    require(stale_destructions == 1, "replaced stale head was not destroyed");
 
-    uint64_t diagnostic = 0;
-    NetworkServicePrepared accept(NetworkServiceDisposition::Accept,
-        std::make_unique<TrackingReservation>(state), 0x44);
-    require(applyNetworkServicePrepared(queue, kTestVC, stale, std::move(accept), diagnostic) ==
-            NetworkServiceApplyResult::HeadChanged,
+    NetworkServiceOwnedIngress owned;
+    require(takeNetworkServiceIngressExpected(queue, 3, kTestVC, stale, owned) ==
+            NetworkServiceTakeResult::HeadChanged,
         "stale ACCEPT did not report a changed head");
-    require(diagnostic == 0x44, "stale ACCEPT did not preserve its opaque diagnostic");
-    require(queue.recvCalls() == 1 && queue.owns(stale.event) && destructions == 0,
+    require(queue.recvCalls() == 1 && queue.owns(current_ptr) && current_destructions == 0 && !owned.event,
         "stale ACCEPT changed queue ownership");
-    require(state->commits == 0 && state->rollbacks == 1 && !state->committed_event,
-        "stale ACCEPT did not roll back exactly once");
 }
 
 void
@@ -255,53 +201,42 @@ testReject()
 {
     int destructions = 0;
     FakeIngressQueue queue(makeTrackedEvent(destructions));
-    const NetworkServiceHeadIdentity expected = queue.inspectNetworkServiceHead(kTestVC);
-
-    uint64_t diagnostic = 0;
-    NetworkServicePrepared reject(NetworkServiceDisposition::Reject, {}, 0x55);
-    require(applyNetworkServicePrepared(queue, kTestVC, expected, std::move(reject), diagnostic) ==
-            NetworkServiceApplyResult::Rejected,
-        "REJECT returned the wrong apply result");
-    require(diagnostic == 0x55, "REJECT did not preserve its opaque diagnostic");
+    const internal_router_event* expected = queue.inspectNetworkServiceHead(kTestVC);
+    NetworkServiceOwnedIngress owned;
+    require(takeNetworkServiceIngressExpected(queue, 3, kTestVC, expected, owned) ==
+            NetworkServiceTakeResult::Taken,
+        "REJECT could not take the exact head");
     require(queue.recvCalls() == 1 && queue.empty(), "REJECT did not dequeue exactly once");
+    owned.event.reset();
     require(destructions == 1, "REJECT did not destroy the dequeued event exactly once");
 }
 
 void
-testInvalidReservations()
+testInvalidExpectedHeads()
 {
     {
         int destructions = 0;
         FakeIngressQueue queue(makeTrackedEvent(destructions));
-        const NetworkServiceHeadIdentity expected = queue.inspectNetworkServiceHead(kTestVC);
-        auto state = std::make_shared<ReservationState>();
-
-        uint64_t diagnostic = 0;
-        NetworkServicePrepared invalid(NetworkServiceDisposition::Pass,
-            std::make_unique<TrackingReservation>(state), 0x66);
-        require(applyNetworkServicePrepared(queue, kTestVC, expected, std::move(invalid), diagnostic) ==
-                NetworkServiceApplyResult::InvalidPrepared,
-            "reservation attached to PASS was accepted");
-        require(diagnostic == 0x66, "invalid reservation did not preserve its opaque diagnostic");
-        require(queue.recvCalls() == 0 && queue.owns(expected.event) && destructions == 0,
-            "invalid reservation changed queue ownership");
-        require(state->commits == 0 && state->rollbacks == 1,
-            "invalid reservation was not rolled back exactly once");
+        const internal_router_event* expected = queue.inspectNetworkServiceHead(kTestVC);
+        NetworkServiceOwnedIngress owned;
+        require(takeNetworkServiceIngressExpected(queue, -1, kTestVC, expected, owned) ==
+                NetworkServiceTakeResult::InvalidExpected,
+            "invalid input port was accepted");
+        require(queue.recvCalls() == 0 && queue.owns(expected) && destructions == 0,
+            "invalid input port changed queue ownership");
     }
 
     {
         int destructions = 0;
         FakeIngressQueue queue(makeTrackedEvent(destructions));
-        const NetworkServiceHeadIdentity expected = queue.inspectNetworkServiceHead(kTestVC);
-
-        uint64_t diagnostic = 0;
-        NetworkServicePrepared missing(NetworkServiceDisposition::Accept, {}, 0x77);
-        require(applyNetworkServicePrepared(queue, kTestVC, expected, std::move(missing), diagnostic) ==
-                NetworkServiceApplyResult::InvalidPrepared,
-            "ACCEPT without a reservation was accepted");
-        require(diagnostic == 0x77, "missing reservation did not preserve its opaque diagnostic");
-        require(queue.recvCalls() == 0 && queue.owns(expected.event) && destructions == 0,
-            "missing reservation changed queue ownership");
+        const internal_router_event* expected = queue.inspectNetworkServiceHead(kTestVC);
+        NetworkServiceOwnedIngress owned;
+        owned.event = std::make_unique<internal_router_event>();
+        require(takeNetworkServiceIngressExpected(queue, 3, kTestVC, expected, owned) ==
+                NetworkServiceTakeResult::InvalidExpected,
+            "occupied ownership slot was accepted");
+        require(queue.recvCalls() == 0 && queue.owns(expected) && destructions == 0,
+            "occupied ownership slot changed queue ownership");
     }
 }
 
@@ -552,8 +487,8 @@ void
 testPortInterfaceCompatibilityDefaults()
 {
     FakeXbarPort legacy_port;
-    require(!legacy_port.inspectNetworkServiceHead(0).valid() &&
-            legacy_port.recvNetworkServiceExpected(0, {}) == nullptr,
+    require(legacy_port.inspectNetworkServiceHead(0) == nullptr &&
+            legacy_port.recvNetworkServiceExpected(0, nullptr) == nullptr,
         "PortInterface disabled service defaults changed legacy subclasses");
 }
 
@@ -716,9 +651,9 @@ NetworkServiceTest::NetworkServiceTest(SST::ComponentId_t id, SST::Params& param
     try {
         testPassAndBusy();
         testAccept();
-        testStaleAcceptRollsBack();
+        testStaleAcceptLeavesNewHead();
         testReject();
-        testInvalidReservations();
+        testInvalidExpectedHeads();
         testBoundedSyntheticRequester();
         testExtendedRequestClone();
         testExtendedRequestCopyAndMoveOwnership();
@@ -729,10 +664,10 @@ NetworkServiceTest::NetworkServiceTest(SST::ComponentId_t id, SST::Params& param
         testSyntheticRoundRobinFairness();
     }
     catch ( const std::exception& error ) {
-        output.fatal(CALL_INFO, -1, "Merlin network-service transaction contract FAIL: %s\n", error.what());
+        output.fatal(CALL_INFO, -1, "Merlin network-service acceptance contract FAIL: %s\n", error.what());
     }
 
-    output.output("Merlin network-service transaction contract PASS\n");
+    output.output("Merlin network-service acceptance contract PASS\n");
     primaryComponentOKToEndSim();
 }
 

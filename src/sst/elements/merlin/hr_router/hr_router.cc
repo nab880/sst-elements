@@ -41,13 +41,13 @@ class PortServiceIngressQueue final : public NetworkServiceIngressQueue
 public:
     explicit PortServiceIngressQueue(PortInterface& port) : port_(port) {}
 
-    NetworkServiceHeadIdentity inspectNetworkServiceHead(int vc) const override
+    const internal_router_event* inspectNetworkServiceHead(int vc) const override
     {
         return port_.inspectNetworkServiceHead(vc);
     }
 
     internal_router_event* recvNetworkServiceExpected(
-        int vc, const NetworkServiceHeadIdentity& expected) override
+        int vc, const internal_router_event* expected) override
     {
         return port_.recvNetworkServiceExpected(vc, expected);
     }
@@ -807,7 +807,7 @@ hr_router::clock_handler_with_service(Cycle_t cycle)
     struct MaskedServiceHead {
         int port;
         int vc;
-        NetworkServiceHeadIdentity identity;
+        const internal_router_event* event;
     };
     std::vector<MaskedServiceHead> masked_service_heads;
 
@@ -822,80 +822,90 @@ hr_router::clock_handler_with_service(Cycle_t cycle)
             const uint64_t index = (scan_start + offset) % total_heads;
             const int port = static_cast<int>(index / static_cast<uint64_t>(num_vcs));
             const int vc   = static_cast<int>(index % static_cast<uint64_t>(num_vcs));
-            const NetworkServiceHeadIdentity identity = ports[port]->inspectNetworkServiceHead(vc);
-            if ( !identity.valid() ) continue;
-            const auto* request = identity.event->inspectRequest();
+            const internal_router_event* head = ports[port]->inspectNetworkServiceHead(vc);
+            if ( head == nullptr ) continue;
+            const auto* request = head->inspectRequest();
             if ( request == nullptr || !request->hasService() ) continue;
 
             // A physical input can present at most one packet to the
             // crossbar per cycle, but inputs are independent of each other.
             if ( in_port_busy[port] != 0 || input_processed[static_cast<size_t>(port)] != 0 ) {
-                masked_service_heads.push_back({ port, vc, identity });
+                masked_service_heads.push_back({ port, vc, head });
                 continue;
             }
             input_processed[static_cast<size_t>(port)] = 1;
 
             const auto service_id = request->getServiceID();
-            NetworkServicePrepared prepared;
-            if ( service_id == service.processor->getServiceID() ) {
-                prepared = service.processor->prepare(
-                    { port, vc, identity, identity.event });
-            }
-            else {
-                prepared = NetworkServicePrepared(NetworkServiceDisposition::Reject, {}, service_id);
+            const NetworkServiceDecision decision =
+                service_id == service.processor->getServiceID() ?
+                    service.processor->inspect({ port, vc, head }) :
+                    NetworkServiceDecision { NetworkServiceDisposition::Reject, service_id };
+
+            if ( !isValid(decision.disposition) ) {
+                output.fatal(CALL_INFO, 1,
+                    "Merlin router %d received an invalid disposition for network service %u\n",
+                    id, static_cast<unsigned>(service_id));
             }
 
-            uint64_t diagnostic = 0;
-            PortServiceIngressQueue queue(*ports[port]);
-            const NetworkServiceApplyResult result = applyNetworkServicePrepared(
-                queue, vc, identity, std::move(prepared), diagnostic);
-
-            switch ( result ) {
-            case NetworkServiceApplyResult::Passed:
+            switch ( decision.disposition ) {
+            case NetworkServiceDisposition::Pass:
                 if ( service.pass ) service.pass->addData(1);
                 break;
-            case NetworkServiceApplyResult::Accepted:
+            case NetworkServiceDisposition::Busy:
+                if ( service.busy ) service.busy->addData(1);
+                masked_service_heads.push_back({ port, vc, head });
+                break;
+            case NetworkServiceDisposition::Accept:
+            case NetworkServiceDisposition::Reject: {
+                PortServiceIngressQueue queue(*ports[port]);
+                NetworkServiceOwnedIngress owned;
+                const NetworkServiceTakeResult result = takeNetworkServiceIngressExpected(
+                    queue, port, vc, head, owned);
+                if ( result == NetworkServiceTakeResult::InvalidExpected ) {
+                    output.fatal(CALL_INFO, 1,
+                        "Merlin router %d could not take the inspected head for network service %u\n",
+                        id, static_cast<unsigned>(service_id));
+                }
+                if ( result == NetworkServiceTakeResult::HeadChanged ) {
+                    // A head can only change if a custom PortInterface interposes
+                    // on this synchronous callback. Retry the current head later.
+                    if ( const auto* next = ports[port]->inspectNetworkServiceHead(vc) ) {
+                        const auto* next_request = next->inspectRequest();
+                        if ( next_request != nullptr && next_request->hasService() ) {
+                            masked_service_heads.push_back({ port, vc, next });
+                        }
+                    }
+                    break;
+                }
+
+                if ( decision.disposition == NetworkServiceDisposition::Reject ) {
+                    if ( service.reject ) service.reject->addData(1);
+                    output.fatal(CALL_INFO, 1,
+                        "Merlin router %d rejected network service %u (opaque diagnostic 0x%016" PRIx64 ")\n",
+                        id, static_cast<unsigned>(service_id), decision.opaque_diagnostic);
+                    break;
+                }
+
                 if ( service.accept ) service.accept->addData(1);
+                service.processor->consume(std::move(owned));
+
                 // Exact dequeue may expose another tagged head on this VC.
                 // Ordinary traffic remains eligible for this cycle.
-                if ( auto next = ports[port]->inspectNetworkServiceHead(vc); next.valid() ) {
-                    const auto* next_request = next.event->inspectRequest();
-                    if ( next_request != nullptr && next_request->hasService() ) {
-                        masked_service_heads.push_back({ port, vc, next });
-                    }
-                }
-                break;
-            case NetworkServiceApplyResult::Busy:
-                if ( service.busy ) service.busy->addData(1);
-                masked_service_heads.push_back({ port, vc, identity });
-                break;
-            case NetworkServiceApplyResult::HeadChanged: {
-                if ( auto next = ports[port]->inspectNetworkServiceHead(vc); next.valid() ) {
-                    const auto* next_request = next.event->inspectRequest();
+                if ( const auto* next = ports[port]->inspectNetworkServiceHead(vc) ) {
+                    const auto* next_request = next->inspectRequest();
                     if ( next_request != nullptr && next_request->hasService() ) {
                         masked_service_heads.push_back({ port, vc, next });
                     }
                 }
                 break;
             }
-            case NetworkServiceApplyResult::Rejected:
-                if ( service.reject ) service.reject->addData(1);
-                output.fatal(CALL_INFO, 1,
-                    "Merlin router %d rejected network service %u (opaque diagnostic 0x%016" PRIx64 ")\n",
-                    id, static_cast<unsigned>(service_id), diagnostic);
-                break;
-            case NetworkServiceApplyResult::InvalidPrepared:
-                output.fatal(CALL_INFO, 1,
-                    "Merlin router %d received an invalid prepared disposition for network service %u\n",
-                    id, static_cast<unsigned>(service_id));
-                break;
             }
         }
         service.scan_cursor = (scan_start + 1) % total_heads;
 
         for ( const auto& masked : masked_service_heads ) {
             internal_router_event** heads = ports[masked.port]->getVCHeads();
-            if ( heads[masked.vc] == masked.identity.event ) heads[masked.vc] = nullptr;
+            if ( heads[masked.vc] == masked.event ) heads[masked.vc] = nullptr;
         }
     }
 
@@ -954,11 +964,10 @@ hr_router::clock_handler_with_service(Cycle_t cycle)
     }
 
     for ( const auto& masked : masked_service_heads ) {
-        const NetworkServiceHeadIdentity actual = ports[masked.port]->inspectNetworkServiceHead(masked.vc);
+        const internal_router_event* actual = ports[masked.port]->inspectNetworkServiceHead(masked.vc);
         internal_router_event** heads = ports[masked.port]->getVCHeads();
-        if ( actual.event == masked.identity.event && actual.generation == masked.identity.generation &&
-             heads[masked.vc] == nullptr ) {
-            heads[masked.vc] = const_cast<internal_router_event*>(actual.event);
+        if ( actual == masked.event && heads[masked.vc] == nullptr ) {
+            heads[masked.vc] = const_cast<internal_router_event*>(actual);
         }
     }
 

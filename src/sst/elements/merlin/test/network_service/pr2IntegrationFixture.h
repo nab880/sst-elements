@@ -24,7 +24,7 @@ namespace SST::Merlin {
 inline constexpr SST::Interfaces::SimpleNetwork::NetworkServiceID PR2_INTEGRATION_SERVICE_ID =
     SST::Interfaces::SimpleNetwork::NETWORK_SERVICE_PLUGIN_MIN;
 
-enum class PR2IntegrationAction : uint8_t { Pass = 1, AcceptEcho = 2, BusyOnceEcho = 3, SyntheticEcho = 4 };
+enum class PR2IntegrationAction : uint8_t { Pass = 1, AcceptEcho = 2, BusyUntilEcho = 3, SyntheticEcho = 4 };
 
 /** Test-owned, non-collective sidecar used by the PR2 Merlin integration fixture. */
 class PR2IntegrationServiceData final : public SST::Interfaces::SimpleNetwork::NetworkServiceData
@@ -83,19 +83,20 @@ public:
             PR2IntegrationServiceData::MIN_SCHEMA_VERSION,
             PR2IntegrationServiceData::MAX_SCHEMA_VERSION };
     }
-    NetworkServicePrepared prepare(const NetworkServiceIngress& ingress) override;
+    NetworkServiceDecision inspect(const NetworkServiceIngress& ingress) const override;
+    void consume(NetworkServiceOwnedIngress ingress) noexcept override;
     bool hasScheduledWork() const override { return false; }
 
 private:
-    class Reservation;
+    // Both heads are inspected at 3 ns in the fixed 1 GHz fixture. A global
+    // one-head-per-cycle scan delays Pass until release at 4 ns and must fail.
+    static constexpr SimTime_t BUSY_RELEASE_NS = 4;
 
     void emitEcho(std::unique_ptr<internal_router_event> event, uint32_t sequence) noexcept;
     void handleTrigger(SST::Event* event);
 
     NetworkServiceHost* host_ = nullptr;
     SST::Link* trigger_ = nullptr;
-    bool busy_once_seen_ = false;
-    SimTime_t busy_probe_time_ = 0;
 };
 
 /** Two-node endpoint driver for the real single-router integration test. */

@@ -12,6 +12,7 @@
 #include <sst/core/subcomponent.h>
 
 #include <cstdint>
+#include <exception>
 #include <memory>
 
 namespace SST::Merlin {
@@ -62,55 +63,27 @@ inline constexpr bool isValid(NetworkServiceDisposition disposition)
     return disposition >= NetworkServiceDisposition::Pass && disposition <= NetworkServiceDisposition::Reject;
 }
 
-/** Stable identity of one queued VC head during a prepare/apply transaction. */
-struct NetworkServiceHeadIdentity
-{
-    const internal_router_event* event      = nullptr;
-    uint64_t                     generation = 0;
-
-    constexpr bool valid() const { return event != nullptr && generation != 0; }
-};
-
-/** Non-owning view passed to a service processor during prepare(). */
+/** Non-owning view passed to a service processor during inspect(). */
 struct NetworkServiceIngress
 {
-    int                        input_port = -1;
-    int                        input_vc   = -1;
-    NetworkServiceHeadIdentity head;
+    int input_port = -1;
+    int input_vc   = -1;
     const internal_router_event* event = nullptr;
 };
 
-/**
- * Opaque, rollback-capable reservation returned only with Accept.  The
- * router never interprets service state; it invokes exactly one terminal
- * method and then destroys the reservation.
- */
-class NetworkServiceReservation
+/** Read-only disposition for the current head. */
+struct NetworkServiceDecision
 {
-public:
-    virtual ~NetworkServiceReservation() = default;
-    virtual void commit(std::unique_ptr<internal_router_event> event) noexcept = 0;
-    virtual void rollback() noexcept = 0;
+    NetworkServiceDisposition disposition = NetworkServiceDisposition::Reject;
+    uint64_t                  opaque_diagnostic = 0;
 };
 
-struct NetworkServicePrepared
+/** Exact dequeued head whose ownership is transferred after Accept. */
+struct NetworkServiceOwnedIngress
 {
-    NetworkServiceDisposition                    disposition = NetworkServiceDisposition::Reject;
-    std::unique_ptr<NetworkServiceReservation>   reservation;
-    uint64_t                                     opaque_diagnostic = 0;
-
-    NetworkServicePrepared() = default;
-    NetworkServicePrepared(NetworkServiceDisposition disposition,
-        std::unique_ptr<NetworkServiceReservation> reservation = {}, uint64_t opaque_diagnostic = 0) :
-        disposition(disposition),
-        reservation(std::move(reservation)),
-        opaque_diagnostic(opaque_diagnostic)
-    {}
-
-    NetworkServicePrepared(const NetworkServicePrepared&)            = delete;
-    NetworkServicePrepared& operator=(const NetworkServicePrepared&) = delete;
-    NetworkServicePrepared(NetworkServicePrepared&&) noexcept        = default;
-    NetworkServicePrepared& operator=(NetworkServicePrepared&&) noexcept = default;
+    int input_port = -1;
+    int input_vc   = -1;
+    std::unique_ptr<internal_router_event> event;
 };
 
 /** Minimal queue seam used to make exact-head dequeue independently testable. */
@@ -118,23 +91,17 @@ class NetworkServiceIngressQueue
 {
 public:
     virtual ~NetworkServiceIngressQueue() = default;
-    virtual NetworkServiceHeadIdentity inspectNetworkServiceHead(int vc) const = 0;
+    virtual const internal_router_event* inspectNetworkServiceHead(int vc) const = 0;
+    /** Remove and return exactly expected, or return null without modifying the queue. */
     virtual internal_router_event* recvNetworkServiceExpected(
-        int vc, const NetworkServiceHeadIdentity& expected) = 0;
+        int vc, const internal_router_event* expected) = 0;
 };
 
-enum class NetworkServiceApplyResult : uint8_t {
-    Passed = 1,
-    Accepted,
-    Busy,
-    Rejected,
-    HeadChanged,
-    InvalidPrepared
-};
+enum class NetworkServiceTakeResult : uint8_t { Taken = 1, HeadChanged, InvalidExpected };
 
-NetworkServiceApplyResult applyNetworkServicePrepared(NetworkServiceIngressQueue& queue, int vc,
-    const NetworkServiceHeadIdentity& expected, NetworkServicePrepared&& prepared,
-    uint64_t& opaque_diagnostic) noexcept;
+NetworkServiceTakeResult takeNetworkServiceIngressExpected(NetworkServiceIngressQueue& queue,
+    int input_port, int input_vc, const internal_router_event* expected,
+    NetworkServiceOwnedIngress& ingress) noexcept;
 
 /** Move-only fresh packet offered to the router's bounded synthetic requester. */
 struct NetworkServiceSyntheticPacket
@@ -186,7 +153,10 @@ public:
     {
         return { getServiceID(), 0, 0, 0 };
     }
-    virtual NetworkServicePrepared prepare(const NetworkServiceIngress& ingress) = 0;
+    /** Inspect only; implementations must not mutate processor or router state. */
+    virtual NetworkServiceDecision inspect(const NetworkServiceIngress& ingress) const = 0;
+    /** Terminal ownership transfer after the router dequeues the exact accepted head. */
+    virtual void consume(NetworkServiceOwnedIngress ingress) noexcept = 0;
     virtual bool hasScheduledWork() const = 0;
 
     void serialize_order(SST::Core::Serialization::serializer& ser) override
@@ -213,7 +183,8 @@ public:
     NetworkServicePassProcessor() = default;
 
     NetworkServiceID getServiceID() const override { return service_id_; }
-    NetworkServicePrepared prepare(const NetworkServiceIngress& ingress) override;
+    NetworkServiceDecision inspect(const NetworkServiceIngress& ingress) const override;
+    void consume(NetworkServiceOwnedIngress) noexcept override { std::terminate(); }
     bool hasScheduledWork() const override { return false; }
 
     void serialize_order(SST::Core::Serialization::serializer& ser) override

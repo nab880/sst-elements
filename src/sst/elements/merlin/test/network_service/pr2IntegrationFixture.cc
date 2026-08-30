@@ -28,28 +28,6 @@ PR2IntegrationServiceData::serialize_order(SST::Core::Serialization::serializer&
     SST_SER(sequence_);
 }
 
-class PR2IntegrationProcessor::Reservation final : public NetworkServiceReservation
-{
-public:
-    Reservation(PR2IntegrationProcessor* processor, uint32_t sequence) :
-        processor_(processor),
-        sequence_(sequence)
-    {}
-
-    void commit(std::unique_ptr<internal_router_event> event) noexcept override
-    {
-        PR2IntegrationProcessor* processor = processor_;
-        processor_ = nullptr;
-        if ( processor != nullptr ) processor->emitEcho(std::move(event), sequence_);
-    }
-
-    void rollback() noexcept override { processor_ = nullptr; }
-
-private:
-    PR2IntegrationProcessor* processor_ = nullptr;
-    uint32_t sequence_ = 0;
-};
-
 PR2IntegrationProcessor::PR2IntegrationProcessor(
     ComponentId_t id, Params&, NetworkServiceHost* host) :
     NetworkServiceProcessor(id),
@@ -65,37 +43,47 @@ PR2IntegrationProcessor::PR2IntegrationProcessor(
     }
 }
 
-NetworkServicePrepared
-PR2IntegrationProcessor::prepare(const NetworkServiceIngress& ingress)
+NetworkServiceDecision
+PR2IntegrationProcessor::inspect(const NetworkServiceIngress& ingress) const
 {
-    if ( !ingress.head.valid() || ingress.event == nullptr || ingress.event != ingress.head.event ) {
-        return { NetworkServiceDisposition::Reject, {}, 1 };
+    if ( ingress.input_port < 0 || ingress.input_vc < 0 || ingress.event == nullptr ) {
+        return { NetworkServiceDisposition::Reject, 1 };
     }
 
     const auto* request = ingress.event->inspectRequest();
     const auto* data = request == nullptr ? nullptr : request->inspectServiceDataAs<PR2IntegrationServiceData>();
-    if ( data == nullptr ) return { NetworkServiceDisposition::Reject, {}, 2 };
+    if ( data == nullptr ) return { NetworkServiceDisposition::Reject, 2 };
 
     switch ( data->action() ) {
     case PR2IntegrationAction::Pass:
-        if ( data->sequence() == 1 &&
-             (!busy_once_seen_ || getCurrentSimTimeNano() != busy_probe_time_) ) {
-            return { NetworkServiceDisposition::Reject, {}, 5 };
+        if ( data->sequence() == 1 && getCurrentSimTimeNano() >= BUSY_RELEASE_NS ) {
+            return { NetworkServiceDisposition::Reject, 5 };
         }
         return { NetworkServiceDisposition::Pass };
     case PR2IntegrationAction::AcceptEcho:
-        return { NetworkServiceDisposition::Accept, std::make_unique<Reservation>(this, data->sequence()) };
-    case PR2IntegrationAction::BusyOnceEcho:
-        if ( !busy_once_seen_ ) {
-            busy_once_seen_ = true;
-            busy_probe_time_ = getCurrentSimTimeNano();
-            return { NetworkServiceDisposition::Busy };
-        }
-        return { NetworkServiceDisposition::Accept, std::make_unique<Reservation>(this, data->sequence()) };
+        return { NetworkServiceDisposition::Accept };
+    case PR2IntegrationAction::BusyUntilEcho:
+        return { getCurrentSimTimeNano() < BUSY_RELEASE_NS ? NetworkServiceDisposition::Busy :
+                                                            NetworkServiceDisposition::Accept };
     case PR2IntegrationAction::SyntheticEcho:
-        return { NetworkServiceDisposition::Reject, {}, 3 };
+        return { NetworkServiceDisposition::Reject, 3 };
     }
-    return { NetworkServiceDisposition::Reject, {}, 4 };
+    return { NetworkServiceDisposition::Reject, 4 };
+}
+
+void
+PR2IntegrationProcessor::consume(NetworkServiceOwnedIngress ingress) noexcept
+{
+    const auto* request = ingress.event == nullptr ? nullptr : ingress.event->inspectRequest();
+    const auto* data = request == nullptr ? nullptr : request->inspectServiceDataAs<PR2IntegrationServiceData>();
+    if ( ingress.input_port < 0 || ingress.input_vc < 0 || data == nullptr ||
+         (data->action() != PR2IntegrationAction::AcceptEcho &&
+          data->action() != PR2IntegrationAction::BusyUntilEcho) ) {
+        getSimulationOutput().fatal(CALL_INFO, 1,
+            "PR2 integration processor consumed an invalid accepted ingress\n");
+    }
+    const uint32_t sequence = data->sequence();
+    emitEcho(std::move(ingress.event), sequence);
 }
 
 void
@@ -136,7 +124,7 @@ PR2IntegrationProcessor::emitEcho(
     const auto* original_data = original->inspectServiceDataAs<PR2IntegrationServiceData>();
     if ( original_data == nullptr ||
          (original_data->action() != PR2IntegrationAction::AcceptEcho &&
-          original_data->action() != PR2IntegrationAction::BusyOnceEcho) ||
+          original_data->action() != PR2IntegrationAction::BusyUntilEcho) ||
          original_data->sequence() != sequence ) {
         getSimulationOutput().fatal(CALL_INFO, 1, "PR2 integration processor committed changed service data\n");
     }
@@ -212,7 +200,7 @@ PR2IntegrationEndpoint::setup()
         new SimpleNetwork::Handler<PR2IntegrationEndpoint, &PR2IntegrationEndpoint::handleReceive>(this));
 
     if ( endpoint_id_ == 0 ) {
-        pending_[0] = makeRequest(PR2IntegrationAction::BusyOnceEcho, 3, 1);
+        pending_[0] = makeRequest(PR2IntegrationAction::BusyUntilEcho, 3, 1);
         pending_[1] = makeRequest(PR2IntegrationAction::AcceptEcho, 2, 1);
         pending_count_ = 2;
         trigger_timer_->send(1, nullptr);

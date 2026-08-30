@@ -188,7 +188,6 @@ private:
     int* port_out_credits = nullptr;
     struct NetworkServicePortContext {
         NetworkServiceHost* host = nullptr; // non-owning opt-in extension
-        std::vector<uint64_t> vc_head_generations;
     };
     std::unique_ptr<NetworkServicePortContext> network_service;
 
@@ -336,9 +335,9 @@ public:
     // Returns NULL if no event in input_buf[vc]. Otherwise, returns
     // the next event.
     internal_router_event* recv(int vc) override;
-    NetworkServiceHeadIdentity inspectNetworkServiceHead(int vc) const override;
+    const internal_router_event* inspectNetworkServiceHead(int vc) const override;
     internal_router_event* recvNetworkServiceExpected(
-        int vc, const NetworkServiceHeadIdentity& expected) override;
+        int vc, const internal_router_event* expected) override;
     internal_router_event** getVCHeads() override
     {
     	return vc_heads;
