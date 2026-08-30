@@ -30,5 +30,13 @@ OperatingSystemAPI::collectiveEndpoint() const
   return nic ? nic->collectiveEndpoint() : nullptr;
 }
 
+const SST::Collective::AcceptedParticipantHandle*
+OperatingSystemAPI::collectiveParticipant(uint32_t local_slot) const
+{
+  NodeBase* parent = node();
+  NicAPI* nic = parent ? parent->nic() : nullptr;
+  return nic ? nic->collectiveParticipant(local_slot) : nullptr;
+}
+
 } // namespace Hg
 } // namespace SST

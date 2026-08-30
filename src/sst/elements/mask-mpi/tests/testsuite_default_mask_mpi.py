@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from sst_unittest import *
@@ -37,6 +38,28 @@ class testcase_mask_mpi(SSTTestCase):
             with self.subTest(mode=mode):
                 self.assert_model_fails("test_sendrecv.py", mode, diagnostic)
 
+    def test_allreduce_innetwork(self):
+        test_dir = self.get_testsuite_dir()
+        out_dir = self.get_test_output_run_dir()
+        output = f"{out_dir}/test_allreduce_innetwork.out"
+        error = f"{out_dir}/test_allreduce_innetwork.err"
+        self.run_sst(f"{test_dir}/test_allreduce_innetwork.py", output, error,
+            mpi_out_files=f"{out_dir}/test_allreduce_innetwork.testfile",
+            set_cwd=test_dir, other_args='--model-options="active"')
+        self.assertFalse(os_test_file(error, "-s"), "in-network allreduce produced stderr")
+        text = Path(output).read_text(encoding="utf-8")
+        ranks = [line for line in text.splitlines()
+                 if line.startswith("Mask-MPI in-network allreduce ")]
+        self.assertEqual(4, len(ranks))
+        self.assertTrue(all(line.endswith(" PASS") for line in ranks))
+        accepted = sum(map(int, re.findall(
+            r"\.network_service_accept : Accumulator : Sum\.u64 = ([0-9]+);", text)))
+        self.assertEqual(16, accepted, "two SUM invocations did not traverse the service")
+
+    def test_allreduce_innetwork_missing_service(self):
+        self.assert_model_fails(
+            "test_allreduce_innetwork.py", "missing-service",
+            "Mercury static collective was enabled but the network service is unavailable")
 
     def assert_model_fails(self, model, mode, diagnostic):
         test_dir = self.get_testsuite_dir()

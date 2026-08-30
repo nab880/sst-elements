@@ -42,12 +42,17 @@
 
 namespace SST::Hg {
 
+class MercuryCollectiveAdapter;
+
 /**
  * A networkinterface is a delegate between a node and a server module.
  * This object helps ornament network operations with information about
  * the process (ppid) involved.
  */
-class NIC : public NicAPI, public VirtualNetworkConfigProvider
+class NIC :
+  public NicAPI,
+  public VirtualNetworkConfigProvider,
+  public CollectiveEndpointProvider
 {
  public:
 
@@ -60,11 +65,28 @@ class NIC : public NicAPI, public VirtualNetworkConfigProvider
     SST::Hg::NIC
   )
 
+  SST_ELI_DOCUMENT_PARAMS(
+    {"mtu", "Maximum native Mercury fragment size in bytes", "4096"},
+    {"enable_static_collective", "Require the static Merlin collective endpoint POC", "false"},
+    {"job_namespace", "Static collective job namespace", "1"},
+    {"route_id", "Static collective route identifier", "1"},
+    {"root_nid", "Static collective root physical endpoint NID", "0"},
+    {"root_logical_nid", "Caller-visible logical NID for the static collective root", "0"},
+    {"physical_endpoint_id", "Allocated physical endpoint ID for the static collective participant", "-1"},
+    {"logical_participant_id", "Application-visible participant ID (MPI rank for Mask-MPI)", "-1"},
+    {"participant_slot", "Static local participant slot; PR5B supports only zero", "0"}
+  )
+
   NIC(uint32_t id, SST::Params& params);
 
   virtual ~NIC();
 
   bool configureVirtualNetworks(const VirtualNetworkConfig& config) override;
+
+  SST::Collective::CollectiveEndpoint* collectiveEndpoint() const override;
+
+  const SST::Collective::AcceptedParticipantHandle* collectiveParticipant(
+      uint32_t local_slot) const override;
 
   NodeId addr() const override;
 
@@ -139,6 +161,8 @@ protected:
 
 private:
 
+  friend class MercuryCollectiveAdapter;
+
   int negligibleSize_;
   SST::Hg::NodeBase* parent_;
   NodeId my_addr_;
@@ -155,6 +179,15 @@ private:
   int manager_vn_;
   int reduce_vn_;
   int result_vn_;
+  bool collective_poc_enabled_;
+  uint64_t collective_job_namespace_;
+  uint64_t collective_route_id_;
+  SST::Interfaces::SimpleNetwork::nid_t collective_root_nid_;
+  SST::Interfaces::SimpleNetwork::nid_t collective_root_logical_nid_;
+  SST::Interfaces::SimpleNetwork::nid_t collective_physical_endpoint_id_;
+  SST::Interfaces::SimpleNetwork::nid_t collective_logical_participant_id_;
+  uint32_t collective_participant_slot_;
+  std::unique_ptr<MercuryCollectiveAdapter> collective_adapter_;
   int test_size_;
   std::unique_ptr<SST::Output> out_;
 
@@ -163,6 +196,9 @@ private:
   void validateNativeVn(int vn, const char* operation) const;
 
   void recordNativeSend(int vn, NetworkMessage* injection_ack);
+
+  bool trySendCollective(
+      SST::Interfaces::SimpleNetwork::Request* request, int vn);
 
   /**
    For messages requiring an NIC ACK to signal that the message

@@ -36,6 +36,7 @@
 #include <functional>
 
 namespace SST::Collective {
+struct AcceptedParticipantHandle;
 class CollectiveEndpoint;
 }
 
@@ -70,6 +71,10 @@ public:
   virtual ~CollectiveEndpointProvider();
 
   virtual SST::Collective::CollectiveEndpoint* collectiveEndpoint() const = 0;
+
+  /** Stable NIC-owned handle for a local participant, or nullptr when unavailable. */
+  virtual const SST::Collective::AcceptedParticipantHandle* collectiveParticipant(
+      uint32_t local_slot) const = 0;
 };
 
 class NicEvent :
@@ -134,6 +139,10 @@ public:
 
   /** Returns nullptr unless this NIC opts into CollectiveEndpointProvider. */
   SST::Collective::CollectiveEndpoint* collectiveEndpoint() const;
+
+  /** Returns the provider's stable local participant handle, or nullptr. */
+  const SST::Collective::AcceptedParticipantHandle* collectiveParticipant(
+      uint32_t local_slot) const;
 
   /**
    * Applies node-resolved VN roles before init.  Legacy NIC implementations

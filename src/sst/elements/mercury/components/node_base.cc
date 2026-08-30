@@ -61,12 +61,14 @@ void
 NodeBase::complete(unsigned int phase)
 {
   SST::Component::complete(phase);
+  if (nic_ && nic_->collectiveEndpoint()) nic_->complete(phase);
 }
 
 void
 NodeBase::finish()
 {
   SST::Component::finish();
+  if (nic_ && nic_->collectiveEndpoint()) nic_->finish();
 }
 
 void

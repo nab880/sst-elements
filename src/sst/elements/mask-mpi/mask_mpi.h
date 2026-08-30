@@ -49,6 +49,7 @@ Questions? Contact sst-macro-help@sandia.gov
 #include <mpi_status.h>
 #include <mpi_types.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #define MPI_LOCK_SHARED 0
 #define MPI_LOCK_EXCLUSIVE 1

@@ -4,7 +4,8 @@
 
 AM_CPPFLAGS += \
 	$(MPI_CPPFLAGS) \
-        -I$(top_srcdir)/src/sst/elements
+	-I$(top_srcdir)/src \
+	-I$(top_srcdir)/src/sst/elements
 
 # unpleasant hack to make vintage automake (e.g. 1.13.4) work
 AM_LIBTOOLFLAGS = --tag=CXX
@@ -30,6 +31,7 @@ libhg_la_SOURCES = \
   components/compute_library/node_cl.cc \
   components/compute_library/operating_system_cl.cc \
   components/compute_library/operating_system_cl_api.cc \
+  components/collective_adapter.cc \
   components/nic.cc \
   components/nic_api.cc \
   components/node.cc \
@@ -141,6 +143,7 @@ nobase_library_include_HEADERS = \
   components/compute_library/operating_system_cl.h \
   components/compute_library/operating_system_cl_api.h \
   components/compute_library/operating_system_cl_fwd.h \
+  components/collective_adapter.h \
   components/nic.h \
   components/nic_api.h \
   components/nic_fwd.h \
@@ -229,6 +232,7 @@ EXTRA_DIST += $(deprecated_EXTRA_DIST)
 endif
 
 libhg_la_LDFLAGS = -module -avoid-version -shared
+libhg_la_LIBADD = $(top_builddir)/src/sst/elements/merlin/libsstmerlincollective.la
 libcomputelibrary_la_LDFLAGS = -module -avoid-version -shared
 libostest_la_LDFLAGS = -module -avoid-version -shared
 libostest_nano_la_LDFLAGS = -module -avoid-version -shared

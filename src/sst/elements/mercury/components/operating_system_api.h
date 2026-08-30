@@ -25,6 +25,7 @@
 #include <memory>
 
 namespace SST::Collective {
+struct AcceptedParticipantHandle;
 class CollectiveEndpoint;
 }
 
@@ -58,6 +59,10 @@ public:
    * software path without transferring request ownership.
    */
   SST::Collective::CollectiveEndpoint* collectiveEndpoint() const;
+
+  /** Returns the stable local collective participant handle, or nullptr. */
+  const SST::Collective::AcceptedParticipantHandle* collectiveParticipant(
+      uint32_t local_slot) const;
 
    virtual void setParentNode(SST::Hg::NodeBase*) = 0;
 

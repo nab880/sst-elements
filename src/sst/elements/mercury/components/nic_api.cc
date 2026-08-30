@@ -44,6 +44,13 @@ NicAPI::collectiveEndpoint() const
   return provider ? provider->collectiveEndpoint() : nullptr;
 }
 
+const SST::Collective::AcceptedParticipantHandle*
+NicAPI::collectiveParticipant(uint32_t local_slot) const
+{
+  auto* provider = dynamic_cast<const CollectiveEndpointProvider*>(this);
+  return provider ? provider->collectiveParticipant(local_slot) : nullptr;
+}
+
 bool
 NicAPI::configureVirtualNetworks(const VirtualNetworkConfig& config)
 {

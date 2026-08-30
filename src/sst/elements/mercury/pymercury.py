@@ -39,6 +39,9 @@ class HgJob(Job):
         node = self.node.build(nodeID,logical_id,self._numNodes * self._numCores, self._numCores)
         os = self.os.build(node,"os_slot")
         nic = self.nic.build(node,"nic_slot")
+        if self.nic._getGroupParams("params").get("enable_static_collective", False):
+            nic.addParam("physical_endpoint_id", nodeID)
+            nic.addParam("logical_participant_id", logical_id)
 
         # Build NetworkInterface
         networkif, port_name = self.network_interface.build(node,"link_control_slot",0,self.job_id,self.size,logical_id,True)
@@ -81,6 +84,14 @@ class HgNIC(TemplateBase):
         TemplateBase.__init__(self)
         self._declareParams("params",["verbose",
                                       "mtu",
+                                      "enable_static_collective",
+                                      "job_namespace",
+                                      "route_id",
+                                      "root_nid",
+                                      "root_logical_nid",
+                                      "physical_endpoint_id",
+                                      "logical_participant_id",
+                                      "participant_slot",
                                      ])
         self._subscribeToPlatformParamSet("nic")
 
@@ -118,6 +129,7 @@ class HgOS(TemplateBase):
                                            "use_put_window",
                                            "compute_library_access_width",
                                            "compute_library_loop_overhead",
+                                           "enable_collective_offload",
                                           ],
                                           "app1.")
         self._subscribeToPlatformParamSet("operating_system")

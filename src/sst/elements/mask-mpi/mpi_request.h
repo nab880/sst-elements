@@ -210,6 +210,10 @@ class MpiRequest :
     return collective_op_.get();
   }
 
+  CollectiveOpBase::ptr takeCollective() {
+    return std::move(collective_op_);
+  }
+
   const MPI_Status& status() const {
     return stat_;
   }

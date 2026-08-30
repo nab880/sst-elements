@@ -65,6 +65,8 @@ Questions? Contact sst-macro-help@sandia.gov
 #include <mpi_queue/mpi_queue_fwd.h>
 #include <mpi_delay_stats.h>
 
+#include <sst/elements/merlin/services/collective/collectiveEndpoint.h>
+
 #include <unordered_map>
 
 //#include <sstmac/common/stats/ftq_tag.h>
@@ -76,7 +78,9 @@ Questions? Contact sst-macro-help@sandia.gov
 
 namespace SST::MASKMPI {
 
-class MpiApi : public SST::Iris::sumi::SimTransport
+class MpiApi : public SST::Iris::sumi::SimTransport,
+               private SST::Collective::CollectiveCompletionSink,
+               private SST::Collective::CollectiveReadySink
 {
 //  friend class OTF2Writer;
  public:
@@ -372,8 +376,8 @@ class MpiApi : public SST::Iris::sumi::SimTransport
             MPI_Comm comm);
 
   int allreduce(const void* src, void* dst,
-            int count, MPI_Datatype type, MPI_Op op,
-            MPI_Comm comm);
+                int count, MPI_Datatype type, MPI_Op op,
+                MPI_Comm comm);
 
   int scan(int count, MPI_Datatype type, MPI_Op op,
             MPI_Comm comm);
@@ -683,6 +687,9 @@ class MpiApi : public SST::Iris::sumi::SimTransport
 
   SST::Iris::sumi::CollectiveDoneMessage*  startAllreduce(CollectiveOp* op);
 
+  CollectiveOp::ptr prepareAllreduce(MpiComm* commPtr, int count, MPI_Datatype type,
+                                     MPI_Op mop, const void* src, void* dst);
+
   SST::Iris::sumi::CollectiveDoneMessage*  startBarrier(CollectiveOp* op);
 
   SST::Iris::sumi::CollectiveDoneMessage*  startBcast(CollectiveOp* op);
@@ -813,7 +820,31 @@ class MpiApi : public SST::Iris::sumi::SimTransport
  private:
   friend class MpiCommFactory;
 
+  bool tryBlockingAllreduceOffload(CollectiveOp::ptr& op, MPI_Datatype type, MPI_Op mop);
+
+  bool bindCollectiveOffload();
+
+  void clearCollectiveOffloadRequest();
+
+  void complete(SST::Collective::CollectiveCompletionToken&& token,
+                SST::Collective::CollectiveCompletionStatus status) override;
+
+  void ready(const SST::Collective::AcceptedParticipantHandle& participant) override;
+
   MpiQueue* queue_;
+
+  SST::Collective::CollectiveEndpoint* collective_endpoint_;
+  const SST::Collective::AcceptedParticipantHandle* collective_participant_;
+  MpiRequest* collective_request_;
+  MpiComm* collective_request_comm_;
+  SST::Hg::Thread* collective_waiter_;
+  bool collective_waiting_blocked_;
+  int collective_request_tag_;
+  uint64_t collective_request_invocation_;
+  bool collective_offload_enabled_;
+  bool collective_ready_;
+  SST::Collective::CollectiveCompletionStatus collective_completion_status_;
+  uint64_t next_collective_invocation_;
 
   MPI_Datatype next_type_id_;
 

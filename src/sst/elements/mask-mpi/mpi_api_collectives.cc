@@ -46,6 +46,7 @@ Questions? Contact sst-macro-help@sandia.gov
 #include <mpi_queue/mpi_queue.h>
 //#include <sumi-mpi/otf2_output_stat.h>
 #include <mercury/components/operating_system.h>
+#include <mercury/operating_system/process/app.h>
 #include <mercury/operating_system/process/thread.h>
 #//include <mercury/operating_system/process/ftq_scope.h>
 
@@ -423,9 +424,9 @@ MpiApi::startAllreduce(CollectiveOp* op)
                        fxn, queue_->collCqId(), op->comm);
 }
 
-CollectiveOpBase::ptr
-MpiApi::startAllreduce(MpiComm* commPtr, int count, MPI_Datatype type,
-                       MPI_Op mop, const void* src, void* dst)
+CollectiveOp::ptr
+MpiApi::prepareAllreduce(MpiComm* commPtr, int count, MPI_Datatype type,
+                         MPI_Op mop, const void* src, void* dst)
 {
   auto op = CollectiveOp::create(count, commPtr);
   if (src == MPI_IN_PLACE){
@@ -434,12 +435,218 @@ MpiApi::startAllreduce(MpiComm* commPtr, int count, MPI_Datatype type,
 
   op->op = mop;
   startMpiCollective(Iris::sumi::Collective::allreduce, src, dst, type, type, op.get());
+  return op;
+}
+
+CollectiveOpBase::ptr
+MpiApi::startAllreduce(MpiComm* commPtr, int count, MPI_Datatype type,
+                       MPI_Op mop, const void* src, void* dst)
+{
+  auto op = prepareAllreduce(commPtr, count, type, mop, src, dst);
   auto* msg = startAllreduce(op.get());
   if (msg){
     op->complete = true;
     delete msg;
   }
   return std::move(op);
+}
+
+bool
+MpiApi::bindCollectiveOffload()
+{
+  if (collective_endpoint_) return true;
+
+  auto* operating_system = parent()->os();
+  auto* endpoint = operating_system ? operating_system->collectiveEndpoint() : nullptr;
+  auto* participant_ptr = operating_system ? operating_system->collectiveParticipant(0) : nullptr;
+  if (!endpoint || !participant_ptr) return false;
+
+  const auto& participant = *participant_ptr;
+  if (!participant.valid() ||
+      participant.route_kind != SST::Collective::CollectiveRouteKind::FabricTree ||
+      participant.data_mode != SST::Collective::CollectiveDataMode::Functional ||
+      participant.local_participant_slot != 0 || participant.local_participant_count != 1 ||
+      participant.physical_endpoint_id < 0 || !participant.fabric ||
+      participant.fabric->endpoint_reduce_vn != 0 ||
+      participant.fabric->endpoint_result_vn != 1 ||
+      participant.fabric->injection_dest_nid < 0 ||
+      !worldcomm_ || participant.logical_participant_id != static_cast<uint64_t>(worldcomm_->rank()) ||
+      participant.accepted_invocation_quota != 1 || participant.submission_window != 1) {
+    return false;
+  }
+
+  if (!endpoint->bindParticipant(participant, *this, *this)) return false;
+  collective_endpoint_ = endpoint;
+  collective_participant_ = participant_ptr;
+  return true;
+}
+
+void
+MpiApi::clearCollectiveOffloadRequest()
+{
+  if (collective_request_comm_ && collective_request_ &&
+      !collective_request_comm_->removeRequest(collective_request_tag_, collective_request_)) {
+    sst_hg_abort_printf("Mask-MPI collective offload lost its registered native request");
+  }
+  collective_request_ = nullptr;
+  collective_request_comm_ = nullptr;
+  collective_waiter_ = nullptr;
+  collective_waiting_blocked_ = false;
+  collective_request_tag_ = 0;
+  collective_request_invocation_ = 0;
+  collective_ready_ = false;
+  collective_completion_status_ = SST::Collective::CollectiveCompletionStatus::RecoverableError;
+}
+
+void
+MpiApi::complete(SST::Collective::CollectiveCompletionToken&& token,
+                 SST::Collective::CollectiveCompletionStatus status)
+{
+  if (!SST::Collective::isValid(status) || !collective_request_ || !collective_request_comm_ ||
+      !collective_participant_ || !token.valid() ||
+      token.adapterSlot() != collective_participant_->binding.adapter_slot ||
+      token.generation() != collective_participant_->binding.generation ||
+      token.nativeRequestId() != collective_request_invocation_ ||
+      collective_request_comm_->getRequest(collective_request_tag_) != collective_request_ ||
+      collective_request_->isComplete()) {
+    sst_hg_abort_printf("Mask-MPI received an invalid or duplicate collective offload completion");
+  }
+
+  collective_completion_status_ = status;
+  collective_request_->complete();
+  if (collective_waiter_ && collective_waiting_blocked_) {
+    parent()->os()->unblock(collective_waiter_);
+  }
+}
+
+void
+MpiApi::ready(const SST::Collective::AcceptedParticipantHandle& participant)
+{
+  if (!collective_request_ || !collective_participant_ ||
+      participant.route != collective_participant_->route ||
+      !(participant.binding == collective_participant_->binding)) {
+    sst_hg_abort_printf("Mask-MPI received an invalid collective offload ready notification");
+  }
+  collective_ready_ = true;
+  if (collective_waiter_ && collective_waiting_blocked_) {
+    parent()->os()->unblock(collective_waiter_);
+  }
+}
+
+bool
+MpiApi::tryBlockingAllreduceOffload(CollectiveOp::ptr& op, MPI_Datatype type, MPI_Op mop)
+{
+  if (!collective_offload_enabled_) {
+    return false;
+  }
+  auto* operating_system = parent()->os();
+  const bool supported_signature = op->comm == worldcomm_ &&
+      op->comm->id() == MPI_COMM_WORLD && op->sendcnt == 1 && op->recvcnt == 1 &&
+      type == MPI_DOUBLE && mop == MPI_SUM;
+  if (!supported_signature) return false;
+
+  if (!operating_system || operating_system->ranksPerNode() != 1 ||
+      op->packed_send || op->packed_recv || op->tmp_sendbuf == nullptr ||
+      op->tmp_recvbuf == nullptr) {
+    sst_hg_abort_printf(
+        "Mask-MPI collective offload is enabled but this rank cannot execute a supported call");
+  }
+  if (!bindCollectiveOffload()) {
+    sst_hg_abort_printf("Mask-MPI collective offload is enabled but no valid endpoint is available");
+  }
+  if (collective_request_ != nullptr || op->tag < 0) {
+    sst_hg_abort_printf("Mask-MPI collective offload supports one outstanding blocking call");
+  }
+
+  const uint64_t invocation_id = next_collective_invocation_++;
+  if (invocation_id == 0 || next_collective_invocation_ == 0) {
+    sst_hg_abort_printf("Mask-MPI collective offload invocation sequence exhausted");
+  }
+
+  auto* request = MpiRequest::construct(MpiRequest::Collective);
+  collective_request_ = request;
+  collective_request_comm_ = op->comm;
+  collective_request_tag_ = op->tag;
+  collective_request_invocation_ = invocation_id;
+  collective_completion_status_ = SST::Collective::CollectiveCompletionStatus::RecoverableError;
+  op->comm->addRequest(op->tag, request);
+
+  SST::Collective::CollectivePending pending;
+  pending.participant = *collective_participant_;
+  pending.invocation_id = invocation_id;
+  pending.operation = SST::Collective::CollectiveOperation::Sum;
+  pending.datatype = SST::Collective::CollectiveDatatype::F64;
+  pending.element_count = 1;
+  pending.source = {reinterpret_cast<const uint8_t*>(op->tmp_sendbuf), sizeof(double)};
+  pending.result = {reinterpret_cast<uint8_t*>(op->tmp_recvbuf), sizeof(double)};
+  pending.completion = SST::Collective::CollectiveCompletionToken(
+      collective_participant_->binding.adapter_slot, invocation_id,
+      collective_participant_->binding.generation);
+
+  while (true) {
+    const auto result = collective_endpoint_->trySubmitCollective(pending);
+    if (result == SST::Collective::CollectiveSubmitResult::Accepted) {
+      if (pending.state != SST::Collective::CollectivePendingState::Consumed || pending.completion.valid()) {
+        sst_hg_abort_printf("Mask-MPI collective endpoint accepted without consuming ownership");
+      }
+      request->setCollective(std::move(op));
+      collective_waiter_ = operating_system->activeThread();
+      if (!collective_waiter_) {
+        sst_hg_abort_printf("Mask-MPI collective offload has no active application thread");
+      }
+      while (!request->isComplete()) {
+        collective_waiting_blocked_ = true;
+        operating_system->block();
+        collective_waiting_blocked_ = false;
+      }
+      collective_waiter_ = nullptr;
+
+      if (collective_completion_status_ != SST::Collective::CollectiveCompletionStatus::Success) {
+        auto retry_op = request->takeCollective();
+        clearCollectiveOffloadRequest();
+        delete request;
+        if (!retry_op) {
+          sst_hg_abort_printf("Mask-MPI collective offload lost the operation needed for recovery");
+        }
+        op.reset(static_cast<CollectiveOp*>(retry_op.release()));
+        return false;
+      }
+      finishCollective(request->collectiveData());
+      clearCollectiveOffloadRequest();
+      delete request;
+      return true;
+    }
+
+    if (!pending.readyForSubmit()) {
+      sst_hg_abort_printf("Mask-MPI collective endpoint consumed ownership without accepting");
+    }
+    if (result == SST::Collective::CollectiveSubmitResult::Unsupported) {
+      clearCollectiveOffloadRequest();
+      delete request;
+      return false;
+    }
+    if (result == SST::Collective::CollectiveSubmitResult::Invalid) {
+      clearCollectiveOffloadRequest();
+      delete request;
+      sst_hg_abort_printf("Mask-MPI collective endpoint rejected a valid POC submission");
+    }
+    if (result != SST::Collective::CollectiveSubmitResult::Retry) {
+      sst_hg_abort_printf("Mask-MPI collective endpoint returned an unknown status");
+    }
+
+    collective_ready_ = false;
+    collective_waiter_ = operating_system->activeThread();
+    if (!collective_waiter_) {
+      sst_hg_abort_printf("Mask-MPI collective retry has no active application thread");
+    }
+    collective_endpoint_->requestCollectiveReady(*collective_participant_);
+    while (!collective_ready_) {
+      collective_waiting_blocked_ = true;
+      operating_system->block();
+      collective_waiting_blocked_ = false;
+    }
+    collective_waiter_ = nullptr;
+  }
 }
 
 
@@ -463,8 +670,16 @@ MpiApi::allreduce(const void *src, void *dst, int count,
   auto start_clock = traceClock();
 #endif
 
-  do_coll(Allreduce, MPI_Allreduce, comm,
-           count, type, mop, src, dst);
+  auto op = prepareAllreduce(getComm(comm), count, type, mop, src, dst);
+  if (!tryBlockingAllreduceOffload(op, type, mop)) {
+    auto* msg = startAllreduce(op.get());
+    if (msg) {
+      op->complete = true;
+      delete msg;
+    }
+    waitCollective(std::move(op));
+  }
+  crossed_comm_world_barrier_ = (comm == MPI_COMM_WORLD) || crossed_comm_world_barrier_;
 
 #ifdef SST_HG_OTF2_ENABLED
   if (OTF2Writer_){

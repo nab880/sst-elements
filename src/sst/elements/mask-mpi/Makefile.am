@@ -2,10 +2,12 @@
 #
 #
 
-ext_LTLIBRARIES = libmask_mpi.la libsendrecv.la libreduce.la liballtoall.la liballgather.la libhalo3d26.la
+ext_LTLIBRARIES = libmask_mpi.la libsendrecv.la libreduce.la liballtoall.la liballgather.la libhalo3d26.la liballreduce_innetwork.la
 extdir = $(pkglibdir)/ext
 
-AM_CPPFLAGS += -I$(top_srcdir)/src/sst/elements
+AM_CPPFLAGS += \
+  -I$(top_srcdir)/src \
+  -I$(top_srcdir)/src/sst/elements
 
 libmask_mpi_la_SOURCES = \
   mpi_comm/mpi_comm.cc \
@@ -83,6 +85,7 @@ libreduce_la_SOURCES = tests/reduce.cc
 liballtoall_la_SOURCES = tests/alltoall.cc
 liballgather_la_SOURCES = tests/allgather.cc
 libhalo3d26_la_SOURCES = skeletons/halo3d-26.cc
+liballreduce_innetwork_la_SOURCES = tests/allreduce_innetwork.cc
 
 EXTRA_DIST = \
  tests/testsuite_default_mask_mpi.py \
@@ -92,11 +95,14 @@ EXTRA_DIST = \
  tests/test_alltoall.py \
  tests/test_allgather.py \
  tests/test_halo3d26.py \
+ tests/test_allreduce_innetwork.py \
  tests/refFiles/test_reduce.out \
  tests/refFiles/test_sendrecv.out \
  tests/refFiles/test_alltoall.out \
  tests/refFiles/test_allgather.out \
- tests/refFiles/test_halo3d26.out
+ tests/refFiles/test_halo3d26.out \
+ tests/refFiles/test_allreduce_innetwork_supported.out \
+ tests/refFiles/test_allreduce_innetwork_fallback.out
 
 libmask_mpi_la_LDFLAGS = -module -avoid-version
 libsendrecv_la_LDFLAGS = -module -avoid-version
@@ -104,6 +110,7 @@ libreduce_la_LDFLAGS = -module -avoid-version
 liballtoall_la_LDFLAGS = -module -avoid-version
 liballgather_la_LDFLAGS = -module -avoid-version
 libhalo3d26_la_LDFLAGS = -module -avoid-version
+liballreduce_innetwork_la_LDFLAGS = -module -avoid-version
 
 install-exec-hook:
 	$(SST_REGISTER_TOOL) SST_ELEMENT_SOURCE     mask-mpi=$(abs_srcdir)

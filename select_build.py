@@ -29,9 +29,9 @@ deps = {
     "iris"          : {"iris", "mask-mpi", "mercury", "merlin"},
     "kingsley"      : {"kingsley"},
     "llyr"          : {"cassini", "kingsley", "llyr", "memhierarchy", "merlin", "shogun"},
-    "mask-mpi"      : {"iris", "mask-mpi", "mercury"},
+    "mask-mpi"      : {"iris", "mask-mpi", "mercury", "merlin"},
     "memhierarchy"  : {"memhierarchy", "cassini", "kingsley", "merlin", "shogun"}, # Will also need CPU
-    "mercury"       : {"mercury", "iris", "mask-mpi"},
+    "mercury"       : {"iris", "mask-mpi", "mercury", "merlin"},
     "merlin"        : {"merlin"},
     "messier"       : {"cassini", "kingsley", "memhierarchy", "merlin", "messier", "shogun"},
     "miranda"       : {"cassini", "kingsley", "memhierarchy", "merlin", "miranda", "shogun"},
