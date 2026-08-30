@@ -37,7 +37,6 @@ libmerlin_la_SOURCES = \
 	test/nic.cc \
 	test/inc_nic.h \
 	test/inc_nic.cc \
-	test/collective/contractTest.h \
 	test/collective/contractTest.cc \
 	test/route_test/route_test.h \
 	test/route_test/route_test.cc \
@@ -151,7 +150,6 @@ EXTRA_DIST = \
 	tests/refFiles/test_merlin_torus_64_test.out \
 	tests/refFiles/test_merlin_polarfly_455_test.out \
 	tests/refFiles/test_merlin_polarstar_504_test.out \
-	tests/refFiles/collective_contract.out \
 	tests/refFiles/test_merlin_fattree_inc_test.out
 
 sstdir = $(includedir)/sst/elements/merlin
