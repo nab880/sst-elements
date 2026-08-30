@@ -138,6 +138,7 @@ EXTRA_DIST = \
 	tests/testsuite_default_collective.py \
 	tests/collective_contract.py \
 	tests/merlin_static_plan_contract.py \
+	tests/merlin_static_invalid_plan.py \
 	tests/merlin_static_ordinary_baseline.py \
 	services/collective/README.md \
 	tests/refFiles/test_merlin_dragon_128_platform_test.out \

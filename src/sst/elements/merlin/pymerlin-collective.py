@@ -22,30 +22,44 @@ class StaticCollectivePlan:
     validates the complete graph before any router installs its projection.
     """
 
+    _INT_MAX = (1 << 31) - 1
+    _MAX_ROUTER_PORT = _INT_MAX - 1
+    _NID_MAX = (1 << 63) - 1
+    _UINT32_MAX = (1 << 32) - 1
+    _UINT64_MAX = (1 << 64) - 1
+
     def __init__(self, root_router, router_links, endpoint_links, *,
                  job_namespace=1, route_id=1,
                  pending_egress_capacity=None, egress_clock="1GHz",
                  output_queue_depth=1):
         common = {
-            "job_namespace": self._id("job_namespace", job_namespace, nonzero=True),
-            "route_id": self._id("route_id", route_id),
+            "job_namespace": self._bounded_id(
+                "job_namespace", job_namespace, self._UINT64_MAX, nonzero=True),
+            "route_id": self._bounded_id("route_id", route_id, self._UINT64_MAX),
         }
         if not isinstance(egress_clock, str) or not egress_clock:
             raise ValueError("egress_clock must be a nonempty string")
-        output_queue_depth = self._id("output_queue_depth", output_queue_depth, nonzero=True)
+        output_queue_depth = self._bounded_id(
+            "output_queue_depth", output_queue_depth, self._UINT32_MAX, nonzero=True)
         if pending_egress_capacity is not None:
-            pending_egress_capacity = self._id(
-                "pending_egress_capacity", pending_egress_capacity, nonzero=True)
+            pending_egress_capacity = self._bounded_id(
+                "pending_egress_capacity", pending_egress_capacity,
+                self._UINT32_MAX, nonzero=True)
 
-        root_router = self._id("root_router", root_router)
+        root_router = self._bounded_id("root_router", root_router, self._INT_MAX)
         adjacency = {root_router: []}
         used_ports = set()
+        declared_router_links = set()
         edge_count = 0
         for entry in router_links:
             if len(entry) != 4:
                 raise ValueError("router links must contain four integers")
-            left, left_port, right, right_port = (
-                self._id("router link field", value) for value in entry)
+            left = self._bounded_id("router ID", entry[0], self._INT_MAX)
+            left_port = self._bounded_id(
+                "router port", entry[1], self._MAX_ROUTER_PORT)
+            right = self._bounded_id("router ID", entry[2], self._INT_MAX)
+            right_port = self._bounded_id(
+                "router port", entry[3], self._MAX_ROUTER_PORT)
             if left == right:
                 raise ValueError("a collective router cannot link to itself")
             for port in ((left, left_port), (right, right_port)):
@@ -54,16 +68,21 @@ class StaticCollectivePlan:
                 used_ports.add(port)
             adjacency.setdefault(left, []).append((right, left_port, right_port))
             adjacency.setdefault(right, []).append((left, right_port, left_port))
+            declared_router_links.add(
+                self._canonical_router_link(left, left_port, right, right_port))
             edge_count += 1
 
         endpoints = {}
         logical_ids = set()
         local = {}
+        declared_endpoint_links = set()
         for entry in endpoint_links:
             if len(entry) != 4:
                 raise ValueError("endpoint links must contain four integers")
-            physical, logical, router, port = (
-                self._id("endpoint link field", value) for value in entry)
+            physical = self._bounded_id("physical endpoint ID", entry[0], self._NID_MAX)
+            logical = self._bounded_id("logical participant ID", entry[1], self._NID_MAX)
+            router = self._bounded_id("router ID", entry[2], self._INT_MAX)
+            port = self._bounded_id("router port", entry[3], self._MAX_ROUTER_PORT)
             if physical in endpoints:
                 raise ValueError("physical endpoint %d is present more than once" % physical)
             if logical in logical_ids:
@@ -73,6 +92,7 @@ class StaticCollectivePlan:
             used_ports.add((router, port))
             logical_ids.add(logical)
             endpoints[physical] = (logical, router, port)
+            declared_endpoint_links.add((physical, router, port))
             local.setdefault(router, []).append((port, physical, logical))
             adjacency.setdefault(router, [])
         if not endpoints:
@@ -112,6 +132,8 @@ class StaticCollectivePlan:
             local_branches = sorted(local.get(router, ()))
             child_branches = sorted(children[router])
             branch_count = len(local_branches) + len(child_branches)
+            if branch_count > self._UINT32_MAX:
+                raise ValueError("router %d has too many collective branches" % router)
             capacity = branch_count if pending_egress_capacity is None else pending_egress_capacity
             if capacity < branch_count:
                 raise ValueError(
@@ -161,6 +183,8 @@ class StaticCollectivePlan:
         self._job_namespace = common["job_namespace"]
         self._route_id = common["route_id"]
         self._output_queue_depth = output_queue_depth
+        self._declared_router_links = frozenset(declared_router_links)
+        self._declared_endpoint_links = frozenset(declared_endpoint_links)
 
     def __deepcopy__(self, memo):
         # Plans contain only immutable mappings and tuples.  Merlin templates
@@ -169,11 +193,41 @@ class StaticCollectivePlan:
         return self
 
     @staticmethod
-    def _id(name, value, nonzero=False):
-        if isinstance(value, bool) or not isinstance(value, int) or value < (1 if nonzero else 0):
-            raise ValueError("%s must be a %s integer" %
-                             (name, "positive" if nonzero else "nonnegative"))
+    def _bounded_id(name, value, maximum, nonzero=False):
+        minimum = 1 if nonzero else 0
+        if (isinstance(value, bool) or not isinstance(value, int) or
+                value < minimum or value > maximum):
+            raise ValueError(
+                "%s must be a %s integer no greater than %d" %
+                (name, "positive" if nonzero else "nonnegative", maximum))
         return value
+
+    @staticmethod
+    def _canonical_router_link(left, left_port, right, right_port):
+        left_endpoint = (left, left_port)
+        right_endpoint = (right, right_port)
+        if right_endpoint < left_endpoint:
+            left_endpoint, right_endpoint = right_endpoint, left_endpoint
+        return left_endpoint + right_endpoint
+
+    def validate_built_topology(self, router_links, endpoint_links):
+        """Require every declared collective attachment in a built topology."""
+        actual_router_links = frozenset(
+            self._canonical_router_link(*entry) for entry in router_links)
+        actual_endpoint_links = frozenset(endpoint_links)
+        missing_router_links = self._declared_router_links - actual_router_links
+        missing_endpoint_links = self._declared_endpoint_links - actual_endpoint_links
+        if not missing_router_links and not missing_endpoint_links:
+            return
+
+        missing = []
+        if missing_router_links:
+            missing.append("router links %s" % sorted(missing_router_links))
+        if missing_endpoint_links:
+            missing.append("endpoint links %s" % sorted(missing_endpoint_links))
+        raise ValueError(
+            "static collective plan does not match built fat-tree; missing " +
+            "; ".join(missing))
 
     @property
     def router_ids(self):
@@ -235,6 +289,9 @@ class StaticCollectiveRouter(hr_router):
         for name, value in self.__dict__.items():
             object.__setattr__(clone, name, deepcopy(value, memo))
         return clone
+
+    def _validate_collective_topology(self, router_links, endpoint_links):
+        self._collective_plan.validate_built_topology(router_links, endpoint_links)
 
     def instanceRouter(self, name, radix, router_id):
         fact = self._collective_plan.router(router_id)

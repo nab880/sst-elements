@@ -118,6 +118,22 @@ class topoFatTree(Topology):
         if not self.host_link_latency:
             self.host_link_latency = self.link_latency
 
+        # Static collective routers opt into an exact build-time attachment
+        # audit.  Ordinary fat-tree builds allocate no audit state.
+        collective_validator = getattr(
+            type(self.router), "_validate_collective_topology", None)
+        collective_links = {} if collective_validator is not None else None
+
+        def record_collective_attachment(link, attachment):
+            key = id(link)
+            record = collective_links.get(key)
+            if record is None:
+                collective_links[key] = [link, [attachment]]
+            else:
+                if record[0] is not link:
+                    raise RuntimeError("Python reused a live fat-tree Link identity")
+                record[1].append(attachment)
+
         #Recursive function to build levels
         def fattree_rb(self, level, group, links):
             id = self._start_ids[level] + group * (self._routers_per_level[level]//self._groups_per_level[level])
@@ -135,6 +151,9 @@ class topoFatTree(Topology):
                         if self.bundleEndpoints:
                            hlink.setNoCut()
                         ep.addLink(hlink, port_name, self.host_link_latency)
+                        if collective_links is not None:
+                            record_collective_attachment(
+                                hlink, ("endpoint", node_id))
                         host_links.append(hlink)
 
                 # Create the edge router
@@ -146,9 +165,16 @@ class topoFatTree(Topology):
                 topology.addParams(self._getGroupParams("main"))
                 # Add links
                 for l in range(len(host_links)):
-                    rtr.addLink(host_links[l],"port%d"%l, self.link_latency)
+                    rtr.addLink(host_links[l], "port%d" % l, self.link_latency)
+                    if collective_links is not None:
+                        record_collective_attachment(
+                            host_links[l], ("router", rtr_id, l))
                 for l in range(len(links)):
-                    rtr.addLink(links[l],"port%d"%(l+self._downs[0]), self.link_latency)
+                    port = l + self._downs[0]
+                    rtr.addLink(links[l], "port%d" % port, self.link_latency)
+                    if collective_links is not None:
+                        record_collective_attachment(
+                            links[l], ("router", rtr_id, port))
                 return
 
             rtrs_in_group = self._routers_per_level[level] // self._groups_per_level[level]
@@ -181,7 +207,10 @@ class topoFatTree(Topology):
                 topology.addParams(self._getGroupParams("main"))
                 # Add links
                 for l in range(len(rtr_links[i])):
-                    rtr.addLink(rtr_links[i][l],"port%d"%l, self.link_latency)
+                    rtr.addLink(rtr_links[i][l], "port%d" % l, self.link_latency)
+                    if collective_links is not None:
+                        record_collective_attachment(
+                            rtr_links[i][l], ("router", rtr_id, l))
         #  End recursive function
 
         level = len(self._ups)
@@ -216,7 +245,10 @@ class topoFatTree(Topology):
                 topology.addParams(self._getGroupParams("main"))
 
                 for l in range(len(rtr_links[i])):
-                    rtr.addLink(rtr_links[i][l], "port%d"%l, self.link_latency)
+                    rtr.addLink(rtr_links[i][l], "port%d" % l, self.link_latency)
+                    if collective_links is not None:
+                        record_collective_attachment(
+                            rtr_links[i][l], ("router", rtr_id, l))
 
         else: # Single level case
             # create all the nodes
@@ -226,4 +258,19 @@ class topoFatTree(Topology):
         rtr_id = 0
 #        print("Instancing router " + str(rtr_id))
 
-
+        if collective_links is not None:
+            router_links = []
+            endpoint_links = []
+            for _, attachments in collective_links.values():
+                routers = [entry for entry in attachments if entry[0] == "router"]
+                endpoints = [entry for entry in attachments if entry[0] == "endpoint"]
+                if len(routers) == 2 and not endpoints:
+                    router_links.append((routers[0][1], routers[0][2],
+                                         routers[1][1], routers[1][2]))
+                elif len(routers) == 1 and len(endpoints) == 1:
+                    endpoint_links.append(
+                        (endpoints[0][1], routers[0][1], routers[0][2]))
+                else:
+                    raise ValueError(
+                        "static collective fat-tree found an incomplete or ambiguous link")
+            collective_validator(self.router, router_links, endpoint_links)

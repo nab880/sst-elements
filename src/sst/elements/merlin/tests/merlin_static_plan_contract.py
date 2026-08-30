@@ -8,10 +8,10 @@ ROUTER_LINKS = ((0, 2, 2, 0), (1, 2, 2, 1))
 ENDPOINT_LINKS = tuple((nid, nid, nid // 2, nid % 2) for nid in range(4))
 
 
-def require_rejected(message, router_links=ROUTER_LINKS,
+def require_rejected(message, root_router=2, router_links=ROUTER_LINKS,
                      endpoint_links=ENDPOINT_LINKS, **kwargs):
     try:
-        StaticCollectivePlan(2, router_links, endpoint_links, **kwargs)
+        StaticCollectivePlan(root_router, router_links, endpoint_links, **kwargs)
     except ValueError:
         return
     raise RuntimeError("StaticCollectivePlan accepted " + message)
@@ -40,5 +40,22 @@ require_rejected(
 )
 require_rejected("insufficient egress capacity", pending_egress_capacity=1)
 require_rejected("a Boolean route identifier", route_id=True)
+require_rejected("an oversized namespace", job_namespace=1 << 64)
+require_rejected("an oversized route identifier", route_id=1 << 64)
+require_rejected("an oversized router identifier", root_router=1 << 31)
+require_rejected(
+    "an oversized router port",
+    router_links=((0, (1 << 31) - 1, 2, 0), (1, 2, 2, 1)),
+)
+require_rejected(
+    "an oversized physical endpoint identifier",
+    endpoint_links=ENDPOINT_LINKS[:-1] + (((1 << 63), 3, 1, 1),),
+)
+require_rejected(
+    "an oversized logical participant identifier",
+    endpoint_links=ENDPOINT_LINKS[:-1] + ((3, (1 << 63), 1, 1),),
+)
+require_rejected("an oversized pending capacity", pending_egress_capacity=1 << 32)
+require_rejected("an oversized output depth", output_queue_depth=1 << 32)
 
 print("StaticCollectivePlan contract PASS")

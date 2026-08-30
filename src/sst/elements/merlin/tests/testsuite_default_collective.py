@@ -1,5 +1,7 @@
-import re
+# -*- coding: utf-8 -*-
+
 from pathlib import Path
+import re
 
 from sst_unittest import *
 from sst_unittest_support import *
@@ -34,12 +36,7 @@ class testcase_collective(SSTTestCase):
             self.assertIn(diagnostic,
                           output.read_text(encoding="utf-8") + error.read_text(encoding="utf-8"))
 
-    def test_static_plan_contract(self):
-        output, error = self.run_case("merlin_static_plan", "merlin_static_plan_contract.py")
-        self.assertFalse(os_test_file(str(error), "-s"))
-        self.assertIn("StaticCollectivePlan contract PASS", output.read_text(encoding="utf-8"))
-
-    def test_static_transport_rejections(self):
+    def test_static_configuration_rejections(self):
         cases = (
             ("bad-flit", "invalid or unsupported static local projection"),
             ("bad-capacity", "invalid or unsupported static local projection"),
@@ -51,6 +48,9 @@ class testcase_collective(SSTTestCase):
                 "merlin_static_" + mode, "merlin_static_ordinary_baseline.py", mode, 1)
             self.assertIn(diagnostic,
                           output.read_text(encoding="utf-8") + error.read_text(encoding="utf-8"))
+        output, error = self.run_case("merlin_static_topology", "merlin_static_invalid_plan.py", expected_rc=1)
+        self.assertIn("static collective plan does not match built fat-tree",
+                      output.read_text(encoding="utf-8") + error.read_text(encoding="utf-8"))
 
     def test_static_service_disabled_baseline(self):
         disabled, disabled_error = self.run_case(
