@@ -21,10 +21,14 @@
 #ifndef COMPONENTS_FIREFLY_NIC_H
 #define COMPONENTS_FIREFLY_NIC_H
 
+#include <array>
 #include <cmath>
 #include <list>
+#include <memory>
+#include <optional>
 #include <sstream>
 #include <queue>
+#include <vector>
 #include <sst/core/module.h>
 #include <sst/core/component.h>
 #include <sst/core/output.h>
@@ -33,6 +37,7 @@
 #include "sst/elements/hermes/shmemapi.h"
 #include "sst/elements/hermes/networkIOapi.h"
 #include "sst/elements/thornhill/detailedCompute.h"
+#include "collectiveAdapter.h"
 #include "ioVec.h"
 #include "merlinEvent.h"
 //#include "memoryModel/trivialMemoryModel.h"
@@ -81,6 +86,15 @@ public:
         { "printConfig", "Controls whether configuration data is printed", "no"},
         { "nic2host_lat", "Sets the latency over the Host to NIC bus", "150ns"},
         { "numVNs","Number of VNs to be used","1"},
+        { "collectiveEnable", "Enable the static one-vNIC collective endpoint", "false"},
+        { "collectiveJobNamespace", "Static collective job namespace", "1"},
+        { "collectiveRouteId", "Static collective route identifier", "1"},
+        { "collectiveRootNid", "Static collective root physical endpoint NID", "0"},
+        { "collectiveRootLogicalNid", "Caller-visible logical root NID; negative uses collectiveRootNid", "-1"},
+        { "collectiveParticipantLogicalId", "Immutable logical participant ID supplied by the job allocation", "-1"},
+        { "collectiveParticipantSlot", "Static local participant slot; POC requires zero", "0"},
+        { "collectiveReduceVN", "Static collective contribution VN; POC requires zero", "0"},
+        { "collectiveResultVN", "Static collective result VN; POC requires one", "1"},
         { "getHdrVN", "VN to send headers on", "0"},
         { "getRespLargeVN", "VN to send large get responses on", "0"},
         { "getRespSmallVN", "VN to send small get responses on", "0"},
@@ -152,6 +166,11 @@ public:
 
         { "recvStreamPending",   "number of pending receive stream memory operations", "depth", 1},
         { "sendStreamPending",   "number of pending send stream memory operations", "depth", 1},
+
+        { "collectiveEnqueued", "Collective contributions entering the NIC scheduler", "packets", 1},
+        { "collectiveSchedulerSends", "Collective contributions sent by feedTheNetwork", "packets", 1},
+        { "collectiveSendRetries", "Collective scheduler attempts blocked by credits", "attempts", 1},
+        { "collectiveResultsCompleted", "Collective results completed exactly once", "packets", 1},
 
         { "detailed_num_reads",                "total number of loads", "count", 1},
         { "detailed_num_writes",               "total number of stores", "count", 1},
@@ -403,6 +422,12 @@ public:
     std::vector< RecvCtxData > m_recvCtxData;
 
   private:
+    struct FeatureState;
+
+    FeatureState& ensureFeatureState();
+    bool collectiveVNReserved(int vn) const;
+    bool collectiveRoutePublished() const;
+
     typedef uint64_t DestKey;
     static DestKey getDestKey(int node, int pid) { return (DestKey) node << 32 | pid; }
 
@@ -412,6 +437,7 @@ public:
     void handleVnicEvent( Event*, int );
     void handleVnicEvent2( Event*, int );
     void handleMsgEvent( NicCmdEvent* event, int id );
+    void handleCollectiveEvent( NicCollectiveSubmitCmdEvent* event, int id );
     void handleShmemEvent( NicShmemCmdEvent* event, int id );
     void dmaSend( NicCmdEvent*, int );
     void pioSend( NicCmdEvent*, int );
@@ -420,6 +446,12 @@ public:
     void put( NicCmdEvent*, int );
     void regMemRgn( NicCmdEvent*, int );
     void processNetworkEvent( FireflyNetworkEvent* );
+    void processCollectivePacket( SST::Interfaces::SimpleNetwork::Request*, int vn );
+    void tryPublishCollectiveRoute();
+    void queueTaggedPacket( std::unique_ptr<SST::Interfaces::SimpleNetwork::Request> );
+    void armNetworkSend( int vn, SST::Interfaces::SimpleNetwork::NetworkServiceID retry_service );
+    void feedTaggedNetwork( int vn );
+    bool sendTaggedPkt( SST::Interfaces::SimpleNetwork::Request*, int vn );
 
     Hermes::MemAddr findShmem( int core, Hermes::Vaddr  addr, size_t length );
 
@@ -492,12 +524,27 @@ public:
     int IdToNet( int x ) { return x; }
 
 struct X {
-	X( Callback callback, FireflyNetworkEvent* pkt, int dest) : callback(callback), pkt(pkt), dest(dest) {}
+	X( Callback callback, FireflyNetworkEvent* pkt, int dest) :
+	        callback(callback), pkt(pkt), dest(dest), service(false) {}
+	X( Callback callback, SST::Interfaces::SimpleNetwork::Request* request) :
+	        callback(callback), service_pkt(request), dest(request->dest), service(true) {}
 
-	Callback			 callback;
-	FireflyNetworkEvent* pkt;
-	int                  dest;
-};
+	    bool isService() const { return service; }
+    size_t sizeInBits() { return isService() ? service_pkt->size_in_bits : pkt->calcPayloadSizeInBits(); }
+    size_t sizeInBytes() {
+        return isService() ? (service_pkt->size_in_bits + 7) / 8 : static_cast<size_t>(pkt->payloadSize());
+    }
+
+		Callback			 callback;
+		union {
+			FireflyNetworkEvent* pkt;
+			SST::Interfaces::SimpleNetwork::Request* service_pkt;
+		};
+		int                  dest;
+		bool                 service;
+	};
+	static_assert(sizeof(X) <= sizeof(Callback) + 2 * sizeof(void*),
+	    "Firefly queue entry must retain its legacy footprint");
 
 	typedef PriorityEntry<X*> PriorityX;
 
@@ -683,6 +730,8 @@ struct X {
     int m_shmemPutLargeVN;
     int m_shmemPutSmallVN;
     size_t m_shmemPutThresholdLength;
+
+    std::unique_ptr<FeatureState> m_featureState;
 
   private:
     SimpleSSD* m_simpleSSDPtr;

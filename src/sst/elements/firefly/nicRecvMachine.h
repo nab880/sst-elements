@@ -196,9 +196,34 @@ class RecvMachine {
 
 				m_nic.m_rcvdPkts->addData(1);
 
+                if ( m_nic.m_featureState ) {
+                    if ( req->hasService() ) {
+                        if ( req->getServiceID() == SST::Collective::COLLECTIVE_SERVICE_ID &&
+                                m_nic.collectiveRoutePublished() ) {
+                            m_nic.processCollectivePacket(req, vn);
+                        } else {
+                            const auto service_id = req->getServiceID();
+                            delete req;
+                            m_dbg.fatal(CALL_INFO, -1,
+                                "Unsupported Firefly network service %u on VN %d\n",
+                                static_cast<unsigned>(service_id), vn);
+                        }
+                        return NULL;
+                    }
+
+                    if ( m_nic.collectiveVNReserved(vn) ) {
+                        delete req;
+                        m_dbg.fatal(CALL_INFO, -1,
+                            "Untagged packet reached reserved collective VN %d\n", vn);
+                    }
+                }
+
 
                 Event* payload = req->takePayload();
-                if ( NULL == payload ) return NULL;
+                if ( NULL == payload ) {
+                    delete req;
+                    return NULL;
+                }
 
                 m_dbg.debug(CALL_INFO,2,NIC_DBG_RECV_MACHINE,"got packet\n");
 

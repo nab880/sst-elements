@@ -24,7 +24,11 @@
 #include <sst/core/subcomponent.h>
 #include "sst/elements/hermes/shmemapi.h"
 #include "sst/elements/hermes/networkIOapi.h"
+#include "collectiveAdapter.h"
 #include "ioVec.h"
+
+#include <memory>
+#include <optional>
 
 namespace SST {
 namespace Firefly {
@@ -33,6 +37,8 @@ namespace Firefly {
 class NicRespEvent;
 class NicShmemRespBaseEvent;
 class NicNetworkIORespBaseEvent;
+class NicCollectiveRespBaseEvent;
+class NicCollectiveSubmitCmdEvent;
 
 class VirtNic : public SST::SubComponent {
 
@@ -60,6 +66,11 @@ class VirtNic : public SST::SubComponent {
     )
 
   private:
+    struct FeatureState;
+
+    FeatureState& ensureFeatureState();
+    FeatureState* featureState() { return m_featureState.get(); }
+    FeatureState* featureState() const { return m_featureState.get(); }
 
     // Functor classes for handling callbacks
     template < typename argT >
@@ -215,9 +226,12 @@ class VirtNic : public SST::SubComponent {
     void networkIORead( int targetNid, Hermes::Vaddr dest, size_t len, std::function<void(int)> );
     void networkIOWrite( int targetNid, Hermes::Vaddr src, size_t len, std::function<void(int)> );
 
+    SST::Collective::CollectiveEndpoint* collectiveEndpoint() const;
+    const SST::Collective::AcceptedParticipantHandle* collectiveParticipant(uint32_t local_slot) const;
+
     bool isBlocked() {
-		m_dbg.debug(CALL_INFO,2,0,"%d %d\n", m_curNicQdepth, m_maxNicQdepth);
-        return m_curNicQdepth == m_maxNicQdepth;
+			m_dbg.debug(CALL_INFO,2,0,"%d %d\n", m_curNicQdepth, m_maxNicQdepth);
+        return m_curNicQdepth >= m_maxNicQdepth;
     }
 
     void setBlockedCallback( Callback callback ) {
@@ -263,6 +277,14 @@ class VirtNic : public SST::SubComponent {
     void handleMsgEvent( NicRespEvent * );
     void handleShmemEvent( NicShmemRespBaseEvent * );
     void handleNetworkIOEvent( NicNetworkIORespBaseEvent * );
+    void handleCollectiveEvent( NicCollectiveRespBaseEvent * );
+    void notifyReadyIfPossible();
+    void releaseNicCommandSlot();
+
+    friend class FireflyCollectiveEndpoint;
+    bool collectiveCommandSlotAvailable() const;
+    void sendCollectiveCommand( NicCollectiveSubmitCmdEvent* );
+    [[noreturn]] void collectiveFatal( const char* reason );
 
     int         m_realNicId;
     int         m_coreId;
@@ -279,6 +301,8 @@ class VirtNic : public SST::SubComponent {
     int m_maxNicQdepth;
     int m_curNicQdepth;
     Callback m_blockedCallback;
+
+    std::unique_ptr<FeatureState> m_featureState;
 };
 
 }

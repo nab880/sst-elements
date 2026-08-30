@@ -31,6 +31,15 @@ _basic_nic_defaults = {
     "hostReadDelay_ns" : 200,
     "packetSize" : "2048B",
     "packetOverhead" : 0,
+    "collectiveEnable" : False,
+    "collectiveJobNamespace" : 1,
+    "collectiveRouteId" : 1,
+    "collectiveRootNid" : 0,
+    "collectiveRootLogicalNid" : -1,
+    "collectiveParticipantLogicalId" : -1,
+    "collectiveParticipantSlot" : 0,
+    "collectiveReduceVN" : 0,
+    "collectiveResultVN" : 1,
 
     #"numVNs" : 1, # total number of VN used
     #"getHdrVN" : 0, # VN used for sending a get request
@@ -112,6 +121,11 @@ class BasicNicConfiguration(TemplateBase):
             "numSendMachines", "numRecvNicUnits",
             "messageSendAlignment", "nicAllocationPolicy",
             "packetOverhead", "packetSize",
+            "collectiveEnable", "collectiveJobNamespace",
+            "collectiveRouteId", "collectiveRootNid", "collectiveRootLogicalNid",
+            "collectiveParticipantLogicalId",
+            "collectiveParticipantSlot", "collectiveReduceVN",
+            "collectiveResultVN",
             "maxActiveRecvStreams", "maxPendingRecvPkts",
             "dmaBW_GBs", "dmaContentionMult",
             ])
@@ -206,6 +220,13 @@ class FireflyHades(FireflyOS):
             [ 'verboseLevel', 'defaultReturnLatency', 'defaultEnterLatency', 'defaultModule',
               'smallCollectiveVN', 'smallCollectiveSize'],
             "functionSM." # prefix needed in the dictionary so things get passed correctly to elements
+        )
+
+        self._declareParamsWithUserPrefix(
+            "main",
+            "functionsm.Allreduce",
+            ["enableOffload", "forceSoftware", "reportOffload"],
+            "functionSM.Allreduce."
         )
 
         # Subscribe to firefly.functionsm platform param set.  Need to
@@ -315,5 +336,3 @@ class FireflyHades(FireflyOS):
 
         #loopLink.connect( (process,'loop','1ns' ),(loopBack,'nic'+str(nodeID%self._nicsPerNode)+'core'+str(x),'1ns'))
         process.addLink(loopLink,'loop','1ns')
-
-

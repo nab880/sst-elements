@@ -39,8 +39,13 @@ public:
     void init( unsigned int phase ) {
         if ( 0 == phase ) {
             m_toCoreLink->sendUntimedData( new NicInitEvent(
-                                               m_nic->getNodeId(), id, m_nic->getNum_vNics() ) );
+                m_nic->getNodeId(), id, m_nic->getNum_vNics() ) );
         }
+    }
+
+    void publishCollectiveParticipant(
+            const SST::Collective::AcceptedParticipantHandle& participant ) {
+        m_toCoreLink->sendUntimedData( new NicCollectiveInitEvent(participant) );
     }
 
     void send( SST::Event * event ) {
@@ -74,6 +79,15 @@ public:
     }
     void notifyGetDone( void* key ) {
         send( new NicRespEvent( NicRespEvent::Get, key ));
+    }
+
+    void notifyCollectiveResult(uint64_t invocation_id,
+            const std::array<uint8_t, FIREFLY_COLLECTIVE_LOGICAL_BYTES>& result ) {
+        send( new NicCollectiveResultEvent(invocation_id, result) );
+    }
+
+    void notifyCollectiveSubmitAccepted(uint64_t invocation_id) {
+        send( new NicCollectiveSubmitAcceptedEvent(invocation_id) );
     }
 
     void notifyShmem( SimTime_t delay ) {

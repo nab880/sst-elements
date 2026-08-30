@@ -101,14 +101,21 @@ class EmberJob(Job):
             sst.addGlobalParams("params_%s"%self._instance_name, self._motifs);
             sst.addGlobalParams("params_%s"%self._instance_name, self._apis);
 
+        logical_id = self._nid_map[nodeID]
         nic, slot_name = self.nic.build(nodeID,self._numCores // self._nicsPerNode)
+        try:
+            collective_enabled = self.nic._getGroupParams("main").get(
+                "collectiveEnable", False)
+        except (AttributeError, KeyError):
+            collective_enabled = False
+        if collective_enabled:
+            nic.addParam("collectiveParticipantLogicalId", logical_id)
 
         #print( nodeID, "nic", self._getGroupParams("nic") )
         #print( nodeID, "ember", self._getGroupParams("ember") )
         # not needed: nic.addParams( self._getGroupParams("nic") ).  This is done already in the nic.build call
 
         # Build NetworkInterface
-        logical_id = self._nid_map[nodeID]
         networkif, port_name = self.network_interface.build(nic,slot_name,0,self.job_id,self.size,logical_id,False)
 
         # Store return value for later

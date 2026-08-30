@@ -17,6 +17,7 @@
 #define COMPONENTS_FIREFLY_CTRLMSG_H
 
 #include <sst/core/component.h>
+#include "sst/elements/merlin/services/collective/collectiveEndpoint.h"
 #include "protocolAPI.h"
 #include "ctrlMsgFunctors.h"
 #include "ioVec.h"
@@ -83,6 +84,12 @@ class API : public ProtocolAPI {
     virtual std::string name() { return "CtrlMsgProtocol"; }
 
     virtual void setVars( Info* info, VirtNic*, Thornhill::MemoryHeapLink*, Link* );
+
+    /** Neutral collective route published by the physical NIC, or nullptr before setVars/publication. */
+    SST::Collective::CollectiveEndpoint* collectiveEndpoint() const;
+    const SST::Collective::AcceptedParticipantHandle* collectiveParticipant(uint32_t local_slot) const;
+    /** Schedule one local FunctionSM re-entry; returns false before setVars. */
+    bool resumeCollectiveFunction();
 
     void initMsgPassing();
     void makeProgress();

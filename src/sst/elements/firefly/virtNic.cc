@@ -24,8 +24,14 @@
 #include "virtNic.h"
 #include "nic.h"
 
+#include <cstdlib>
+
 using namespace SST::Firefly;
 using namespace SST;
+
+struct VirtNic::FeatureState {
+    std::optional<FireflyCollectiveEndpoint> collective_endpoint;
+};
 
 VirtNic::VirtNic( ComponentId_t id, Params& params ) :
 	SubComponent(id),
@@ -34,9 +40,9 @@ VirtNic::VirtNic( ComponentId_t id, Params& params ) :
     m_notifySendPioDone(NULL),
     m_notifyRecvDmaDone(NULL),
     m_notifyNeedRecv(NULL),
-    m_curNicQdepth(0),
-    m_blockedCallback(NULL),
-    m_nextTimeSlot(0)
+	    m_curNicQdepth(0),
+	    m_blockedCallback(NULL),
+	    m_nextTimeSlot(0)
 {
     m_dbg.init("@t:VirtNic::@p():@l ",
         params.find<uint32_t>("verboseLevel",0),
@@ -60,26 +66,52 @@ VirtNic::~VirtNic()
     if ( m_notifyNeedRecv ) delete m_notifyNeedRecv;
 }
 
+VirtNic::FeatureState& VirtNic::ensureFeatureState()
+{
+    if ( !m_featureState ) m_featureState = std::make_unique<FeatureState>();
+    return *m_featureState;
+}
+
 void VirtNic::init( unsigned int phase )
 {
     m_dbg.debug(CALL_INFO,1,0,"phase=%d\n",phase);
 
-    if ( 1 == phase ) {
-        NicInitEvent* ev =
-                        static_cast<NicInitEvent*>(m_toNicLink->recvUntimedData());
-        assert( ev );
-        m_realNicId = ev->node;
-        m_coreId = ev->vNic;
-        m_numCores = ev->num_vNics;
-        delete ev;
+    if ( phase > 0 ) {
+        Event* raw = nullptr;
+        while ( (raw = m_toNicLink->recvUntimedData()) != nullptr ) {
+            if ( auto* ev = dynamic_cast<NicInitEvent*>(raw) ) {
+                if ( m_realNicId != -1 ) {
+                    m_dbg.fatal(CALL_INFO, -1, "Duplicate Firefly NIC initialization event\n");
+                }
+                m_realNicId = ev->node;
+                m_coreId = ev->vNic;
+                m_numCores = ev->num_vNics;
 
-        char buffer[100];
-        snprintf(buffer,100,"@t:%d:%d:VirtNic::@p():@l ", m_realNicId,
-							m_coreId );
-        m_dbg.setPrefix( buffer );
-
-        m_dbg.debug(CALL_INFO,1,0,"we are nic=%d core=%d\n",
-                        m_realNicId, m_coreId );
+                char buffer[100];
+                snprintf(buffer,100,"@t:%d:%d:VirtNic::@p():@l ", m_realNicId, m_coreId );
+                m_dbg.setPrefix( buffer );
+                m_dbg.debug(CALL_INFO,1,0,"we are nic=%d core=%d\n", m_realNicId, m_coreId );
+                delete ev;
+                continue;
+            }
+            if ( auto* ev = dynamic_cast<NicCollectiveInitEvent*>(raw) ) {
+                if ( m_realNicId == -1 ||
+                        (m_featureState && m_featureState->collective_endpoint) ) {
+                    m_dbg.fatal(CALL_INFO, -1, "Invalid Firefly collective route publication\n");
+                }
+                auto& endpoint = ensureFeatureState().collective_endpoint.emplace(*this);
+                if ( !endpoint.publish(ev->participant) ) {
+                    m_dbg.fatal(CALL_INFO, -1, "Invalid Firefly collective route publication\n");
+                }
+                delete ev;
+                continue;
+            }
+            delete raw;
+            m_dbg.fatal(CALL_INFO, -1, "Unknown Firefly NIC initialization event\n");
+        }
+        if ( phase == 1 && m_realNicId == -1 ) {
+            m_dbg.fatal(CALL_INFO, -1, "Missing Firefly NIC initialization event\n");
+        }
     }
 }
 
@@ -99,8 +131,61 @@ void VirtNic::handleEvent( Event* ev )
     case NicRespBaseEvent::NetworkIO:
         handleNetworkIOEvent( static_cast<NicNetworkIORespBaseEvent*>(ev ) );
         break;
+    case NicRespBaseEvent::Collective:
+        handleCollectiveEvent( static_cast<NicCollectiveRespBaseEvent*>(ev ) );
+        break;
+    default:
+        m_dbg.fatal(CALL_INFO, -1, "Unknown NIC response event type %d\n", event->base_type);
     }
     delete ev;
+}
+
+void VirtNic::notifyReadyIfPossible()
+{
+    auto* state = featureState();
+    if ( state && state->collective_endpoint && m_curNicQdepth < m_maxNicQdepth ) {
+        state->collective_endpoint->notifyReadyIfPossible();
+    }
+}
+
+void VirtNic::releaseNicCommandSlot()
+{
+    if ( m_curNicQdepth <= 0 ) {
+        m_dbg.fatal(CALL_INFO, -1, "NIC response has no outstanding host command\n");
+    }
+    --m_curNicQdepth;
+    if ( m_blockedCallback ) {
+        Callback callback = std::move(m_blockedCallback);
+        m_blockedCallback = nullptr;
+        callback();
+    }
+}
+
+void VirtNic::handleCollectiveEvent( NicCollectiveRespBaseEvent* event )
+{
+    auto* state = featureState();
+    if ( collectiveParticipant(0) == nullptr || state == nullptr || !state->collective_endpoint ) {
+        m_dbg.fatal(CALL_INFO, -1, "Collective response received without a published route\n");
+    }
+
+    switch ( event->type ) {
+    case NicCollectiveRespBaseEvent::Result: {
+        auto* result = static_cast<NicCollectiveResultEvent*>(event);
+        state->collective_endpoint->receiveResult(result->invocation_id, result->result);
+        notifyReadyIfPossible();
+        break;
+    }
+    case NicCollectiveRespBaseEvent::SubmitAccepted: {
+        const uint64_t invocation_id =
+            static_cast<NicCollectiveSubmitAcceptedEvent*>(event)->invocation_id;
+        state->collective_endpoint->submitAccepted(invocation_id);
+        releaseNicCommandSlot();
+        notifyReadyIfPossible();
+        break;
+    }
+    default:
+        m_dbg.fatal(CALL_INFO, -1, "Unknown collective response type %d\n", event->type);
+    }
 }
 
 void VirtNic::handleMsgEvent( NicRespEvent* event )
@@ -132,12 +217,8 @@ void VirtNic::handleShmemEvent( NicShmemRespBaseEvent* event )
    	ev->callback();
 
 	m_dbg.debug(CALL_INFO,2,0," %d %d\n", m_curNicQdepth, m_maxNicQdepth);
-   	assert( m_curNicQdepth > 0 );
-   	--m_curNicQdepth;
-   	if ( m_blockedCallback ) {
-       	m_blockedCallback();
-       	m_blockedCallback = NULL;
-   	}
+    releaseNicCommandSlot();
+    notifyReadyIfPossible();
 }
 
 void VirtNic::handleNetworkIOEvent( NicNetworkIORespBaseEvent* event )
@@ -148,12 +229,39 @@ void VirtNic::handleNetworkIOEvent( NicNetworkIORespBaseEvent* event )
    	ev->callback();
 
 	m_dbg.debug(CALL_INFO,2,0," %d %d\n", m_curNicQdepth, m_maxNicQdepth);
-   	assert( m_curNicQdepth > 0 );
-   	--m_curNicQdepth;
-   	if ( m_blockedCallback ) {
-       	m_blockedCallback();
-       	m_blockedCallback = NULL;
-   	}
+    releaseNicCommandSlot();
+    notifyReadyIfPossible();
+}
+
+SST::Collective::CollectiveEndpoint* VirtNic::collectiveEndpoint() const
+{
+    auto* state = featureState();
+    return collectiveParticipant(0) == nullptr || state == nullptr ? nullptr :
+        &*state->collective_endpoint;
+}
+
+const SST::Collective::AcceptedParticipantHandle* VirtNic::collectiveParticipant(
+        uint32_t local_slot ) const
+{
+    auto* state = featureState();
+    return state == nullptr || !state->collective_endpoint ? nullptr :
+        state->collective_endpoint->participant(local_slot);
+}
+
+bool VirtNic::collectiveCommandSlotAvailable() const
+{
+    return m_curNicQdepth < m_maxNicQdepth;
+}
+
+void VirtNic::sendCollectiveCommand( NicCollectiveSubmitCmdEvent* event )
+{
+    sendCmd(0, event);
+}
+
+[[noreturn]] void VirtNic::collectiveFatal( const char* reason )
+{
+    m_dbg.fatal(CALL_INFO, -1, "%s\n", reason);
+    std::abort();
 }
 
 bool VirtNic::canDmaSend()

@@ -10,6 +10,8 @@ comp_LTLIBRARIES = libfirefly.la
 
 libfirefly_la_SOURCES = \
 	protocolAPI.h \
+	collectiveAdapter.h \
+	collectiveAdapter.cc \
 	ioVec.h \
 	info.h \
 	group.h \
@@ -49,6 +51,7 @@ libfirefly_la_SOURCES = \
 	funcSM/gatherv.cc \
 	funcSM/allgather.cc \
 	funcSM/allgather.h \
+	funcSM/allreduce.cc \
 	funcSM/allreduce.h \
 	funcSM/collectiveOps.h \
 	funcSM/collectiveTree.cc \
@@ -170,12 +173,23 @@ libfirefly_la_SOURCES = \
 	nicNetworkIO.h \
 	nicNetworkIOStream.cc \
 	nicNetworkIOStream.h \
+	tests/emptyRequestRegressionTest.cc \
+	tests/emptyRequestRegressionTest.h \
+	tests/allreduceErrorRegressionTest.cc \
+	tests/allreduceErrorRegressionTest.h \
 	pyfirefly.py
 
 libfirefly_la_LDFLAGS = -module -avoid-version
+libfirefly_la_LIBADD = $(top_builddir)/src/sst/elements/merlin/libsstmerlincollective.la
+
+EXTRA_DIST = \
+	tests/empty_request_regression.py \
+	tests/allreduce_recoverable_error.py \
+	tests/testsuite_default_firefly.py
 
 install-exec-hook:
 	$(SST_REGISTER_TOOL) SST_ELEMENT_SOURCE     firefly=$(abs_srcdir)
+	$(SST_REGISTER_TOOL) SST_ELEMENT_TESTS      firefly=$(abs_srcdir)/tests
 
 BUILT_SOURCES = \
     pyfirefly.inc
