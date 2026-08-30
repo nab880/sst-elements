@@ -9,17 +9,15 @@
 
 #include "contractTest.h"
 
-#include <sst/elements/merlin/services/collective/collectiveArithmetic.h>
-#include <sst/elements/merlin/services/collective/collectiveRoute.h>
+#include <sst/elements/merlin/services/collective/collectiveEndpoint.h>
+#include <sst/elements/merlin/services/collective/collectiveServiceData.h>
 
 #include <sst/core/output.h>
 
 #include <array>
-#include <cmath>
 #include <cstring>
 #include <memory>
 #include <stdexcept>
-#include <string>
 #include <utility>
 #include <vector>
 
@@ -45,75 +43,33 @@ void roundTrip(T& input, T& output)
     ser.finalize();
 }
 
-uint64_t readU64(const std::vector<uint8_t>& bytes, size_t offset)
+template <class T>
+std::vector<char> pack(T& input)
 {
-    uint64_t value = 0;
-    for ( size_t i = 0; i < 8; ++i ) value = (value << 8) | bytes[offset + i];
-    return value;
+    SST::Core::Serialization::serializer ser;
+    ser.start_sizing();
+    SST_SER(input);
+    std::vector<char> buffer(ser.size());
+    ser.start_packing(buffer.data(), buffer.size());
+    SST_SER(input);
+    return buffer;
 }
 
-void writeU64(std::vector<uint8_t>& bytes, size_t offset, uint64_t value)
-{
-    for ( int i = 7; i >= 0; --i ) {
-        bytes[offset + static_cast<size_t>(i)] = static_cast<uint8_t>(value);
-        value >>= 8;
-    }
-}
-
-CollectiveDescriptorFieldsV1 makeFields()
-{
-    CollectiveDescriptorFieldsV1 fields;
-    fields.route                    = { 0x0102030405060708ull, 0 };
-    fields.invocation_id            = 0x1112131415161718ull;
-    fields.chunk_index              = 0;
-    fields.total_chunks             = 1;
-    fields.element_offset           = 0;
-    fields.element_count            = 1;
-    fields.total_elements           = 1;
-    fields.operation                = CollectiveOperation::Sum;
-    fields.datatype                 = CollectiveDatatype::F64;
-    fields.direction                = CollectiveDirection::Contribution;
-    fields.logical_payload_bytes    = 8;
-    fields.modeled_wire_bytes       = 32;
-    fields.data_present             = 1;
-    return fields;
-}
+constexpr RouteIdV1 TEST_ROUTE { 0x0102030405060708ull, 0x2122232425262728ull };
+constexpr uint64_t  TEST_INVOCATION = 0x1112131415161718ull;
 
 CollectiveServiceData makeServiceData(double value = 7.0)
 {
-    std::vector<uint8_t> bytes(sizeof(value));
+    std::array<uint8_t, CollectiveServiceData::VALUE_BYTES> bytes {};
     std::memcpy(bytes.data(), &value, sizeof(value));
-    return CollectiveServiceData(makeFields(), std::move(bytes));
-}
-
-CollectiveRouteRuntimeV1 makeRuntime()
-{
-    CollectiveRouteRuntimeV1 runtime;
-    runtime.route                       = makeFields().route;
-    runtime.route_kind                  = CollectiveRouteKind::FabricTree;
-    runtime.data_mode                   = CollectiveDataMode::Functional;
-    runtime.operation_mask              = operationMask(CollectiveOperation::Sum);
-    runtime.datatype_mask               = datatypeMask(CollectiveDatatype::F64);
-    runtime.accepted_invocation_quota   = 1;
-    runtime.submission_window            = 1;
-    runtime.maximum_logical_chunk_bytes = 8;
-    runtime.maximum_chunk_elements[5]   = 1;
-    runtime.fabric.emplace();
-    runtime.fabric->endpoint_reduce_vn   = 1;
-    runtime.fabric->endpoint_result_vn   = 2;
-    runtime.fabric->fabric_reduce_vn     = 3;
-    runtime.fabric->fabric_result_vn     = 4;
-    runtime.fabric->service_header_bytes = 16;
-    runtime.fabric->fabric_framing_bytes = 8;
-    runtime.fabric->accepted_flit_bits    = 64;
-    runtime.fabric->maximum_request_bits  = 256;
-    return runtime;
+    return CollectiveServiceData(
+        TEST_ROUTE, TEST_INVOCATION, CollectiveDirection::Contribution, bytes);
 }
 
 AcceptedParticipantHandle makeParticipant(uint32_t slot = 0)
 {
     AcceptedParticipantHandle participant;
-    participant.route                       = makeFields().route;
+    participant.route                       = TEST_ROUTE;
     participant.physical_route              = { 3, 1 };
     participant.route_kind                  = CollectiveRouteKind::FabricTree;
     participant.data_mode                   = CollectiveDataMode::Functional;
@@ -135,84 +91,51 @@ void testDescriptor()
 {
     CollectiveServiceData data = makeServiceData();
     require(data.validateIntrinsic() == DescriptorValidation::Valid, "valid descriptor rejected");
-
-    const std::vector<uint8_t> canonical = data.canonicalBytes();
-    require(canonical.size() == CollectiveServiceData::FIXED_PREFIX_BYTES + 8, "wrong canonical size");
-    require(canonical[0] == 0 && canonical[1] == 1 && canonical[2] == 0 && canonical[3] == 1,
-        "version fields moved");
-    require(readU64(canonical, 4) == data.fields.route.job_namespace, "namespace offset changed");
-    require(readU64(canonical, 12) == 0, "route offset changed");
-    require(readU64(canonical, 20) == data.fields.invocation_id, "invocation offset changed");
-    require(canonical[60] == 1 && canonical[61] == 6, "operation/datatype offsets changed");
-    require(canonical[62] == 0 && canonical[63] == 1 && canonical[64] == 1,
-        "policy/direction offsets changed");
-    require(readU64(canonical, 65) == 8 && readU64(canonical, 73) == 32 && canonical[81] == 1 &&
-                readU64(canonical, 82) == 8,
-        "payload metadata offsets changed");
+    require(data.validFor(TEST_ROUTE, CollectiveDirection::Contribution,
+                CollectiveServiceData::MODELED_REQUEST_BITS),
+        "valid fixed request rejected");
+    require(data.serviceID() == COLLECTIVE_SERVICE_ID && data.dataToken() == COLLECTIVE_DATA_TOKEN &&
+                data.schemaVersion() == COLLECTIVE_SERVICE_SCHEMA_V1,
+        "service identity changed");
 
     CollectiveServiceData decoded;
-    require(CollectiveServiceData::decodeCanonical(canonical.data(), canonical.size(), decoded) ==
-                DescriptorValidation::Valid,
-        "canonical decode failed");
-    require(decoded.fields.route == data.fields.route && decoded.fields.invocation_id == data.fields.invocation_id &&
-                decoded.owned_bytes == data.owned_bytes,
-        "canonical decode changed data");
+    roundTrip(data, decoded);
+    require(decoded.route == data.route && decoded.invocation_id == data.invocation_id &&
+                decoded.direction == data.direction && decoded.value == data.value,
+        "direct serialization changed service data");
+    std::vector<char> packed = pack(data);
+    require(packed.size() == 33,
+        "fixed service-data serialization is not route/id/direction/value only");
 
-    for ( size_t length = 0; length < canonical.size(); ++length ) {
-        CollectiveServiceData truncated;
-        require(CollectiveServiceData::decodeCanonical(canonical.data(), length, truncated) !=
-                    DescriptorValidation::Valid,
-            "truncated descriptor accepted");
+    packed[3 * sizeof(uint64_t)] = 0;
+    bool malformed_rejected = false;
+    try {
+        CollectiveServiceData malformed;
+        SST::Core::Serialization::serializer ser;
+        ser.start_unpacking(packed.data(), packed.size());
+        SST_SER(malformed);
     }
+    catch ( const std::runtime_error& ) {
+        malformed_rejected = true;
+    }
+    require(malformed_rejected, "invalid serialized direction accepted");
 
-    auto malformed = canonical;
-    malformed[1]   = 2;
-    require(CollectiveServiceData::decodeCanonical(malformed.data(), malformed.size(), decoded) ==
-                DescriptorValidation::InvalidServiceSchema,
-        "bad service schema accepted");
-    malformed     = canonical;
-    malformed[60] = 0;
-    require(CollectiveServiceData::decodeCanonical(malformed.data(), malformed.size(), decoded) ==
-                DescriptorValidation::InvalidOperation,
-        "bad operation accepted");
-    malformed     = canonical;
-    malformed[61] = 0;
-    require(CollectiveServiceData::decodeCanonical(malformed.data(), malformed.size(), decoded) ==
-                DescriptorValidation::InvalidDatatype,
-        "bad datatype accepted");
-    malformed     = canonical;
-    malformed[64] = 0;
-    require(CollectiveServiceData::decodeCanonical(malformed.data(), malformed.size(), decoded) ==
-                DescriptorValidation::InvalidDirection,
-        "bad direction accepted");
-    malformed     = canonical;
-    malformed[81] = 2;
-    require(CollectiveServiceData::decodeCanonical(malformed.data(), malformed.size(), decoded) ==
-                DescriptorValidation::InvalidDataPresent,
-        "bad data-present code accepted");
-    malformed = canonical;
-    writeU64(malformed, 82, 7);
-    require(CollectiveServiceData::decodeCanonical(malformed.data(), malformed.size(), decoded) ==
-                DescriptorValidation::EncodedLengthMismatch,
-        "bad owned length accepted");
-    malformed = canonical;
-    std::fill(malformed.begin() + 4, malformed.begin() + 12, 0);
-    require(CollectiveServiceData::decodeCanonical(malformed.data(), malformed.size(), decoded) ==
-                DescriptorValidation::InvalidNamespace,
-        "zero namespace accepted");
-    malformed = canonical;
-    std::fill(malformed.begin() + 32, malformed.begin() + 36, 0);
-    require(CollectiveServiceData::decodeCanonical(malformed.data(), malformed.size(), decoded) ==
-                DescriptorValidation::InvalidChunkCount,
-        "zero total-chunk count accepted");
+    std::unique_ptr<CollectiveServiceData> data_clone(data.clone());
+    const uint8_t cloned_first_byte = data_clone->value[0];
+    data.value[0] ^= 0xff;
+    require(data_clone.get() != &data && data_clone->value[0] == cloned_first_byte &&
+                data_clone->value != data.value,
+        "service-data clone aliased its source value");
+    data.value[0] ^= 0xff;
 
-    SimpleNetwork::Request request(7, 9, 256, true, true);
+    SimpleNetwork::Request request(
+        7, 9, CollectiveServiceData::MODELED_REQUEST_BITS, true, true);
     request.vn = 1;
     request.giveServiceData(new CollectiveServiceData(data));
-    std::unique_ptr<SimpleNetwork::Request> cloned(request.clone());
-    require(cloned->getServiceID() == COLLECTIVE_SERVICE_ID &&
-                cloned->inspectServiceData() != request.inspectServiceData() &&
-                cloned->inspectServiceDataAs<CollectiveServiceData>() != nullptr,
+    std::unique_ptr<SimpleNetwork::Request> request_clone(request.clone());
+    require(request_clone->getServiceID() == COLLECTIVE_SERVICE_ID &&
+                request_clone->inspectServiceData() != request.inspectServiceData() &&
+                request_clone->inspectServiceDataAs<CollectiveServiceData>() != nullptr,
         "Request clone sliced or aliased collective sidecar");
 
     auto* serialized_input  = new SimpleNetwork::Request(request);
@@ -225,83 +148,31 @@ void testDescriptor()
     delete serialized_input;
     delete serialized_output;
 
-    const CollectiveRouteRuntimeV1 runtime = makeRuntime();
-    require(validateCollectivePacket(data, runtime, CollectiveIngressRole::LocalEndpointContribution, 256) ==
-                CollectivePacketValidation::Valid,
-        "valid route-context packet rejected");
-    data.fields.direction = CollectiveDirection::Result;
-    require(validateCollectivePacket(data, runtime, CollectiveIngressRole::ChildContribution, 256) ==
-                CollectivePacketValidation::DirectionMismatch,
-        "wrong ingress direction accepted");
-    data.fields.direction         = CollectiveDirection::Contribution;
-    data.fields.modeled_wire_bytes = 31;
-    require(validateCollectivePacket(data, runtime, CollectiveIngressRole::ChildContribution, 248) ==
-                CollectivePacketValidation::ModeledSizeMismatch,
-        "wrong modeled size accepted");
-}
+    CollectiveServiceData invalid = data;
+    invalid.route.job_namespace   = 0;
+    require(invalid.validateIntrinsic() == DescriptorValidation::InvalidRoute,
+        "invalid route accepted");
+    invalid               = data;
+    invalid.invocation_id = 0;
+    require(invalid.validateIntrinsic() == DescriptorValidation::InvalidInvocationId,
+        "zero invocation ID accepted");
+    invalid           = data;
+    invalid.direction = static_cast<CollectiveDirection>(0);
+    require(invalid.validateIntrinsic() == DescriptorValidation::InvalidDirection,
+        "invalid direction accepted");
 
-void testArithmetic()
-{
-    std::array<double, 2> a { 1.0, -3.0 };
-    std::array<double, 2> b { 2.0, 1.0 };
-    std::array<double, 2> c { 4.0, -5.0 };
-    std::array<double, 2> result { 99.0, 99.0 };
-    const std::array<BufferView, 3> inputs {
-        BufferView { reinterpret_cast<const uint8_t*>(a.data()), sizeof(a) },
-        BufferView { reinterpret_cast<const uint8_t*>(b.data()), sizeof(b) },
-        BufferView { reinterpret_cast<const uint8_t*>(c.data()), sizeof(c) }
-    };
-    require(reduceOrdered(CollectiveOperation::Sum, CollectiveDatatype::F64, 2, inputs.data(), inputs.size(),
-                { reinterpret_cast<uint8_t*>(result.data()), sizeof(result) }) == ArithmeticStatus::Success &&
-                result[0] == 7.0 && result[1] == -7.0,
-        "ordered F64 sum is wrong");
-
-    std::array<uint8_t, 17> unaligned_a {};
-    std::array<uint8_t, 17> unaligned_b {};
-    std::array<uint8_t, 17> unaligned_result {};
-    const double ua = 2.0;
-    const double ub = 5.0;
-    std::memcpy(unaligned_a.data() + 1, &ua, 8);
-    std::memcpy(unaligned_b.data() + 1, &ub, 8);
-    const std::array<BufferView, 2> unaligned_inputs {
-        BufferView { unaligned_a.data() + 1, 8 }, BufferView { unaligned_b.data() + 1, 8 }
-    };
-    require(reduceOrdered(CollectiveOperation::Sum, CollectiveDatatype::F64, 1, unaligned_inputs.data(), 2,
-                { unaligned_result.data() + 1, 8 }) == ArithmeticStatus::Success,
-        "unaligned F64 sum failed");
-    double unaligned_value;
-    std::memcpy(&unaligned_value, unaligned_result.data() + 1, 8);
-    require(unaligned_value == 7.0, "unaligned F64 result is wrong");
-
-    std::array<double, 1> in_place { 3.0 };
-    std::array<double, 1> addend { 4.0 };
-    const std::array<BufferView, 2> alias_inputs {
-        BufferView { reinterpret_cast<const uint8_t*>(in_place.data()), 8 },
-        BufferView { reinterpret_cast<const uint8_t*>(addend.data()), 8 }
-    };
-    require(reduceOrdered(CollectiveOperation::Sum, CollectiveDatatype::F64, 1, alias_inputs.data(), 2,
-                { reinterpret_cast<uint8_t*>(in_place.data()), 8 }) == ArithmeticStatus::Success &&
-                in_place[0] == 7.0,
-        "exact in-place alias failed");
-
-    const auto unchanged = result;
-    require(reduceOrdered(CollectiveOperation::Min, CollectiveDatatype::F64, 2, inputs.data(), inputs.size(),
-                { reinterpret_cast<uint8_t*>(result.data()), sizeof(result) }) == ArithmeticStatus::Unsupported &&
-                result == unchanged,
-        "unsupported arithmetic changed output");
-    require(reduceOrdered(CollectiveOperation::Sum, CollectiveDatatype::F64, 2, inputs.data(), inputs.size(),
-                { reinterpret_cast<uint8_t*>(result.data()), 8 }) == ArithmeticStatus::Invalid && result == unchanged,
-        "invalid arithmetic changed output");
-
-    std::array<uint8_t, 16> overlap {};
-    const BufferView overlap_input { overlap.data(), 8 };
-    require(reduceOrdered(CollectiveOperation::Sum, CollectiveDatatype::F64, 1, &overlap_input, 1,
-                { overlap.data() + 1, 8 }) == ArithmeticStatus::Invalid,
-        "partial overlap accepted");
-    require(reduceOrdered(CollectiveOperation::Sum, CollectiveDatatype::F64, 0,
-                reinterpret_cast<const BufferView*>(uintptr_t { 1 }), UINT32_MAX,
-                { reinterpret_cast<uint8_t*>(uintptr_t { 1 }), UINT64_MAX }) == ArithmeticStatus::Success,
-        "zero-element arithmetic dereferenced poison state");
+    require(!data.validFor({ TEST_ROUTE.job_namespace, TEST_ROUTE.route_id + 1 },
+                CollectiveDirection::Contribution, CollectiveServiceData::MODELED_REQUEST_BITS),
+        "wrong route accepted");
+    require(!data.validFor(TEST_ROUTE, CollectiveDirection::Result,
+                CollectiveServiceData::MODELED_REQUEST_BITS),
+        "wrong direction accepted");
+    require(!data.validFor(TEST_ROUTE, CollectiveDirection::Contribution,
+                CollectiveServiceData::MODELED_REQUEST_BITS - 1),
+        "undersized request accepted");
+    require(!data.validFor(TEST_ROUTE, CollectiveDirection::Contribution,
+                CollectiveServiceData::MODELED_REQUEST_BITS + 1),
+        "oversized request accepted");
 }
 
 class CompletionRecorder final : public CollectiveCompletionSink
@@ -457,61 +328,6 @@ void testEndpoint()
     require(!endpoint.finish(10.0) && completion.count == 1, "duplicate completion was delivered");
 }
 
-void testRoutes()
-{
-    CollectiveRouteRuntimeV1 runtime = makeRuntime();
-    require(runtime.valid(), "valid runtime route rejected");
-
-    EndpointRouteProjectionV1 endpoint;
-    endpoint.route                   = runtime.route;
-    endpoint.owner_component_id      = 44;
-    endpoint.physical_endpoint_id    = 9;
-    endpoint.local_participant_count = 1;
-    endpoint.local_participants.push_back({ 0, 100, 0, { 44, 0, 1 } });
-    endpoint.fabric.emplace();
-    endpoint.fabric->root_representative = { 7, 7 };
-    endpoint.fabric->injection_dest_nid  = 7;
-    require(endpoint.valid(runtime), "valid endpoint-local projection rejected");
-    endpoint.local_participants[0].local_slot = 1;
-    require(!endpoint.valid(runtime), "nondense local slot accepted");
-    endpoint.local_participants[0].local_slot = 0;
-
-    RouterRouteProjectionV1 root;
-    root.route                  = runtime.route;
-    root.owner_component_id     = 70;
-    root.root                   = true;
-    root.subtree_representative = { 7, 7 };
-    root.root_representative    = { 7, 7 };
-    root.child_branches.push_back({ 1, { 9, 9 } });
-    root.local_endpoint_branches.push_back({ 2, { 7, 7 } });
-    require(root.valid(runtime), "valid root-local projection rejected");
-    root.local_endpoint_branches[0].port = 1;
-    require(!root.valid(runtime), "duplicate local router port accepted");
-    root.local_endpoint_branches[0].port = 2;
-
-    RouterRouteProjectionV1 leaf;
-    leaf.route                  = runtime.route;
-    leaf.owner_component_id     = 71;
-    leaf.root                   = false;
-    leaf.parent_port            = 3;
-    leaf.subtree_representative = { 9, 9 };
-    leaf.root_representative    = { 7, 7 };
-    leaf.local_endpoint_branches.push_back({ 0, { 9, 9 } });
-    require(leaf.valid(runtime), "valid leaf-local projection rejected");
-    leaf.parent_port.reset();
-    require(!leaf.valid(runtime), "nonroot projection without parent accepted");
-
-    CollectiveRouteRuntimeV1 local_runtime = runtime;
-    local_runtime.route_kind               = CollectiveRouteKind::EndpointLocal;
-    local_runtime.fabric.reset();
-    EndpointRouteProjectionV1 local_endpoint = endpoint;
-    local_endpoint.fabric.reset();
-    require(local_runtime.valid() && local_endpoint.valid(local_runtime),
-        "EndpointLocal runtime requires fabric/global state");
-    require(root.validate(local_runtime) == CollectiveRouteValidation::RouteKindMismatch,
-        "EndpointLocal route accepted a router projection");
-}
-
 } // namespace
 
 ContractTest::ContractTest(SST::ComponentId_t id, SST::Params& params) : SST::Component(id)
@@ -523,9 +339,7 @@ ContractTest::ContractTest(SST::ComponentId_t id, SST::Params& params) : SST::Co
     SST::Output output("", 1, 0, SST::Output::STDOUT);
     try {
         testDescriptor();
-        testArithmetic();
         testEndpoint();
-        testRoutes();
     }
     catch ( const std::exception& error ) {
         output.fatal(CALL_INFO, -1, "collective contract FAIL: %s\n", error.what());

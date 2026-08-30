@@ -10,51 +10,16 @@
 
 #include "collectiveTypes.h"
 
+#include <array>
 #include <cstdint>
-#include <vector>
 
 namespace SST::Collective {
 
 enum class DescriptorValidation : uint8_t {
     Valid = 0,
-    InvalidServiceSchema,
-    InvalidWireFormat,
-    InvalidNamespace,
-    InvalidChunkCount,
-    InvalidChunkIndex,
-    InvalidElementCount,
-    InvalidElementRange,
-    InvalidOperation,
-    InvalidDatatype,
-    InvalidArithmeticPolicy,
-    InvalidDirection,
-    PayloadSizeOverflow,
-    PayloadSizeMismatch,
-    InvalidDataPresent,
-    OwnedSizeMismatch,
-    InvalidModeledSize,
-    EncodedLengthMismatch,
-    EncodedLengthTooLarge
-};
-
-struct CollectiveDescriptorFieldsV1
-{
-    uint16_t             service_schema_version = COLLECTIVE_SERVICE_SCHEMA_V1;
-    uint16_t             wire_format_version    = COLLECTIVE_WIRE_FORMAT_V1;
-    RouteIdV1            route;
-    uint64_t             invocation_id           = 0;
-    uint32_t             chunk_index             = 0;
-    uint32_t             total_chunks            = 0;
-    uint64_t             element_offset          = 0;
-    uint64_t             element_count           = 0;
-    uint64_t             total_elements          = 0;
-    CollectiveOperation  operation               = static_cast<CollectiveOperation>(0);
-    CollectiveDatatype   datatype                = static_cast<CollectiveDatatype>(0);
-    uint16_t             arithmetic_policy       = COLLECTIVE_ARITHMETIC_POLICY_V1;
-    CollectiveDirection  direction               = static_cast<CollectiveDirection>(0);
-    uint64_t             logical_payload_bytes   = 0;
-    uint64_t             modeled_wire_bytes      = 0;
-    uint8_t              data_present            = 0;
+    InvalidRoute,
+    InvalidInvocationId,
+    InvalidDirection
 };
 
 class CollectiveServiceData final : public SimpleNetwork::NetworkServiceData
@@ -64,35 +29,38 @@ public:
     static constexpr SimpleNetwork::NetworkServiceDataToken DATA_TOKEN = COLLECTIVE_DATA_TOKEN;
     static constexpr SimpleNetwork::NetworkServiceVersion MIN_SCHEMA_VERSION = COLLECTIVE_SERVICE_SCHEMA_V1;
     static constexpr SimpleNetwork::NetworkServiceVersion MAX_SCHEMA_VERSION = COLLECTIVE_SERVICE_SCHEMA_V1;
-    static constexpr uint64_t FIXED_PREFIX_BYTES = 90;
-    static constexpr uint64_t MAX_OWNED_BYTES = UINT32_MAX;
+    static constexpr uint64_t VALUE_BYTES = 8;
+    /** Network timing footprint; checkpoint serialization contains only the fixed fields below. */
+    static constexpr uint64_t MODELED_HEADER_BYTES = 90;
+    static constexpr uint64_t MODELED_REQUEST_BITS = (MODELED_HEADER_BYTES + VALUE_BYTES) * 8;
 
     CollectiveServiceData() = default;
-    CollectiveServiceData(CollectiveDescriptorFieldsV1 fields, std::vector<uint8_t> owned_bytes);
-    ~CollectiveServiceData() override;
+    CollectiveServiceData(RouteIdV1 route, uint64_t invocation_id, CollectiveDirection direction,
+        std::array<uint8_t, VALUE_BYTES> value);
 
     SimpleNetwork::NetworkServiceID serviceID() const override { return SERVICE_ID; }
     SimpleNetwork::NetworkServiceDataToken dataToken() const override { return DATA_TOKEN; }
-    SimpleNetwork::NetworkServiceVersion schemaVersion() const override
-    {
-        return fields.service_schema_version;
-    }
+    SimpleNetwork::NetworkServiceVersion schemaVersion() const override { return MIN_SCHEMA_VERSION; }
     CollectiveServiceData* clone() const override;
 
     DescriptorValidation validateIntrinsic() const;
-
-    std::vector<uint8_t> canonicalBytes() const;
-    static DescriptorValidation decodeCanonical(
-        const uint8_t* bytes, uint64_t length, CollectiveServiceData& output);
+    bool validFor(const RouteIdV1& expected_route, CollectiveDirection expected_direction,
+        uint64_t request_bits) const;
 
     void serialize_order(SST::Core::Serialization::serializer& ser) override;
 
-    CollectiveDescriptorFieldsV1 fields;
-    std::vector<uint8_t>          owned_bytes;
+    RouteIdV1                        route;
+    uint64_t                         invocation_id = 0;
+    CollectiveDirection              direction = static_cast<CollectiveDirection>(0);
+    std::array<uint8_t, VALUE_BYTES> value {};
 
 private:
     ImplementSerializable(SST::Collective::CollectiveServiceData);
 };
+
+static_assert(CollectiveServiceData::VALUE_BYTES == 8);
+static_assert(CollectiveServiceData::MODELED_HEADER_BYTES == 90);
+static_assert(CollectiveServiceData::MODELED_REQUEST_BITS == 784);
 
 } // namespace SST::Collective
 

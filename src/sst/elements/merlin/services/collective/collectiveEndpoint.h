@@ -153,13 +153,6 @@ public:
     constexpr uint64_t nativeRequestId() const { return native_request_id_; }
     constexpr uint32_t generation() const { return generation_; }
 
-    void serialize_order(SST::Core::Serialization::serializer& ser)
-    {
-        SST_SER(adapter_slot_);
-        SST_SER(native_request_id_);
-        SST_SER(generation_);
-    }
-
 private:
     constexpr void clear() noexcept
     {

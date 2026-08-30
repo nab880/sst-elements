@@ -12,11 +12,8 @@ libsstmerlincollective_la_SOURCES = \
 	services/collective/collectiveTypes.h \
 	services/collective/collectiveServiceData.h \
 	services/collective/collectiveServiceData.cc \
-	services/collective/collectiveArithmetic.h \
-	services/collective/collectiveArithmetic.cc \
 	services/collective/collectiveEndpoint.h \
-	services/collective/collectiveRoute.h \
-	services/collective/collectiveRoute.cc
+	services/collective/collectiveEndpoint.h
 libsstmerlincollective_la_LDFLAGS = -avoid-version
 
 compdir = $(pkglibdir)
@@ -162,9 +159,7 @@ nobase_sst_HEADERS = \
 	router.h \
 	services/collective/collectiveTypes.h \
 	services/collective/collectiveServiceData.h \
-	services/collective/collectiveArithmetic.h \
-	services/collective/collectiveEndpoint.h \
-	services/collective/collectiveRoute.h
+	services/collective/collectiveEndpoint.h
 
 libmerlin_la_LDFLAGS = -module -avoid-version $(PYTHON_LDFLAGS)
 libmerlin_la_LIBADD = libsstmerlincollective.la
