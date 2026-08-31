@@ -50,6 +50,9 @@ Questions? Contact sst-macro-help@sandia.gov
 #include <mercury/operating_system/process/thread.h>
 #//include <mercury/operating_system/process/ftq_scope.h>
 
+#include <limits>
+#include <optional>
+
 //#define do_coll(coll, fxn, ...) \
 //  StartMPICall(fxn); \
 //  auto op = start##coll(#fxn, __VA_ARGS__); \
@@ -71,6 +74,110 @@ Questions? Contact sst-macro-help@sandia.gov
   addImmediateCollective(std::move(op), req);
 
 namespace SST::MASKMPI {
+
+namespace {
+
+using SST::Collective::CollectiveDatatype;
+using SST::Collective::CollectiveOperation;
+using SST::Collective::CollectiveSignatureV1;
+
+struct MappedCollectiveSignature
+{
+  CollectiveSignatureV1 signature;
+  uint64_t payload_bytes = 0;
+};
+
+std::optional<CollectiveOperation>
+mapCollectiveOperation(MPI_Op operation)
+{
+  switch (operation) {
+    case MPI_SUM: return CollectiveOperation::Sum;
+    case MPI_MIN: return CollectiveOperation::Min;
+    case MPI_MAX: return CollectiveOperation::Max;
+    default: return std::nullopt;
+  }
+}
+
+std::optional<CollectiveDatatype>
+mapSignedCollectiveDatatype(int packed_width)
+{
+  if (packed_width == 4) return CollectiveDatatype::I32;
+  if (packed_width == 8) return CollectiveDatatype::I64;
+  return std::nullopt;
+}
+
+std::optional<CollectiveDatatype>
+mapUnsignedCollectiveDatatype(int packed_width)
+{
+  if (packed_width == 4) return CollectiveDatatype::U32;
+  if (packed_width == 8) return CollectiveDatatype::U64;
+  return std::nullopt;
+}
+
+std::optional<CollectiveDatatype>
+mapFloatingCollectiveDatatype(int packed_width)
+{
+  if (packed_width == 4) return CollectiveDatatype::F32;
+  if (packed_width == 8) return CollectiveDatatype::F64;
+  return std::nullopt;
+}
+
+std::optional<CollectiveDatatype>
+mapCollectiveDatatype(MPI_Datatype datatype, int packed_width)
+{
+  switch (datatype) {
+    case MPI_INT:
+    case MPI_INTEGER:
+    case MPI_INT32_T:
+    case MPI_INTEGER4:
+    case MPI_LONG:
+    case MPI_LONG_LONG_INT:
+    case MPI_INT64_T:
+    case MPI_INTEGER8:
+      return mapSignedCollectiveDatatype(packed_width);
+    case MPI_UNSIGNED:
+    case MPI_UINT32_T:
+    case MPI_UNSIGNED_LONG:
+    case MPI_UNSIGNED_LONG_LONG:
+    case MPI_UINT64_T:
+      return mapUnsignedCollectiveDatatype(packed_width);
+    case MPI_FLOAT:
+    case MPI_REAL:
+    case MPI_REAL4:
+    case MPI_DOUBLE:
+    case MPI_DOUBLE_PRECISION:
+    case MPI_REAL8:
+      return mapFloatingCollectiveDatatype(packed_width);
+    default:
+      return std::nullopt;
+  }
+}
+
+std::optional<MappedCollectiveSignature>
+mapCollectiveSignature(MPI_Op operation, MPI_Datatype datatype,
+                       int element_count, int packed_width)
+{
+  const auto mapped_operation = mapCollectiveOperation(operation);
+  const auto mapped_datatype = mapCollectiveDatatype(datatype, packed_width);
+  if (!mapped_operation || !mapped_datatype || element_count <= 0 || packed_width <= 0) {
+    return std::nullopt;
+  }
+
+  const uint64_t expected_width = SST::Collective::collectiveDatatypeBytes(*mapped_datatype);
+  if (expected_width == 0 || static_cast<uint64_t>(packed_width) != expected_width) {
+    return std::nullopt;
+  }
+
+  CollectiveSignatureV1 signature {
+      *mapped_operation, *mapped_datatype, static_cast<uint64_t>(element_count)};
+  const auto payload_bytes = signature.payloadBytes();
+  if (!payload_bytes || *payload_bytes > std::numeric_limits<size_t>::max()) {
+    return std::nullopt;
+  }
+  return MappedCollectiveSignature {signature, *payload_bytes};
+}
+
+} // namespace
 
 MpiRequest*
 MpiApi::addImmediateCollective(CollectiveOpBase::ptr&& op)
@@ -540,10 +647,20 @@ MpiApi::tryBlockingAllreduceOffload(CollectiveOp::ptr& op, MPI_Datatype type, MP
     return false;
   }
   auto* operating_system = parent()->os();
-  const bool supported_signature = op->comm == worldcomm_ &&
-      op->comm->id() == MPI_COMM_WORLD && op->sendcnt == 1 && op->recvcnt == 1 &&
-      type == MPI_DOUBLE && mop == MPI_SUM;
-  if (!supported_signature) return false;
+  if (op->comm != worldcomm_ || op->comm->id() != MPI_COMM_WORLD ||
+      op->sendcnt != op->recvcnt) {
+    return false;
+  }
+  const auto mapped_signature = mapCollectiveSignature(
+      mop, type, op->sendcnt, op->sendtype->packed_size());
+  if (!mapped_signature) return false;
+
+  auto* candidate_endpoint = collective_endpoint_ != nullptr ? collective_endpoint_ :
+      (operating_system != nullptr ? operating_system->collectiveEndpoint() : nullptr);
+  if (candidate_endpoint != nullptr &&
+      !candidate_endpoint->supportsCollective(mapped_signature->signature)) {
+    return false;
+  }
 
   if (!operating_system || operating_system->ranksPerNode() != 1 ||
       op->packed_send || op->packed_recv || op->tmp_sendbuf == nullptr ||
@@ -574,11 +691,11 @@ MpiApi::tryBlockingAllreduceOffload(CollectiveOp::ptr& op, MPI_Datatype type, MP
   SST::Collective::CollectivePending pending;
   pending.participant = *collective_participant_;
   pending.invocation_id = invocation_id;
-  pending.operation = SST::Collective::CollectiveOperation::Sum;
-  pending.datatype = SST::Collective::CollectiveDatatype::F64;
-  pending.element_count = 1;
-  pending.source = {reinterpret_cast<const uint8_t*>(op->tmp_sendbuf), sizeof(double)};
-  pending.result = {reinterpret_cast<uint8_t*>(op->tmp_recvbuf), sizeof(double)};
+  pending.signature = mapped_signature->signature;
+  pending.source = {reinterpret_cast<const uint8_t*>(op->tmp_sendbuf),
+                    mapped_signature->payload_bytes};
+  pending.result = {reinterpret_cast<uint8_t*>(op->tmp_recvbuf),
+                    mapped_signature->payload_bytes};
   pending.completion = SST::Collective::CollectiveCompletionToken(
       collective_participant_->binding.adapter_slot, invocation_id,
       collective_participant_->binding.generation);
@@ -639,7 +756,8 @@ MpiApi::tryBlockingAllreduceOffload(CollectiveOp::ptr& op, MPI_Datatype type, MP
     if (!collective_waiter_) {
       sst_hg_abort_printf("Mask-MPI collective retry has no active application thread");
     }
-    collective_endpoint_->requestCollectiveReady(*collective_participant_);
+    collective_endpoint_->requestCollectiveReady(
+        *collective_participant_, pending.signature);
     while (!collective_ready_) {
       collective_waiting_blocked_ = true;
       operating_system->block();

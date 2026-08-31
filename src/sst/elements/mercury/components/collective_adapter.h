@@ -49,6 +49,9 @@ public:
       SST::Interfaces::SimpleNetwork::nid_t physical_endpoint_id,
       SST::Interfaces::SimpleNetwork::nid_t participant_logical_id);
 
+  bool supportsCollective(
+      const SST::Collective::CollectiveSignatureV1& signature) const override;
+
   bool bindParticipant(
       const SST::Collective::AcceptedParticipantHandle& participant,
       SST::Collective::CollectiveCompletionSink& completion,
@@ -58,7 +61,8 @@ public:
       SST::Collective::CollectivePending& pending) override;
 
   void requestCollectiveReady(
-      const SST::Collective::AcceptedParticipantHandle& participant) override;
+      const SST::Collective::AcceptedParticipantHandle& participant,
+      const SST::Collective::CollectiveSignatureV1& signature) override;
 
   const SST::Collective::AcceptedParticipantHandle* participant(
       uint32_t local_slot) const;
@@ -89,6 +93,8 @@ private:
   SST::Collective::CollectiveReadySink* ready_ = nullptr;
   std::optional<SST::Collective::CollectiveCompletionToken> token_;
   SST::Collective::MutableBufferView result_;
+  SST::Collective::CollectiveSignatureV1 active_signature_;
+  SST::Collective::CollectiveSignatureV1 ready_signature_;
   uint64_t active_invocation_ = 0;
   uint64_t completed_invocation_ = 0;
   bool active_ = false;

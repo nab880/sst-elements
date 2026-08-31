@@ -9,7 +9,9 @@ All rights reserved.
 
 #define ssthg_app_name allreduce_innetwork
 
+#include <array>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <cstdio>
 
@@ -63,6 +65,18 @@ int main(int argc, char* argv[])
     double result = -1.0;
     MPI_Allreduce(&input, &result, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
     bool pass = size == 4 && std::fabs(result - 4.0) < 1e-12;
+
+    std::array<int32_t, 128> integer_input {};
+    std::array<int32_t, 128> integer_result {};
+    for ( size_t index = 0; index < integer_input.size(); ++index ) {
+        integer_input[index] = static_cast<int32_t>(rank * 1000 + index);
+    }
+    MPI_Allreduce(integer_input.data(), integer_result.data(),
+        static_cast<int>(integer_input.size()), MPI_INT32_T, MPI_MAX, MPI_COMM_WORLD);
+    for ( size_t index = 0; index < integer_result.size(); ++index ) {
+        pass = pass && integer_result[index] == static_cast<int32_t>((size - 1) * 1000 + index);
+    }
+
     for ( int iteration = 0; iteration < 2; ++iteration ) {
         result = -1.0;
         MPI_Allreduce(&input, &result, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
