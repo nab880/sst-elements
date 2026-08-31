@@ -693,18 +693,6 @@ MerlinStaticCollectiveProcessor::progressPendingEgress()
 }
 
 bool
-MerlinStaticCollectiveProcessor::hasActiveInvocation() const
-{
-    return impl_ != nullptr && impl_->active.phase != Impl::Phase::Empty;
-}
-
-uint32_t
-MerlinStaticCollectiveProcessor::pendingEgressCount() const
-{
-    return impl_ == nullptr ? 0 : static_cast<uint32_t>(impl_->egress_count);
-}
-
-bool
 MerlinStaticCollectiveProcessor::egressTick(SST::Cycle_t cycle)
 {
     (void)cycle;

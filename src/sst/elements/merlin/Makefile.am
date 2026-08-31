@@ -40,7 +40,6 @@ libmerlin_la_SOURCES = \
 	test/nic.h \
 	test/nic.cc \
 	test/collective/contractTest.cc \
-	test/collective/merlinStaticCollectiveProcessorTest.cc \
 	test/route_test/route_test.h \
 	test/route_test/route_test.cc \
 	test/pt2pt/pt2pt_test.h \
@@ -140,7 +139,6 @@ EXTRA_DIST = \
 	tests/collective_contract.py \
 	tests/merlin_static_plan_contract.py \
 	tests/merlin_static_ordinary_baseline.py \
-	tests/merlin_static_processor_contract.py \
 	services/collective/README.md \
 	tests/refFiles/test_merlin_dragon_128_platform_test.out \
 	tests/refFiles/test_merlin_dragon_128_platform_test_cm.out \
@@ -155,7 +153,6 @@ EXTRA_DIST = \
 	tests/refFiles/test_merlin_torus_5_trafficgen.out \
 	tests/refFiles/test_merlin_torus_64_test.out \
 	tests/refFiles/test_merlin_polarfly_455_test.out \
-	tests/refFiles/merlin_static_processor_contract.out \
 	tests/refFiles/test_merlin_polarstar_504_test.out
 
 sstdir = $(includedir)/sst/elements/merlin

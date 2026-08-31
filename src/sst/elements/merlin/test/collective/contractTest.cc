@@ -13,6 +13,7 @@
 #include <sst/elements/merlin/networkService.h>
 #include <sst/elements/merlin/services/collective/collectiveEndpoint.h>
 #include <sst/elements/merlin/services/collective/collectiveServiceData.h>
+#include <sst/elements/merlin/services/collective/merlinStaticCollectiveProcessor.h>
 
 #include <sst/core/component.h>
 #include <sst/core/interfaces/simpleNetwork.h>
@@ -587,6 +588,107 @@ void testServiceDataContract()
         "Request clone or serialization lost the collective sidecar");
 }
 
+class Host final : public NetworkServiceHost
+{
+public:
+    bool supportsNetworkServiceOutput(const NetworkServiceOutputSpec& spec) const override
+    {
+        return spec.valid() && spec.route_vn < 2 && spec.output_port < 3 &&
+               spec.output_vc == spec.route_vn &&
+               spec.size_in_bits == CollectiveServiceData::MODELED_REQUEST_BITS && spec.size_in_flits == 13;
+    }
+    bool tryEnqueueNetworkServiceOutput(NetworkServiceID service, NetworkServiceSyntheticPacket& packet) override
+    {
+        SST::Merlin::Test::require(service == CollectiveServiceData::SERVICE_ID, "wrong static service ID");
+        if ( packets.size() >= capacity ) return false;
+        packets.push_back(std::move(packet));
+        return true;
+    }
+    void wakeNetworkServiceProcessor() override { ++wakes; }
+    size_t capacity = 0;
+    uint32_t wakes = 0;
+    std::deque<NetworkServiceSyntheticPacket> packets;
+};
+
+MerlinStaticCollectiveRouteProjection projection()
+{
+    MerlinStaticCollectiveRouteProjection value;
+    value.root = true;
+    value.root_representative = { 10, 100 };
+    value.subtree_representative = value.root_representative;
+    value.child_branches = { { 0, { 20, 200 } }, { 1, { 30, 300 } }, { 2, { 40, 400 } } };
+    return value;
+}
+
+std::unique_ptr<internal_router_event> ingress(int port, uint64_t invocation, double value)
+{
+    static constexpr int64_t physical[] = { 20, 30, 40 };
+    static constexpr int64_t logical[] = { 200, 300, 400 };
+    std::array<uint8_t, CollectiveServiceData::VALUE_BYTES> bytes {};
+    std::memcpy(bytes.data(), &value, sizeof(value));
+    auto request = std::make_unique<Request>(10, logical[port],
+        CollectiveServiceData::MODELED_REQUEST_BITS, true, true);
+    request->vn = 0;
+    request->allow_adaptive = false;
+    request->giveServiceData(new CollectiveServiceData(
+        route(), invocation, CollectiveDirection::Contribution, bytes));
+    auto envelope = std::make_unique<RtrEvent>(request.release(), physical[port], 0);
+    SST::Merlin::Test::require(envelope->setSyntheticTransportMetadata(13, 0), "static metadata failed");
+    auto event = std::make_unique<internal_router_event>(envelope.release());
+    event->setVC(0);
+    event->setCreditReturnVC(0);
+    return event;
+}
+
+void accept(MerlinStaticCollectiveProcessor& processor, int port, uint64_t invocation, double value)
+{
+    auto event = ingress(port, invocation, value);
+    SST::Merlin::Test::require(processor.inspect({ port, 0, event.get() }).disposition ==
+            NetworkServiceDisposition::Accept, "static contribution was not accepted");
+    processor.consume({ port, 0, std::move(event) });
+}
+
+double packetValue(const NetworkServiceSyntheticPacket& packet)
+{
+    const auto* data = packet.request->inspectServiceDataAs<CollectiveServiceData>();
+    SST::Merlin::Test::require(data != nullptr && data->direction == CollectiveDirection::Result,
+        "static result sidecar changed");
+    double value = 0;
+    std::memcpy(&value, data->value.data(), sizeof(value));
+    return value;
+}
+
+void testStaticProcessor()
+{
+    Host host;
+    MerlinStaticCollectiveProcessor processor(&host, route(), projection(), 3);
+    accept(processor, 2, 7, -1.0e16);
+    accept(processor, 0, 7, 1.0e16);
+    accept(processor, 1, 7, 1.0);
+    SST::Merlin::Test::require(host.wakes == 1 && processor.hasScheduledWork() &&
+            !processor.progressPendingEgress() && host.packets.empty(),
+        "static egress did not retain and retry bounded output");
+    host.capacity = 3;
+    SST::Merlin::Test::require(processor.progressPendingEgress() && !processor.hasScheduledWork() &&
+            host.packets.size() == 3, "static egress did not drain");
+    static constexpr int64_t destinations[] = { 20, 30, 40 };
+    for ( int port = 0; port < 3; ++port ) {
+        auto packet = std::move(host.packets.front());
+        host.packets.pop_front();
+        SST::Merlin::Test::require(packet.output_port == port && packet.trusted_src == 10 &&
+                packet.request->dest == destinations[port] && packet.request->src == 100 &&
+                packetValue(packet) == 0.0,
+            "static ordered sum or physical/logical identity changed");
+    }
+    auto retired = ingress(0, 7, 1.0);
+    SST::Merlin::Test::require(processor.inspect({ 0, 0, retired.get() }).disposition ==
+            NetworkServiceDisposition::Reject, "retired invocation reopened");
+    accept(processor, 0, 8, 1.0);
+    auto old = ingress(1, 7, 2.0);
+    SST::Merlin::Test::require(processor.inspect({ 1, 0, old.get() }).disposition ==
+            NetworkServiceDisposition::Reject, "retired invocation blocked a newer invocation");
+}
+
 class ContractTest final : public Component
 {
 public:
@@ -606,6 +708,7 @@ public:
             testCollectiveSignature();
             testEndpoint();
             testServiceDataContract();
+            testStaticProcessor();
         }
         catch ( const std::exception& error ) {
             getSimulationOutput().fatal(CALL_INFO, 1, "Merlin collective contract FAIL: %s\n", error.what());

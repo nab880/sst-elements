@@ -129,9 +129,6 @@ public:
     /** Attempts pending outputs in FIFO order; returns true only when the fixed ring drains. */
     bool progressPendingEgress();
 
-    bool hasActiveInvocation() const;
-    uint32_t pendingEgressCount() const;
-
 private:
     class Impl;
     std::unique_ptr<Impl> impl_;
