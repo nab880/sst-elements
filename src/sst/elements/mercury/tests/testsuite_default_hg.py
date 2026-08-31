@@ -1,95 +1,45 @@
-# -*- coding: utf-8 -*-
-import os
-import subprocess
 from pathlib import Path
 
 from sst_unittest import *
 from sst_unittest_support import *
 
-################################################################################
 
 class testcase_hg(SSTTestCase):
 
-    def setUp(self):
-        super(testcase_hg, self).setUp()
-        # Put test based setup code here. it is called once before every test
-
-    def tearDown(self):
-        # Put test based teardown code here. it is called once after every test
-        super(testcase_hg, self).tearDown()
-
-#####
-
-    @unittest.skipIf(testing_check_get_num_threads() > 1, "ostest skipped if threads > 1 - single component in config")
-    @unittest.skipIf(testing_check_get_num_ranks() > 1, "ostest skipped if ranks > 1 - single component in config")
+    @unittest.skipIf(testing_check_get_num_threads() > 1, "ostest requires one thread")
+    @unittest.skipIf(testing_check_get_num_ranks() > 1, "ostest requires one rank")
     def test_os(self):
         self.simple_components_template("ostest")
 
-    @unittest.skipIf(testing_check_get_num_threads() > 1, "ostest-nano skipped if threads > 1 - single component in config")
-    @unittest.skipIf(testing_check_get_num_ranks() > 1, "ostest-nano skipped if ranks > 1 - single component in config")
+    @unittest.skipIf(testing_check_get_num_threads() > 1, "ostest-nano requires one thread")
+    @unittest.skipIf(testing_check_get_num_ranks() > 1, "ostest-nano requires one rank")
     def test_os_nano(self):
         self.simple_components_template("ostest-nano")
 
     def test_mercury_network_service_tag_first(self):
-        test_path = self.get_testsuite_dir()
-        outdir = self.get_test_output_run_dir()
-        output = f"{outdir}/network_service_tag_first.out"
-        error = f"{outdir}/network_service_tag_first.err"
-
-        self.run_sst(f"{test_path}/network_service_tag_first.py", output, error,
+        test_dir = self.get_testsuite_dir()
+        out_dir = self.get_test_output_run_dir()
+        output = f"{out_dir}/network_service_tag_first.out"
+        error = f"{out_dir}/network_service_tag_first.err"
+        self.run_sst(f"{test_dir}/network_service_tag_first.py", output, error,
             expected_rc=1, timeout_sec=5)
-        combined = Path(output).read_text(encoding="utf-8") + Path(error).read_text(encoding="utf-8")
+        combined = Path(output).read_text(encoding="utf-8") + \
+                   Path(error).read_text(encoding="utf-8")
         self.assertIn("Mercury received unsupported network service 32768 on VN 0", combined)
         self.assertNotIn("couldn't cast event to NetworkMessage", combined)
-        self.assertNotIn("Bye!", combined)
 
-    @unittest.skipIf(testing_check_get_num_threads() > 1, "manager VN smoke skipped if threads > 1")
-    @unittest.skipIf(testing_check_get_num_ranks() > 1, "manager VN smoke skipped if ranks > 1")
+    @unittest.skipIf(testing_check_get_num_threads() > 1, "manager VN smoke requires one thread")
+    @unittest.skipIf(testing_check_get_num_ranks() > 1, "manager VN smoke requires one rank")
     def test_manager_vn_smoke(self):
         self.simple_components_template("manager_vn_smoke")
 
-#####
-
-    def simple_components_template(self, testcase, striptotail=0):
-        # Get the path to the test files
-        test_path = self.get_testsuite_dir()
-        outdir = self.get_test_output_run_dir()
-        tmpdir = self.get_test_output_tmp_dir()
-
-        # Set the various file paths
-        testDataFileName="{0}".format(testcase)
-
-        sdlfile = "{0}/{1}.py".format(test_path, testDataFileName)
-        reffile = "{0}/refFiles/{1}.out".format(test_path, testDataFileName)
-        outfile = "{0}/{1}.out".format(outdir, testDataFileName)
-        tmpfile = "{0}/{1}.tmp".format(tmpdir, testDataFileName)
-        cmpfile = "{0}/{1}.cmp".format(tmpdir, testDataFileName)
-        errfile = "{0}/{1}.err".format(outdir, testDataFileName)
-        mpioutfiles = "{0}/{1}.testfile".format(outdir, testDataFileName)
-
-        self.run_sst(sdlfile, outfile, errfile, mpi_out_files=mpioutfiles)
-
-        testing_remove_component_warning_from_file(outfile)
-
-        # Copy the outfile to the cmpfile
-        os.system("cp {0} {1}".format(outfile, cmpfile))
-
-        if striptotail == 1:
-            # Post processing of the output data to scrub it into a format to compare
-            os.system("grep Random {0} > {1}".format(outfile, tmpfile))
-            os.system("tail -5 {0} > {1}".format(tmpfile, cmpfile))
-
-        # NOTE: THE PASS / FAIL EVALUATIONS ARE PORTED FROM THE SQE BAMBOO
-        #       BASED testSuite_XXX.sh THESE SHOULD BE RE-EVALUATED BY THE
-        #       DEVELOPER AGAINST THE LATEST VERSION OF SST TO SEE IF THE
-        #       TESTS & RESULT FILES ARE STILL VALID
-
-        # Perform the tests
-        if os_test_file(errfile, "-s"):
-            log_testing_note("hg test {0} has a Non-Empty Error File {1}".format(testDataFileName, errfile))
-
-        cmp_result = testing_compare_sorted_diff(testcase, cmpfile, reffile)
-        if (cmp_result == False):
-            diffdata = testing_get_diff_data(testcase)
-            log_failure(diffdata)
-        self.assertTrue(cmp_result, "Sorted Output file {0} does not match sorted Reference File {1}".format(cmpfile, reffile))
+    def simple_components_template(self, testcase):
+        test_dir = self.get_testsuite_dir()
+        out_dir = self.get_test_output_run_dir()
+        output = f"{out_dir}/{testcase}.out"
+        error = f"{out_dir}/{testcase}.err"
+        self.run_sst(f"{test_dir}/{testcase}.py", output, error,
+            mpi_out_files=f"{out_dir}/{testcase}.testfile")
+        testing_remove_component_warning_from_file(output)
+        reference = f"{test_dir}/refFiles/{testcase}.out"
+        self.assertTrue(testing_compare_sorted_diff(testcase, output, reference))

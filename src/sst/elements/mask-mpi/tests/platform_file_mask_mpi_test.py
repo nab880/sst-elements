@@ -4,36 +4,17 @@ import sst
 from sst.merlin.base import *
 
 MODE = sys.argv[1] if len(sys.argv) > 1 else ""
-MULTI_VN_MODES = {
-    "multi-vn",
-    "multi-vn-fragmented",
-    "multi-vn-observable",
-    "bad-vn-range",
-    "bad-vn-partial-service",
-    "bad-vn-duplicate-service",
-    "bad-vn-native-alias",
-    "bad-vn-manager-service-alias",
+VN_CONFIGS = {
+    "multi-vn": (4, 3, 0, 2, 1),
+    "bad-vn-count": (0, 0, 0, -1, -1),
+    "bad-vn-range": (4, 4, 0, 2, 1),
+    "bad-vn-partial-service": (4, 3, 0, 2, -1),
+    "bad-vn-duplicate-service": (4, 3, 0, 2, 2),
+    "bad-vn-native-alias": (4, 3, 0, 3, 1),
+    "bad-vn-manager-service-alias": (4, 3, 2, 2, 1),
 }
-MULTI_VN = MODE in MULTI_VN_MODES
-
-num_vns = 4 if MULTI_VN else 1
-ordinary_vn = 3 if MULTI_VN else 0
-manager_vn = 0 if MULTI_VN else 0
-reduce_vn = 2 if MULTI_VN else -1
-result_vn = 1 if MULTI_VN else -1
-
-if MODE == "bad-vn-count":
-    num_vns = 0
-elif MODE == "bad-vn-range":
-    ordinary_vn = 4
-elif MODE == "bad-vn-partial-service":
-    result_vn = -1
-elif MODE == "bad-vn-duplicate-service":
-    result_vn = reduce_vn
-elif MODE == "bad-vn-native-alias":
-    reduce_vn = ordinary_vn
-elif MODE == "bad-vn-manager-service-alias":
-    manager_vn = reduce_vn
+num_vns, ordinary_vn, manager_vn, reduce_vn, result_vn = \
+    VN_CONFIGS.get(MODE, (1, 0, 0, -1, -1))
 
 platdef = PlatformDefinition("platform_mask_mpi_test")
 PlatformDefinition.registerPlatformDefinition(platdef)
@@ -56,7 +37,7 @@ platdef.addParamSet("node",{
 
 platdef.addParamSet("nic",{
     "verbose" : "0",
-    "mtu"     : "16 B" if MODE == "multi-vn-fragmented" else "4096 B",
+    "mtu"     : "16 B" if MODE == "multi-vn" else "4096 B",
 })
 
 platdef.addParamSet("operating_system",{
@@ -74,7 +55,7 @@ network_interface_params = {
     "input_buf_size" : "32kB",
     "output_buf_size" : "32kB"
 }
-if MODE == "multi-vn-observable":
+if MODE == "multi-vn":
     # Leave only the configured ordinary role routable.  This makes a stale
     # hard-coded VN 0 send fail instead of passing through an equivalent lane.
     network_interface_params["vn_remap"] = [-1, -1, -1, 3]
@@ -90,7 +71,7 @@ platdef.addParamSet("router",{
     "output_latency" : "20ns",
     "input_buf_size" : "32kB",
     "output_buf_size" : "32kB",
-    "num_vns" : 4 if MULTI_VN else 1,
+    "num_vns" : max(1, num_vns),
     "xbar_arb" : "merlin.xbar_arb_lru",
 })
 

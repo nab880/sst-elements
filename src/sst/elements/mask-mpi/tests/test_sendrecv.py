@@ -36,7 +36,7 @@ if __name__ == "__main__":
 
     topo = topoSingle()
     topo.link_latency = "20ns"
-    topo.num_ports = 2 if "multi-vn-observable" in sys.argv else 32
+    topo.num_ports = 2 if "multi-vn" in sys.argv else 32
 
     ep = HgJob(0,2)
 
