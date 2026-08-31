@@ -237,9 +237,7 @@ struct CollectivePending
 {
     AcceptedParticipantHandle participant;
     uint64_t                  invocation_id = 0;
-    CollectiveOperation       operation = static_cast<CollectiveOperation>(0);
-    CollectiveDatatype        datatype  = static_cast<CollectiveDatatype>(0);
-    uint64_t                  element_count = 0;
+    CollectiveSignatureV1     signature;
     BufferView                source;
     MutableBufferView         result;
     CollectiveCompletionToken completion;
@@ -289,6 +287,9 @@ class CollectiveEndpoint
 public:
     virtual ~CollectiveEndpoint() = default;
 
+    /** Non-owning capability query; submission remains the authoritative decision. */
+    virtual bool supportsCollective(const CollectiveSignatureV1& signature) const = 0;
+
     /** Registration is setup-time and non-owning; implementations retain only the interface addresses. */
     virtual bool bindParticipant(const AcceptedParticipantHandle& participant, CollectiveCompletionSink& completion,
         CollectiveReadySink& ready) = 0;
@@ -297,7 +298,8 @@ public:
     virtual CollectiveSubmitResult trySubmitCollective(CollectivePending& pending) = 0;
 
     /** Arms the participant's pre-registered level-triggered ready notification. */
-    virtual void requestCollectiveReady(const AcceptedParticipantHandle& participant) = 0;
+    virtual void requestCollectiveReady(const AcceptedParticipantHandle& participant,
+        const CollectiveSignatureV1& signature) = 0;
 };
 
 } // namespace SST::Collective

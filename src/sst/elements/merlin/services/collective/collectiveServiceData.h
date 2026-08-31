@@ -12,6 +12,9 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
+#include <optional>
+#include <vector>
 
 namespace SST::Collective {
 
@@ -61,6 +64,45 @@ private:
 static_assert(CollectiveServiceData::VALUE_BYTES == 8);
 static_assert(CollectiveServiceData::MODELED_HEADER_BYTES == 90);
 static_assert(CollectiveServiceData::MODELED_REQUEST_BITS == 784);
+
+inline constexpr CollectiveSignatureV1 STATIC_COLLECTIVE_SIGNATURE_V1 {
+    CollectiveOperation::Sum, CollectiveDatatype::F64, 1 };
+
+/** Native-stack-neutral contribution handed to a static transport adapter. */
+struct StaticCollectiveContribution
+{
+    RouteIdV1            route;
+    uint64_t             invocation_id = 0;
+    CollectiveSignatureV1 signature;
+    std::vector<uint8_t> value;
+
+    bool valid() const;
+};
+
+/** Validated result returned by a static transport adapter. */
+struct StaticCollectiveResult
+{
+    RouteIdV1            route;
+    uint64_t             invocation_id = 0;
+    CollectiveSignatureV1 signature;
+    std::vector<uint8_t> value;
+
+    bool valid() const;
+};
+
+/** Returns the atomic wire footprint for a signature supported by this protocol version. */
+std::optional<uint64_t> staticCollectiveRequestBits(const CollectiveSignatureV1& signature);
+
+/** Centralized v1 packet construction; adapters own only transport scheduling. */
+std::unique_ptr<SimpleNetwork::Request> makeStaticCollectiveContributionRequest(
+    const StaticCollectiveContribution& contribution,
+    SimpleNetwork::nid_t destination, SimpleNetwork::nid_t source, int vn);
+
+/** Centralized v1 result validation and decoding. */
+std::optional<StaticCollectiveResult> inspectStaticCollectiveResult(
+    const SimpleNetwork::Request& request, const RouteIdV1& expected_route,
+    uint64_t expected_invocation, SimpleNetwork::nid_t expected_source,
+    SimpleNetwork::nid_t expected_destination, int expected_vn);
 
 } // namespace SST::Collective
 

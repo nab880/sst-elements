@@ -16,6 +16,7 @@
 
 #include <array>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -68,9 +69,7 @@ CollectivePending pending(const AcceptedParticipantHandle& owner, uint64_t invoc
     CollectivePending value;
     value.participant = owner;
     value.invocation_id = invocation;
-    value.operation = CollectiveOperation::Sum;
-    value.datatype = CollectiveDatatype::F64;
-    value.element_count = 1;
+    value.signature = STATIC_COLLECTIVE_SIGNATURE_V1;
     value.source = { reinterpret_cast<const uint8_t*>(&source), sizeof(source) };
     value.result = { reinterpret_cast<uint8_t*>(&result), sizeof(result) };
     value.completion = CollectiveCompletionToken(0, request, 1);
@@ -80,6 +79,11 @@ CollectivePending pending(const AcceptedParticipantHandle& owner, uint64_t invoc
 class Endpoint final : public CollectiveEndpoint
 {
 public:
+    bool supportsCollective(const CollectiveSignatureV1& signature) const override
+    {
+        return signature.valid() && signature == STATIC_COLLECTIVE_SIGNATURE_V1;
+    }
+
     bool bindParticipant(const AcceptedParticipantHandle& value, CollectiveCompletionSink& completion,
         CollectiveReadySink& ready) override
     {
@@ -93,10 +97,9 @@ public:
     CollectiveSubmitResult trySubmitCollective(CollectivePending& value) override
     {
         if ( !value.readyForSubmit() || participant_ == nullptr ||
-             value.participant.route != participant_->route ) return CollectiveSubmitResult::Invalid;
-        if ( value.operation != CollectiveOperation::Sum || value.datatype != CollectiveDatatype::F64 ) {
-            return CollectiveSubmitResult::Unsupported;
-        }
+             value.participant.route != participant_->route || !value.signature.valid() )
+            return CollectiveSubmitResult::Invalid;
+        if ( !supportsCollective(value.signature) ) return CollectiveSubmitResult::Unsupported;
         if ( retry_ || token_ ) return CollectiveSubmitResult::Retry;
         result_ = value.result;
         invocation_ = value.invocation_id;
@@ -104,9 +107,11 @@ public:
         return CollectiveSubmitResult::Accepted;
     }
 
-    void requestCollectiveReady(const AcceptedParticipantHandle& value) override
+    void requestCollectiveReady(const AcceptedParticipantHandle& value,
+        const CollectiveSignatureV1& signature) override
     {
-        if ( ready_ != nullptr && value.route == participant_->route ) ready_->ready(value);
+        if ( ready_ != nullptr && value.route == participant_->route && supportsCollective(signature) )
+            ready_->ready(value);
     }
 
     void setRetry(bool value) { retry_ = value; }
@@ -149,6 +154,20 @@ public:
     bool success = false;
 };
 
+void testCollectiveSignature()
+{
+    const CollectiveSignatureV1 scalar = STATIC_COLLECTIVE_SIGNATURE_V1;
+    const CollectiveSignatureV1 vector {
+        CollectiveOperation::Max, CollectiveDatatype::I32, 128 };
+    const CollectiveSignatureV1 overflow { CollectiveOperation::Min, CollectiveDatatype::U64,
+        std::numeric_limits<uint64_t>::max() / 8 + 1 };
+
+    require(scalar.valid() && scalar.payloadBytes() == 8 &&
+            vector.valid() && vector.payloadBytes() == 512 && !overflow.valid() &&
+            !overflow.payloadBytes() && collectiveDatatypeBytes(CollectiveDatatype::F32) == 4,
+        "collective signature validation or sizing changed");
+}
+
 void testEndpoint()
 {
     const AcceptedParticipantHandle owner = participant();
@@ -161,11 +180,11 @@ void testEndpoint()
     CollectivePending retry = pending(owner, 7, 41, source, result);
     require(endpoint.trySubmitCollective(retry) == CollectiveSubmitResult::Retry && retry.readyForSubmit(),
         "Retry consumed collective ownership");
-    endpoint.requestCollectiveReady(owner);
+    endpoint.requestCollectiveReady(owner, retry.signature);
     require(sink.readies == 1, "collective ready callback was not delivered");
 
     CollectivePending unsupported = pending(owner, 7, 42, source, result);
-    unsupported.operation = CollectiveOperation::Min;
+    unsupported.signature.operation = CollectiveOperation::Min;
     require(endpoint.trySubmitCollective(unsupported) == CollectiveSubmitResult::Unsupported &&
             unsupported.readyForSubmit(), "Unsupported consumed collective ownership");
 
@@ -232,6 +251,7 @@ public:
         registerAsPrimaryComponent();
         primaryComponentDoNotEndSim();
         try {
+            testCollectiveSignature();
             testEndpoint();
             testServiceDataContract();
         }

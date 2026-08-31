@@ -12,6 +12,8 @@
 #include <sst/core/serialization/serializer.h>
 
 #include <cstdint>
+#include <limits>
+#include <optional>
 
 namespace SST::Collective {
 
@@ -52,6 +54,60 @@ inline constexpr bool isValid(CollectiveRouteKind value)
 inline constexpr bool isValid(CollectiveDataMode value)
 {
     return value == CollectiveDataMode::Functional || value == CollectiveDataMode::TimingOnly;
+}
+
+inline constexpr uint64_t collectiveDatatypeBytes(CollectiveDatatype datatype)
+{
+    switch ( datatype ) {
+    case CollectiveDatatype::I32:
+    case CollectiveDatatype::U32:
+    case CollectiveDatatype::F32:
+        return 4;
+    case CollectiveDatatype::I64:
+    case CollectiveDatatype::U64:
+    case CollectiveDatatype::F64:
+        return 8;
+    }
+    return 0;
+}
+
+/** Native-stack-neutral description of one collective payload. */
+struct CollectiveSignatureV1
+{
+    CollectiveOperation operation = static_cast<CollectiveOperation>(0);
+    CollectiveDatatype  datatype  = static_cast<CollectiveDatatype>(0);
+    uint64_t            element_count = 0;
+
+    constexpr bool valid() const
+    {
+        const uint64_t width = collectiveDatatypeBytes(datatype);
+        return isValid(operation) && width != 0 && element_count != 0 &&
+               element_count <= std::numeric_limits<uint64_t>::max() / width;
+    }
+
+    std::optional<uint64_t> payloadBytes() const
+    {
+        if ( !valid() ) return std::nullopt;
+        return element_count * collectiveDatatypeBytes(datatype);
+    }
+
+    void serialize_order(SST::Core::Serialization::serializer& ser)
+    {
+        SST_SER(operation);
+        SST_SER(datatype);
+        SST_SER(element_count);
+    }
+};
+
+inline constexpr bool operator==(const CollectiveSignatureV1& lhs, const CollectiveSignatureV1& rhs)
+{
+    return lhs.operation == rhs.operation && lhs.datatype == rhs.datatype &&
+           lhs.element_count == rhs.element_count;
+}
+
+inline constexpr bool operator!=(const CollectiveSignatureV1& lhs, const CollectiveSignatureV1& rhs)
+{
+    return !(lhs == rhs);
 }
 
 struct RouteIdV1
