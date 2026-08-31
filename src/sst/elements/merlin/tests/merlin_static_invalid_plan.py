@@ -1,6 +1,8 @@
 # Copyright 2009-2026 NTESS. Under the terms
 # of Contract DE-NA0003525 with NTESS, the U.S. Government retains certain rights in this software.
 
+import sys
+
 from sst.merlin.base import System
 from sst.merlin.collective import StaticCollectivePlan, StaticCollectiveRouter
 from sst.merlin.endpoint import TestJob
@@ -8,7 +10,13 @@ from sst.merlin.interface import ReorderLinkControl
 from sst.merlin.topology import topoFatTree
 
 
+MODE = sys.argv[1] if len(sys.argv) > 1 else "swapped-port"
 ENDPOINT_LINKS = tuple((nid, nid, nid // 2, nid % 2) for nid in range(4))
+
+if MODE == "overflow":
+    StaticCollectivePlan(1 << 31, (), ((0, 0, 0, 0),))
+elif MODE != "swapped-port":
+    raise ValueError("mode must be swapped-port or overflow")
 
 plan = StaticCollectivePlan(
     root_router=2,

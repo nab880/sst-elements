@@ -173,14 +173,18 @@ libfirefly_la_SOURCES = \
 	nicNetworkIO.h \
 	nicNetworkIOStream.cc \
 	nicNetworkIOStream.h \
-	tests/collectiveRegressionTest.cc \
+	tests/emptyRequestRegressionTest.cc \
+	tests/emptyRequestRegressionTest.h \
+	tests/allreduceErrorRegressionTest.cc \
+	tests/allreduceErrorRegressionTest.h \
 	pyfirefly.py
 
 libfirefly_la_LDFLAGS = -module -avoid-version
 libfirefly_la_LIBADD = $(top_builddir)/src/sst/elements/merlin/libsstmerlincollective.la
 
 EXTRA_DIST = \
-	tests/collective_regression.py \
+	tests/empty_request_regression.py \
+	tests/allreduce_recoverable_error.py \
 	tests/testsuite_default_firefly.py
 
 install-exec-hook:

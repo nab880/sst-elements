@@ -41,7 +41,12 @@ libmerlin_la_SOURCES = \
 	target_generator/uniform.h \
 	test/nic.h \
 	test/nic.cc \
+	test/network_service/networkServiceTest.h \
+	test/network_service/networkServiceTest.cc \
+	test/network_service/pr2IntegrationFixture.h \
+	test/network_service/pr2IntegrationFixture.cc \
 	test/collective/contractTest.cc \
+	test/collective/merlinStaticCollectiveProcessorTest.cc \
 	test/route_test/route_test.h \
 	test/route_test/route_test.cc \
 	test/pt2pt/pt2pt_test.h \
@@ -136,11 +141,19 @@ EXTRA_DIST = \
 	tests/dragon_128_test_deferred.py \
 	tests/polarfly_455_test.py \
 	tests/polarstar_504_test.py \
+	tests/network_service_contract.py \
 	tests/network_service_model.py \
+	tests/network_service_missing_processor.py \
+	tests/network_service_multiple_ids.py \
+	tests/network_service_pass_tagged.py \
+	tests/network_service_pr2_integration.py \
+	tests/network_service_pass_baseline.py \
 	tests/testsuite_default_collective.py \
 	tests/collective_contract.py \
+	tests/merlin_static_plan_contract.py \
 	tests/merlin_static_invalid_plan.py \
 	tests/merlin_static_ordinary_baseline.py \
+	tests/merlin_static_processor_contract.py \
 	services/collective/README.md \
 	tests/refFiles/test_merlin_dragon_128_platform_test.out \
 	tests/refFiles/test_merlin_dragon_128_platform_test_cm.out \
@@ -155,6 +168,12 @@ EXTRA_DIST = \
 	tests/refFiles/test_merlin_torus_5_trafficgen.out \
 	tests/refFiles/test_merlin_torus_64_test.out \
 	tests/refFiles/test_merlin_polarfly_455_test.out \
+	tests/refFiles/test_merlin_network_service_contract.out \
+	tests/refFiles/test_merlin_network_service_missing_processor.out \
+	tests/refFiles/test_merlin_network_service_pass_tagged.out \
+	tests/refFiles/test_merlin_network_service_pr2_integration.out \
+	tests/refFiles/collective_contract.out \
+	tests/refFiles/merlin_static_processor_contract.out \
 	tests/refFiles/test_merlin_polarstar_504_test.out
 
 sstdir = $(includedir)/sst/elements/merlin

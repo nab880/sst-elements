@@ -3,6 +3,9 @@
 from sst_unittest import *
 from sst_unittest_support import *
 
+from pathlib import Path
+import re
+
 try:
     from sympy.polys.domains import ZZ
 except:
@@ -65,6 +68,145 @@ class testcase_merlin_Component(SSTTestCase):
     def test_merlin_dragon_128_deferred(self):
         self.merlin_test_template("dragon_128_test_deferred")
 
+    def test_merlin_network_service_contract(self):
+        self.merlin_test_template("network_service_contract", exact=True)
+
+    def test_merlin_network_service_missing_processor(self):
+        test_path = self.get_testsuite_dir()
+        outdir = self.get_test_output_run_dir()
+        outfile = "{}/test_merlin_network_service_missing_processor.out".format(outdir)
+        errfile = "{}/test_merlin_network_service_missing_processor.err".format(outdir)
+        self.run_sst("{}/network_service_missing_processor.py".format(test_path), outfile, errfile,
+            expected_rc=1, timeout_sec=5)
+        combined = Path(outfile).read_text(encoding="utf-8") + Path(errfile).read_text(encoding="utf-8")
+        self.assertIn("has no matching attached router processor", combined)
+
+    def test_merlin_network_service_rejects_multiple_ids(self):
+        test_path = self.get_testsuite_dir()
+        outdir = self.get_test_output_run_dir()
+        outfile = "{}/test_merlin_network_service_multiple_ids.out".format(outdir)
+        errfile = "{}/test_merlin_network_service_multiple_ids.err".format(outdir)
+        self.run_sst("{}/network_service_multiple_ids.py".format(test_path), outfile, errfile,
+            expected_rc=1, timeout_sec=5)
+        combined = Path(outfile).read_text(encoding="utf-8") + Path(errfile).read_text(encoding="utf-8")
+        self.assertIn("supports at most one service", combined)
+
+    def test_merlin_network_service_pass_tagged(self):
+        self.merlin_test_template("network_service_pass_tagged", exact=True, strict_stderr=True)
+
+    def test_merlin_network_service_pr2_integration(self):
+        self.merlin_test_template("network_service_pr2_integration", exact=True, strict_stderr=True)
+
+    def test_merlin_network_service_pass_baseline(self):
+        test_path = self.get_testsuite_dir()
+        outdir = self.get_test_output_run_dir()
+        sdlfile = "{}/network_service_pass_baseline.py".format(test_path)
+        disabled_out = "{}/test_merlin_network_service_pass_baseline_disabled.out".format(outdir)
+        disabled_err = "{}/test_merlin_network_service_pass_baseline_disabled.err".format(outdir)
+        enabled_out = "{}/test_merlin_network_service_pass_baseline_enabled.out".format(outdir)
+        enabled_err = "{}/test_merlin_network_service_pass_baseline_enabled.err".format(outdir)
+
+        self.run_sst(sdlfile, disabled_out, disabled_err)
+        self.run_sst(sdlfile, enabled_out, enabled_err, other_args='--model-options="pass"')
+        self.assertFalse(os_test_file(disabled_err, "-s"), "disabled baseline produced stderr")
+        self.assertFalse(os_test_file(enabled_err, "-s"), "PASS baseline produced stderr")
+        self.assertEqual(Path(disabled_out).read_bytes(), Path(enabled_out).read_bytes(),
+            "installing the PASS processor changed ordinary traffic output or timing")
+
+    def test_merlin_disabled_protocol_source_contract(self):
+        source = Path(self.get_testsuite_dir()).parent
+        port_control = (source / "interfaces" / "portControl.cc").read_text(encoding="utf-8")
+        link_control = (source / "interfaces" / "linkControl.cc").read_text(encoding="utf-8")
+        router_header = (source / "router.h").read_text(encoding="utf-8")
+        service_header = (source / "networkService.h").read_text(encoding="utf-8")
+
+        phase_zero = port_control.split("case 0:", 1)[1].split("break;", 1)[0]
+        prefix, host_and_router = phase_zero.split("if ( topo->isHostPort(port_number) )", 1)
+        host = host_and_router.split("else {", 1)[0]
+        command_pattern = r"command\s*=\s*RtrInitEvent::([A-Z_]+)"
+        disabled_host_commands = re.findall(command_pattern, prefix + host)
+        self.assertEqual(["REPORT_BW", "REPORT_FLIT_SIZE", "REPORT_ID"], disabled_host_commands,
+            "disabled host-port phase-0 init command sequence changed")
+        self.assertNotIn("REPORT_NETWORK_SERVICE", router_header + port_control + link_control,
+            "service negotiation added a disabled-mode init frame")
+        self.assertIn("ev->network_service_contract = network_service->host->getNetworkServiceRequestContract();", host,
+            "service contract was not piggybacked on legacy REPORT_ID")
+
+        handle_output = link_control.split("void LinkControl::handle_output", 1)[1]
+        stamp = handle_output.find("send_event->setInjectionTime(getCurrentSimTimeNano())")
+        wire_send = handle_output.find("rtr_link->send(send_event)")
+        self.assertGreaterEqual(stamp, 0, "wire-injection timestamp is missing")
+        self.assertGreater(wire_send, stamp, "packet timestamp is not refreshed immediately before wire send")
+
+        # Optional virtuals must be appended after the released serialization
+        # slots so disabled runs can still use prebuilt external subclasses.
+        router_api = router_header.split("class Router", 1)[1].split("#define MERLIN_ENABLE_TRACE", 1)[0]
+        port_api = router_header.split("class PortInterface", 1)[1].split("class XbarArbitration", 1)[0]
+        xbar_api = router_header.split("class XbarArbitration", 1)[1]
+        for api, extension in [
+                (port_api, "isConnected"),
+                (xbar_api, "setNetworkServiceInputs")]:
+            self.assertGreater(api.find(extension), api.find("ImplementVirtualSerializable"),
+                "network-service extension shifted a released external vtable slot")
+        self.assertNotIn("getNetworkServiceID", router_api,
+            "optional service hooks changed the released Router vtable")
+        self.assertIn("getNetworkServiceID", service_header,
+            "optional service hooks are missing from NetworkServiceHost")
+        self.assertIn("dynamic_cast<NetworkServiceHost*>(parent)", port_control,
+            "PortControl does not discover the opt-in host extension during initialization")
+
+    def test_merlin_network_service_source_boundary(self):
+        source = Path(self.get_testsuite_dir()).parent
+        generic_files = [
+            source / "networkService.h",
+            source / "networkService.cc",
+            source / "router.h",
+            source / "hr_router" / "hr_router.h",
+            source / "hr_router" / "hr_router.cc",
+            source / "hr_router" / "xbar_arb_rr.h",
+            source / "interfaces" / "portControl.h",
+            source / "interfaces" / "portControl.cc",
+            source / "interfaces" / "linkControl.h",
+            source / "interfaces" / "linkControl.cc",
+            source / "interfaces" / "reorderLinkControl.h",
+            source / "interfaces" / "reorderLinkControl.cc",
+            source / "interfaces" / "ExtendedRequest.h",
+            source / "interfaces" / "endpointNIC" / "endpointNIC.h",
+            source / "interfaces" / "endpointNIC" / "endpointNIC.cc",
+            source / "merlin.cc",
+        ]
+        forbidden = [
+            "sst/elements/collective",
+            "services/collective",
+            "SST::Collective",
+            "CollectiveOperation",
+            "CollectiveDatatype",
+            "CollectiveServiceData",
+            "incEvent",
+            "Accelerator",
+            "collective_accel",
+            "Mercury",
+            "Firefly",
+            "Ember",
+            "Hermes",
+            "Iris",
+            "MaskMPI",
+            "mask-mpi",
+        ]
+        for path in generic_files:
+            contents = path.read_text(encoding="utf-8")
+            for token in forbidden:
+                self.assertNotIn(token, contents, "{} leaked into {}".format(token, path))
+
+        removed = [
+            source / "hr_router" / "collective_accel.h",
+            source / "hr_router" / "xbar_arb_rr_chiplets.h",
+            source / "test" / "inc_nic.h",
+            source / "test" / "inc_nic.cc",
+        ]
+        for path in removed:
+            self.assertFalse(path.exists(), "legacy INC source remains: {}".format(path))
+
     @unittest.skipIf(not(('sympy.polys.galoistools' in sys.modules) and ('sympy.polys.domains' in sys.modules)), "Polarfly construction requires sympy")
     def test_merlin_polarfly_455(self):
         self.merlin_test_template("polarfly_455_test")
@@ -104,7 +246,7 @@ class testcase_merlin_Component(SSTTestCase):
 
 #####
 
-    def merlin_test_template(self, testcase, cwd=False):
+    def merlin_test_template(self, testcase, cwd=False, exact=False, strict_stderr=False):
         # Get the path to the test files
         test_path = self.get_testsuite_dir()
         outdir = self.get_test_output_run_dir()
@@ -138,13 +280,17 @@ class testcase_merlin_Component(SSTTestCase):
                     testDataFileName, errfile
                 )
             )
-        cmp_result = testing_compare_sorted_diff(testcase, outfile, reffile)
+            if strict_stderr:
+                self.fail("merlin test {} produced stderr: {}".format(testDataFileName, errfile))
+
+        cmp_result = testing_compare_diff(testcase, outfile, reffile) if exact else \
+            testing_compare_sorted_diff(testcase, outfile, reffile)
         if cmp_result == False:
             diffdata = testing_get_diff_data(testcase)
             log_failure(diffdata)
         self.assertTrue(
             cmp_result,
-            "Sorted Output file {0} does not match sorted Reference File {1}".format(
+            "Output file {0} does not match Reference File {1}".format(
                 outfile, reffile
             ),
         )
