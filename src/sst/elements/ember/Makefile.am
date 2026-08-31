@@ -315,7 +315,6 @@ EXTRA_DIST = \
 	tests/testsuite_default_ember_ESshmem.py \
 	tests/testsuite_default_ember_innetwork.py \
 	tests/ember_allreduce_innetwork.py \
-	tests/ember_allreduce_disabled.py \
 	tests/ESshmem_List-of-Tests \
 	tests/qos-dragonfly.sh \
 	tests/qos-fattree.sh \
@@ -325,8 +324,6 @@ EXTRA_DIST = \
 	tests/refFiles/test_EmberSweep.out \
 	tests/refFiles/test_embernightly.out \
 	tests/refFiles/test_emberotf2.out \
-	tests/refFiles/ember_allreduce_innetwork_supported.out \
-	tests/refFiles/ember_allreduce_innetwork_fallback.out \
 	tests/refFiles/test_qos-dragonfly.out \
 	tests/refFiles/test_qos-fattree.out \
 	tests/refFiles/test_qos-hyperx.out \
