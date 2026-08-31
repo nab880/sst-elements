@@ -171,7 +171,7 @@ void VirtNic::handleCollectiveEvent( NicCollectiveRespBaseEvent* event )
     switch ( event->type ) {
     case NicCollectiveRespBaseEvent::Result: {
         auto* result = static_cast<NicCollectiveResultEvent*>(event);
-        state->collective_endpoint->receiveResult(result->invocation_id, result->result);
+        state->collective_endpoint->receiveResult(result->result);
         notifyReadyIfPossible();
         break;
     }

@@ -81,9 +81,8 @@ public:
         send( new NicRespEvent( NicRespEvent::Get, key ));
     }
 
-    void notifyCollectiveResult(uint64_t invocation_id,
-            const std::array<uint8_t, FIREFLY_COLLECTIVE_LOGICAL_BYTES>& result ) {
-        send( new NicCollectiveResultEvent(invocation_id, result) );
+    void notifyCollectiveResult(SST::Collective::StaticCollectiveResult result) {
+        send( new NicCollectiveResultEvent(std::move(result)) );
     }
 
     void notifyCollectiveSubmitAccepted(uint64_t invocation_id) {

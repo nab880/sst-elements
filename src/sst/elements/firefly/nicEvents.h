@@ -427,17 +427,14 @@ class NicCollectiveSubmitCmdEvent : public NicCmdBaseEvent {
   public:
     NicCollectiveSubmitCmdEvent(
             const SST::Collective::PhysicalRouteHandleV1& physical_route,
-            uint64_t invocation_id,
-            const std::array<uint8_t, FIREFLY_COLLECTIVE_LOGICAL_BYTES>& contribution ) :
+            SST::Collective::StaticCollectiveContribution contribution ) :
         NicCmdBaseEvent(Collective),
         physical_route(physical_route),
-        invocation_id(invocation_id),
-        contribution(contribution)
+        contribution(std::move(contribution))
     {}
 
     SST::Collective::PhysicalRouteHandleV1 physical_route;
-    uint64_t invocation_id;
-    std::array<uint8_t, FIREFLY_COLLECTIVE_LOGICAL_BYTES> contribution;
+    SST::Collective::StaticCollectiveContribution contribution;
 
     NotSerializable(NicCollectiveSubmitCmdEvent)
 };
@@ -460,12 +457,10 @@ class NicCollectiveRespBaseEvent : public NicRespBaseEvent {
 
 class NicCollectiveResultEvent : public NicCollectiveRespBaseEvent {
   public:
-    NicCollectiveResultEvent(uint64_t invocation_id,
-            const std::array<uint8_t, FIREFLY_COLLECTIVE_LOGICAL_BYTES>& result ) :
-        NicCollectiveRespBaseEvent(Result), invocation_id(invocation_id), result(result) {}
+    explicit NicCollectiveResultEvent(SST::Collective::StaticCollectiveResult result) :
+        NicCollectiveRespBaseEvent(Result), result(std::move(result)) {}
 
-    uint64_t invocation_id;
-    std::array<uint8_t, FIREFLY_COLLECTIVE_LOGICAL_BYTES> result;
+    SST::Collective::StaticCollectiveResult result;
     NotSerializable(NicCollectiveResultEvent)
 };
 

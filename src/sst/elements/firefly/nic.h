@@ -28,6 +28,7 @@
 #include <optional>
 #include <sstream>
 #include <queue>
+#include <utility>
 #include <vector>
 #include <sst/core/module.h>
 #include <sst/core/component.h>

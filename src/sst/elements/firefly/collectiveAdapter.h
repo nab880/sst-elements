@@ -11,25 +11,12 @@
 #include "sst/elements/merlin/services/collective/collectiveEndpoint.h"
 #include "sst/elements/merlin/services/collective/collectiveServiceData.h"
 
-#include <array>
-#include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <optional>
 
 namespace SST::Firefly {
 
 class VirtNic;
-
-inline constexpr uint64_t FIREFLY_COLLECTIVE_LOGICAL_BYTES =
-    SST::Collective::CollectiveServiceData::VALUE_BYTES;
-inline constexpr uint64_t FIREFLY_COLLECTIVE_REQUEST_BITS =
-    SST::Collective::CollectiveServiceData::MODELED_REQUEST_BITS;
-static_assert(FIREFLY_COLLECTIVE_REQUEST_BITS == 784);
-static_assert(FIREFLY_COLLECTIVE_REQUEST_BITS <=
-    static_cast<uint64_t>(std::numeric_limits<int>::max()));
-static_assert(FIREFLY_COLLECTIVE_REQUEST_BITS <=
-    static_cast<uint64_t>(std::numeric_limits<std::size_t>::max()));
 
 /**
  * One-vNIC proxy for the capability-validated static collective route.
@@ -42,6 +29,8 @@ public:
 
     bool publish(const SST::Collective::AcceptedParticipantHandle& participant);
     const SST::Collective::AcceptedParticipantHandle* participant(uint32_t local_slot) const;
+    bool supportsCollective(
+        const SST::Collective::CollectiveSignatureV1& signature) const override;
 
     bool bindParticipant(const SST::Collective::AcceptedParticipantHandle& participant,
         SST::Collective::CollectiveCompletionSink& completion,
@@ -51,11 +40,11 @@ public:
         SST::Collective::CollectivePending& pending) override;
 
     void requestCollectiveReady(
-        const SST::Collective::AcceptedParticipantHandle& participant) override;
+        const SST::Collective::AcceptedParticipantHandle& participant,
+        const SST::Collective::CollectiveSignatureV1& signature) override;
 
     void submitAccepted(uint64_t invocation_id);
-    void receiveResult(uint64_t invocation_id,
-        const std::array<uint8_t, FIREFLY_COLLECTIVE_LOGICAL_BYTES>& bytes);
+    void receiveResult(SST::Collective::StaticCollectiveResult result);
     bool notifyReadyIfPossible();
 
 private:
@@ -69,6 +58,8 @@ private:
     SST::Collective::CollectiveReadySink* ready_ = nullptr;
     std::optional<SST::Collective::CollectiveCompletionToken> token_;
     SST::Collective::MutableBufferView result_;
+    SST::Collective::CollectiveSignatureV1 active_signature_;
+    SST::Collective::CollectiveSignatureV1 ready_signature_;
     uint64_t active_invocation_ = 0;
     uint64_t awaiting_ack_invocation_ = 0;
     uint64_t completed_invocation_ = 0;

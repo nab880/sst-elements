@@ -11,6 +11,9 @@
 #include <sst/core/interfaces/simpleNetwork.h>
 #include <sst/core/link.h>
 
+#include <array>
+#include <cstdint>
+
 namespace SST::Firefly {
 
 using SimpleNetwork = SST::Interfaces::SimpleNetwork;
@@ -158,6 +161,20 @@ private:
         double source = 2.0;
         double result = 0.0;
 
+        std::array<std::int32_t, 128> max_source {};
+        std::array<std::int32_t, 128> max_result {};
+        CollectiveStartEvent max_event(Hermes::MemAddr(max_source.data()),
+            Hermes::MemAddr(max_result.data()), max_source.size(), MP::INT32_T,
+            MP::MAX, 0, MP::GroupWorld, CollectiveStartEvent::Allreduce);
+        const auto max_signature = allreduce.translateSignature(max_event);
+        if ( !max_signature || max_signature->operation != CollectiveOperation::Max ||
+             max_signature->datatype != CollectiveDatatype::I32 ||
+             max_signature->element_count != max_source.size() ||
+             max_signature->payloadBytes() != max_source.size() * sizeof(std::int32_t) ) {
+            fail("MAX/I32/128 did not translate to the neutral signature");
+        }
+        getSimulationOutput().output("Firefly MAX/I32/128 signature translation PASS\n");
+
         event_destroyed = false;
         allreduce.offload_event_ = new TrackedCollectiveStartEvent(
             Hermes::MemAddr(&source), Hermes::MemAddr(&result));
@@ -167,9 +184,7 @@ private:
         auto& pending = allreduce.pending_;
         pending.participant = participant;
         pending.invocation_id = invocation;
-        pending.operation = CollectiveOperation::Sum;
-        pending.datatype = CollectiveDatatype::F64;
-        pending.element_count = 1;
+        pending.signature = {CollectiveOperation::Sum, CollectiveDatatype::F64, 1};
         pending.source = {reinterpret_cast<const uint8_t*>(&source), sizeof(source)};
         pending.result = {reinterpret_cast<uint8_t*>(&result), sizeof(result)};
         pending.completion = CollectiveCompletionToken(0, invocation, 1);
@@ -177,18 +192,19 @@ private:
 
         allreduce.wake_scheduled_ = true;
         allreduce.complete(std::move(token), CollectiveCompletionStatus::RecoverableError);
-        FunctionSMInterface::Retval retval;
-        allreduce.handleEnterEvent(retval);
-        if ( token.valid() || !retval.isExit() || retval.value() != 1 || !event_destroyed ||
+        CollectiveStartEvent* restart_event = allreduce.finishOffload();
+        if ( token.valid() || restart_event == nullptr || event_destroyed ||
              allreduce.offload_event_ != nullptr || allreduce.active_invocation_id_ != 0 ||
              allreduce.mode_ != AllreduceOffloadFuncSM::Mode::Idle ||
              allreduce.ready_received_ || allreduce.completion_received_ ||
              allreduce.wake_scheduled_ || pending.completion.valid() ||
              pending.state != CollectivePendingState::Ready || pending.invocation_id != 0 ||
              pending.source.data != nullptr || pending.result.data != nullptr ) {
-            fail("terminal state was retained");
+            fail("recoverable restart retained offload state");
         }
-        getSimulationOutput().output("Firefly RecoverableError cleanup PASS\n");
+        delete restart_event;
+        if ( !event_destroyed ) fail("recoverable event ownership was not returned");
+        getSimulationOutput().output("Firefly RecoverableError restart handoff PASS\n");
         primaryComponentOKToEndSim();
     }
 

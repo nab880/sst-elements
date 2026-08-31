@@ -18,5 +18,6 @@ class testcase_firefly(SSTTestCase):
         self.assertFalse(os_test_file(str(error), "-s"), f"Nonempty error file: {error}")
         text = output.read_text(encoding="utf-8")
         self.assertEqual(1, text.count("Firefly untagged empty Request PASS"))
-        self.assertEqual(1, text.count("Firefly RecoverableError cleanup PASS"))
+        self.assertEqual(1, text.count("Firefly MAX/I32/128 signature translation PASS"))
+        self.assertEqual(1, text.count("Firefly RecoverableError restart handoff PASS"))
         self.assertRegex(text, r"nic\.rcvdPkts.*Sum\.u64 = 1;")

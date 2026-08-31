@@ -12,6 +12,8 @@
 #include "info.h"
 
 #include <cstdio>
+#include <limits>
+#include <optional>
 
 namespace SST::Firefly {
 namespace {
@@ -23,6 +25,95 @@ bool sameParticipantIdentity(
 {
     return lhs.route == rhs.route && lhs.physical_route == rhs.physical_route &&
         lhs.binding == rhs.binding && lhs.local_participant_slot == rhs.local_participant_slot;
+}
+
+std::optional<CollectiveOperation>
+translateOperation(MP::ReductionOperation operation)
+{
+    if ( operation == nullptr ) return std::nullopt;
+    switch ( operation->type ) {
+    case MP::ReductionOpType::Sum:
+        return CollectiveOperation::Sum;
+    case MP::ReductionOpType::Min:
+        return CollectiveOperation::Min;
+    case MP::ReductionOpType::Max:
+        return CollectiveOperation::Max;
+    case MP::ReductionOpType::Nop:
+    case MP::ReductionOpType::Func:
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+
+struct TranslatedDatatype
+{
+    CollectiveDatatype datatype;
+    uint64_t            native_bytes;
+};
+
+std::optional<TranslatedDatatype>
+signedIntegerDatatype(uint64_t native_bytes)
+{
+    if ( native_bytes == 4 ) return TranslatedDatatype { CollectiveDatatype::I32, native_bytes };
+    if ( native_bytes == 8 ) return TranslatedDatatype { CollectiveDatatype::I64, native_bytes };
+    return std::nullopt;
+}
+
+std::optional<TranslatedDatatype>
+unsignedIntegerDatatype(uint64_t native_bytes)
+{
+    if ( native_bytes == 4 ) return TranslatedDatatype { CollectiveDatatype::U32, native_bytes };
+    if ( native_bytes == 8 ) return TranslatedDatatype { CollectiveDatatype::U64, native_bytes };
+    return std::nullopt;
+}
+
+std::optional<TranslatedDatatype>
+translateDatatype(MP::PayloadDataType datatype)
+{
+    switch ( datatype ) {
+    case MP::SIGNED_CHAR:
+        return signedIntegerDatatype(sizeof(signed char));
+    case MP::INT:
+        return signedIntegerDatatype(sizeof(int));
+    case MP::LONG:
+        return signedIntegerDatatype(sizeof(long));
+    case MP::LONG_LONG:
+        return signedIntegerDatatype(sizeof(long long));
+    case MP::INT8_T:
+        return signedIntegerDatatype(sizeof(std::int8_t));
+    case MP::INT16_T:
+        return signedIntegerDatatype(sizeof(std::int16_t));
+    case MP::INT32_T:
+        return signedIntegerDatatype(sizeof(std::int32_t));
+    case MP::INT64_T:
+        return signedIntegerDatatype(sizeof(std::int64_t));
+    case MP::UNSIGNED_CHAR:
+        return unsignedIntegerDatatype(sizeof(unsigned char));
+    case MP::UNSIGNED_INT:
+        return unsignedIntegerDatatype(sizeof(unsigned int));
+    case MP::UNSIGNED_LONG:
+        return unsignedIntegerDatatype(sizeof(unsigned long));
+    case MP::UNSIGNED_LONG_LONG:
+        return unsignedIntegerDatatype(sizeof(unsigned long long));
+    case MP::UINT8_T:
+        return unsignedIntegerDatatype(sizeof(std::uint8_t));
+    case MP::UINT16_T:
+        return unsignedIntegerDatatype(sizeof(std::uint16_t));
+    case MP::UINT32_T:
+        return unsignedIntegerDatatype(sizeof(std::uint32_t));
+    case MP::UINT64_T:
+        return unsignedIntegerDatatype(sizeof(std::uint64_t));
+    case MP::FLOAT:
+        if ( sizeof(float) == 4 ) return TranslatedDatatype { CollectiveDatatype::F32, sizeof(float) };
+        return std::nullopt;
+    case MP::DOUBLE:
+        if ( sizeof(double) == 8 ) return TranslatedDatatype { CollectiveDatatype::F64, sizeof(double) };
+        return std::nullopt;
+    case MP::CHAR:
+    case MP::COMPLEX:
+        return std::nullopt;
+    }
+    return std::nullopt;
 }
 
 } // namespace
@@ -44,12 +135,27 @@ CtrlMsg::API* AllreduceOffloadFuncSM::collectiveProtocol() const
     return static_cast<CtrlMsg::API*>(m_proto);
 }
 
-bool AllreduceOffloadFuncSM::eligible(const CollectiveStartEvent& event) const
+std::optional<CollectiveSignatureV1>
+AllreduceOffloadFuncSM::translateSignature(const CollectiveStartEvent& event)
 {
-    return event.type == CollectiveStartEvent::Allreduce && event.group == MP::GroupWorld &&
-        event.root == 0 && event.count == 1 && event.dtype == MP::DOUBLE && event.op != nullptr &&
-        event.op->type == MP::ReductionOpType::Sum && event.mydata.getBacking() != nullptr &&
-        event.result.getBacking() != nullptr;
+    if ( event.type != CollectiveStartEvent::Allreduce || event.group != MP::GroupWorld ||
+         event.root != 0 || event.count == 0 || event.mydata.getBacking() == nullptr ||
+         event.result.getBacking() == nullptr ) {
+        return std::nullopt;
+    }
+
+    const auto operation = translateOperation(event.op);
+    const auto datatype  = translateDatatype(event.dtype);
+    if ( !operation || !datatype ) return std::nullopt;
+
+    CollectiveSignatureV1 signature { *operation, datatype->datatype, event.count };
+    const auto payload_bytes = signature.payloadBytes();
+    if ( !payload_bytes || datatype->native_bytes >
+            std::numeric_limits<uint64_t>::max() / event.count ||
+         *payload_bytes != datatype->native_bytes * event.count ) {
+        return std::nullopt;
+    }
+    return signature;
 }
 
 void AllreduceOffloadFuncSM::reportPath(const char* path) const
@@ -97,8 +203,12 @@ bool AllreduceOffloadFuncSM::bindOffload()
 }
 
 void AllreduceOffloadFuncSM::startOffload(
-    CollectiveStartEvent* event, uint64_t invocation_id, Retval& retval)
+    CollectiveStartEvent* event, const CollectiveSignatureV1& signature,
+    uint64_t invocation_id, Retval& retval)
 {
+    const auto payload_bytes = signature.payloadBytes();
+    if ( !payload_bytes ) fail("translated signature has no valid payload size");
+
     offload_event_ = event;
     active_invocation_id_ = invocation_id;
     completion_status_ = CollectiveCompletionStatus::RecoverableError;
@@ -109,11 +219,9 @@ void AllreduceOffloadFuncSM::startOffload(
     pending_ = CollectivePending {};
     pending_.participant = *participant_;
     pending_.invocation_id = invocation_id;
-    pending_.operation = CollectiveOperation::Sum;
-    pending_.datatype = CollectiveDatatype::F64;
-    pending_.element_count = 1;
-    pending_.source = {reinterpret_cast<const uint8_t*>(event->mydata.getBacking()), sizeof(double)};
-    pending_.result = {reinterpret_cast<uint8_t*>(event->result.getBacking()), sizeof(double)};
+    pending_.signature = signature;
+    pending_.source = {reinterpret_cast<const uint8_t*>(event->mydata.getBacking()), *payload_bytes};
+    pending_.result = {reinterpret_cast<uint8_t*>(event->result.getBacking()), *payload_bytes};
     pending_.completion = CollectiveCompletionToken(participant_->binding.adapter_slot,
         invocation_id, participant_->binding.generation);
 
@@ -152,7 +260,7 @@ void AllreduceOffloadFuncSM::submitOffload(Retval& retval)
 
     mode_ = Mode::WaitingReady;
     ready_received_ = false;
-    endpoint_->requestCollectiveReady(*participant_);
+    endpoint_->requestCollectiveReady(*participant_, pending_.signature);
 }
 
 void AllreduceOffloadFuncSM::scheduleResume()
@@ -164,11 +272,12 @@ void AllreduceOffloadFuncSM::scheduleResume()
     wake_scheduled_ = true;
 }
 
-void AllreduceOffloadFuncSM::finishOffload(Retval& retval)
+CollectiveStartEvent* AllreduceOffloadFuncSM::finishOffload()
 {
-    const bool terminal_error =
+    const bool recoverable =
         completion_status_ == CollectiveCompletionStatus::RecoverableError;
-    delete offload_event_;
+    CollectiveStartEvent* restart_event = recoverable ? offload_event_ : nullptr;
+    if ( !recoverable ) delete offload_event_;
     offload_event_ = nullptr;
     pending_ = CollectivePending {};
     active_invocation_id_ = 0;
@@ -176,11 +285,7 @@ void AllreduceOffloadFuncSM::finishOffload(Retval& retval)
     completion_received_ = false;
     wake_scheduled_ = false;
     mode_ = Mode::Idle;
-    // Once the fabric accepted the operation it is unsafe for just one rank to
-    // enter the software collective.  Treat the transport's "recoverable"
-    // status as terminal for this MPI call after releasing all local ownership.
-    if ( terminal_error ) reportPath("OFFLOAD TERMINAL ERROR");
-    retval.setExit(terminal_error ? 1 : 0);
+    return restart_event;
 }
 
 void AllreduceOffloadFuncSM::handleStartEvent(SST::Event* event, Retval& retval)
@@ -196,14 +301,21 @@ void AllreduceOffloadFuncSM::handleStartEvent(SST::Event* event, Retval& retval)
         }
     }
 
-    if ( !enable_offload_ || force_software_ || !eligible(*collective) ) {
+    const auto signature = translateSignature(*collective);
+    if ( !enable_offload_ || force_software_ || !signature ) {
+        startSoftware(collective, retval);
+        return;
+    }
+    auto* protocol = collectiveProtocol();
+    auto* candidate_endpoint = protocol == nullptr ? nullptr : protocol->collectiveEndpoint();
+    if ( candidate_endpoint != nullptr && !candidate_endpoint->supportsCollective(*signature) ) {
         startSoftware(collective, retval);
         return;
     }
     if ( !bindOffload() ) {
         fail("enableOffload=true but no validated collective service route is available");
     }
-    startOffload(collective, invocation_id, retval);
+    startOffload(collective, *signature, invocation_id, retval);
 }
 
 void AllreduceOffloadFuncSM::handleEnterEvent(Retval& retval)
@@ -223,7 +335,12 @@ void AllreduceOffloadFuncSM::handleEnterEvent(Retval& retval)
     }
     if ( mode_ == Mode::WaitingCompletion ) {
         if ( !completion_received_ ) fail("resumed before collective completion");
-        finishOffload(retval);
+        if ( auto* restart_event = finishOffload() ) {
+            startSoftware(restart_event, retval);
+        }
+        else {
+            retval.setExit(0);
+        }
         return;
     }
     fail("unexpected FunctionSM enter event");

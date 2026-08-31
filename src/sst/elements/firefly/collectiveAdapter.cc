@@ -62,6 +62,12 @@ const AcceptedParticipantHandle* FireflyCollectiveEndpoint::participant(uint32_t
     return published_ && local_slot == 0 ? &accepted_ : nullptr;
 }
 
+bool FireflyCollectiveEndpoint::supportsCollective(
+    const CollectiveSignatureV1& signature) const
+{
+    return signature.valid() && signature == STATIC_COLLECTIVE_SIGNATURE_V1;
+}
+
 bool FireflyCollectiveEndpoint::sameParticipant(const AcceptedParticipantHandle& participant) const
 {
     return published_ && sameParticipantValue(participant, accepted_);
@@ -84,27 +90,30 @@ CollectiveSubmitResult FireflyCollectiveEndpoint::trySubmitCollective(Collective
             !pending.participant.valid() || !sameParticipant(pending.participant) ) {
         return CollectiveSubmitResult::Invalid;
     }
-    if ( pending.operation != CollectiveOperation::Sum ||
-            pending.datatype != CollectiveDatatype::F64 || pending.element_count != 1 ) {
-        return CollectiveSubmitResult::Unsupported;
-    }
+    if ( !pending.signature.valid() ) return CollectiveSubmitResult::Invalid;
+    if ( !supportsCollective(pending.signature) ) return CollectiveSubmitResult::Unsupported;
+    const auto payload_bytes = pending.signature.payloadBytes();
     if ( pending.invocation_id == 0 || pending.invocation_id <= completed_invocation_ ||
-            pending.source.data == nullptr ||
-            pending.source.bytes != FIREFLY_COLLECTIVE_LOGICAL_BYTES ||
-            pending.result.data == nullptr ||
-            pending.result.bytes != FIREFLY_COLLECTIVE_LOGICAL_BYTES ) {
+            !payload_bytes || pending.source.data == nullptr ||
+            pending.source.bytes != *payload_bytes || pending.result.data == nullptr ||
+            pending.result.bytes != *payload_bytes ) {
         return CollectiveSubmitResult::Invalid;
     }
     if ( active_invocation_ != 0 || !owner_.collectiveCommandSlotAvailable() ) {
         return CollectiveSubmitResult::Retry;
     }
 
-    std::array<uint8_t, FIREFLY_COLLECTIVE_LOGICAL_BYTES> contribution {};
-    std::memcpy(contribution.data(), pending.source.data, contribution.size());
+    StaticCollectiveContribution contribution;
+    contribution.route = accepted_.route;
+    contribution.invocation_id = pending.invocation_id;
+    contribution.signature = pending.signature;
+    contribution.value.resize(*payload_bytes);
+    std::memcpy(contribution.value.data(), pending.source.data, contribution.value.size());
     auto event = std::make_unique<NicCollectiveSubmitCmdEvent>(
-        pending.participant.physical_route, pending.invocation_id, contribution);
+        pending.participant.physical_route, std::move(contribution));
 
     result_ = pending.result;
+    active_signature_ = pending.signature;
     active_invocation_ = pending.invocation_id;
     awaiting_ack_invocation_ = pending.invocation_id;
     token_.emplace(pending.consumeAfterAcceptance());
@@ -114,10 +123,12 @@ CollectiveSubmitResult FireflyCollectiveEndpoint::trySubmitCollective(Collective
 }
 
 void FireflyCollectiveEndpoint::requestCollectiveReady(
-    const AcceptedParticipantHandle& participant)
+    const AcceptedParticipantHandle& participant,
+    const CollectiveSignatureV1& signature)
 {
-    if ( ready_ == nullptr || !sameParticipant(participant) ) return;
+    if ( ready_ == nullptr || !sameParticipant(participant) || !supportsCollective(signature) ) return;
     ready_armed_ = true;
+    ready_signature_ = signature;
     owner_.notifyReadyIfPossible();
 }
 
@@ -129,19 +140,20 @@ void FireflyCollectiveEndpoint::submitAccepted(uint64_t invocation_id)
     awaiting_ack_invocation_ = 0;
 }
 
-void FireflyCollectiveEndpoint::receiveResult(uint64_t invocation_id,
-    const std::array<uint8_t, FIREFLY_COLLECTIVE_LOGICAL_BYTES>& bytes)
+void FireflyCollectiveEndpoint::receiveResult(StaticCollectiveResult completed)
 {
-    if ( active_invocation_ == 0 || invocation_id != active_invocation_ || !token_ ||
-            completion_ == nullptr || result_.data == nullptr ||
-            result_.bytes != FIREFLY_COLLECTIVE_LOGICAL_BYTES ) {
+    if ( active_invocation_ == 0 || !completed.valid() ||
+            completed.route != accepted_.route || completed.invocation_id != active_invocation_ ||
+            completed.signature != active_signature_ || !token_ || completion_ == nullptr ||
+            result_.data == nullptr || result_.bytes != completed.value.size() ) {
         owner_.collectiveFatal("Mismatched or duplicate collective result");
     }
 
-    std::memcpy(result_.data, bytes.data(), bytes.size());
+    std::memcpy(result_.data, completed.value.data(), completed.value.size());
     CollectiveCompletionToken token(std::move(*token_));
     token_.reset();
     result_ = {};
+    active_signature_ = {};
     completed_invocation_ = active_invocation_;
     active_invocation_ = 0;
     completion_->complete(std::move(token), CollectiveCompletionStatus::Success);
@@ -151,10 +163,11 @@ void FireflyCollectiveEndpoint::receiveResult(uint64_t invocation_id,
 bool FireflyCollectiveEndpoint::notifyReadyIfPossible()
 {
     if ( !ready_armed_ || active_invocation_ != 0 || ready_ == nullptr ||
-            !owner_.collectiveCommandSlotAvailable() ) {
+            !supportsCollective(ready_signature_) || !owner_.collectiveCommandSlotAvailable() ) {
         return false;
     }
     ready_armed_ = false;
+    ready_signature_ = {};
     ready_->ready(accepted_);
     return true;
 }

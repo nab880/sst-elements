@@ -541,8 +541,9 @@ void Nic::tryPublishCollectiveRoute()
         SimpleNetwork::SERVICE_FEATURE_SERIALIZATION |
         SimpleNetwork::SERVICE_FEATURE_INTERMEDIATE_TERMINATION_SAFE |
         SimpleNetwork::SERVICE_FEATURE_FRESH_BASE_REQUEST_TAG_FIRST_RECEIVE;
+    const auto request_bits = staticCollectiveRequestBits(STATIC_COLLECTIVE_SIGNATURE_V1);
     const SimpleNetwork::nid_t physical_endpoint_id = m_linkControl->getEndpointID();
-    if ( m_linkBytesPerSec == 0 || physical_endpoint_id != m_myNodeId ||
+    if ( !request_bits || m_linkBytesPerSec == 0 || physical_endpoint_id != m_myNodeId ||
             !m_linkControl->queryServiceCapability(COLLECTIVE_SERVICE_ID, capability) ||
             !capability.isValidFor(COLLECTIVE_SERVICE_ID) ||
             (capability.features & required) != required ||
@@ -554,9 +555,9 @@ void Nic::tryPublishCollectiveRoute()
             capability.max_atomic_request_bits_by_vn.size() <=
                 static_cast<size_t>(collective->result_vn) ||
             capability.max_atomic_request_bits_by_vn[collective->reduce_vn] <
-                FIREFLY_COLLECTIVE_REQUEST_BITS ||
+                *request_bits ||
             capability.max_atomic_request_bits_by_vn[collective->result_vn] <
-                FIREFLY_COLLECTIVE_REQUEST_BITS ) {
+                *request_bits ) {
         m_dbg.fatal(CALL_INFO, -1,
             "collectiveEnable=true but no validated collective service route is available\n");
     }
@@ -598,30 +599,24 @@ void Nic::handleCollectiveEvent( NicCollectiveSubmitCmdEvent* event, int id )
 
     auto* collective = m_featureState && m_featureState->collective ?
         &*m_featureState->collective : nullptr;
+    const auto& contribution = event->contribution;
     if ( collective == nullptr || !collective->route_published || id != 0 || m_num_vNics != 1 ||
             !(event->physical_route == collective->participant.physical_route) ||
-            event->invocation_id == 0 || event->invocation_id <= collective->completed_invocation ||
+            contribution.route != collective->route || !contribution.valid() ||
+            contribution.invocation_id <= collective->completed_invocation ||
             collective->active_invocation != 0 ) {
         m_dbg.fatal(CALL_INFO, -1, "Invalid or duplicate Firefly collective submit command\n");
     }
 
-    auto data = std::make_unique<CollectiveServiceData>(collective->route,
-        event->invocation_id, CollectiveDirection::Contribution, event->contribution);
-    if ( !data->validFor(collective->route, CollectiveDirection::Contribution,
-            FIREFLY_COLLECTIVE_REQUEST_BITS) ) {
+    auto request = makeStaticCollectiveContributionRequest(contribution,
+        collective->participant.fabric->injection_dest_nid,
+        static_cast<SimpleNetwork::nid_t>(collective->participant.logical_participant_id),
+        collective->reduce_vn);
+    if ( !request ) {
         m_dbg.fatal(CALL_INFO, -1, "Firefly constructed an invalid collective contribution\n");
     }
 
-    auto request = std::make_unique<SimpleNetwork::Request>(
-        collective->participant.fabric->injection_dest_nid,
-        static_cast<SimpleNetwork::nid_t>(collective->participant.logical_participant_id),
-        static_cast<size_t>(FIREFLY_COLLECTIVE_REQUEST_BITS), true, true);
-    request->vn = collective->reduce_vn;
-    request->allow_adaptive = false;
-    request->giveServiceData(data.get());
-    data.release();
-
-    const uint64_t invocation_id = event->invocation_id;
+    const uint64_t invocation_id = contribution.invocation_id;
     collective->active_invocation = invocation_id;
     queueTaggedPacket(std::move(request));
     m_vNicV[0]->notifyCollectiveSubmitAccepted(invocation_id);
@@ -663,32 +658,23 @@ void Nic::processCollectivePacket( SimpleNetwork::Request* raw_request, int vn )
     auto* collective = m_featureState && m_featureState->collective ?
         &*m_featureState->collective : nullptr;
     if ( collective == nullptr || !collective->route_published || !request ||
-            vn != collective->result_vn || request->vn != collective->result_vn ||
-            !request->hasService() ||
-            request->getServiceID() != COLLECTIVE_SERVICE_ID ||
-            request->src != collective->root_logical_nid ||
-            request->dest != m_myNodeId ||
-            request->size_in_bits != FIREFLY_COLLECTIVE_REQUEST_BITS ||
-            !request->head || !request->tail || request->allow_adaptive ||
-            request->inspectPayload() != nullptr || collective->active_invocation == 0 ) {
+            vn != collective->result_vn || collective->active_invocation == 0 ) {
         m_dbg.fatal(CALL_INFO, -1, "Malformed collective result reached the Firefly NIC\n");
     }
 
-    const auto* data = request->inspectServiceDataAs<CollectiveServiceData>();
-    if ( data == nullptr || data->invocation_id != collective->active_invocation ||
-            !data->validFor(collective->route, CollectiveDirection::Result,
-                request->size_in_bits) ) {
+    auto result = inspectStaticCollectiveResult(*request, collective->route,
+        collective->active_invocation, collective->root_logical_nid,
+        m_myNodeId, collective->result_vn);
+    if ( !result ) {
         m_dbg.fatal(CALL_INFO, -1, "Invalid collective result descriptor reached the Firefly NIC\n");
     }
 
-    std::array<uint8_t, FIREFLY_COLLECTIVE_LOGICAL_BYTES> result {};
-    std::copy(data->value.begin(), data->value.end(), result.begin());
     const uint64_t invocation_id = collective->active_invocation;
     collective->active_invocation = 0;
     collective->completed_invocation = invocation_id;
     m_rcvdByteCount->addData((request->size_in_bits + 7) / 8);
     collective->results_completed->addData(1);
-    m_vNicV[0]->notifyCollectiveResult(invocation_id, result);
+    m_vNicV[0]->notifyCollectiveResult(std::move(*result));
 }
 
 void Nic::handleSelfEvent( Event *e )

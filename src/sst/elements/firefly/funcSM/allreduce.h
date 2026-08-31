@@ -20,6 +20,7 @@
 #include "sst/elements/merlin/services/collective/collectiveEndpoint.h"
 
 #include <cstdint>
+#include <optional>
 
 namespace SST {
 namespace Firefly {
@@ -93,13 +94,16 @@ class AllreduceOffloadFuncSM : public CollectiveTreeFuncSM,
 
     enum class Mode : uint8_t { Idle, Software, WaitingReady, WaitingCompletion };
 
-    bool eligible(const CollectiveStartEvent& event) const;
+    static std::optional<SST::Collective::CollectiveSignatureV1> translateSignature(
+        const CollectiveStartEvent& event);
     void startSoftware(CollectiveStartEvent* event, Retval& retval);
     bool bindOffload();
-    void startOffload(CollectiveStartEvent* event, uint64_t invocation_id, Retval& retval);
+    void startOffload(CollectiveStartEvent* event,
+        const SST::Collective::CollectiveSignatureV1& signature,
+        uint64_t invocation_id, Retval& retval);
     void submitOffload(Retval& retval);
     void scheduleResume();
-    void finishOffload(Retval& retval);
+    CollectiveStartEvent* finishOffload();
     void reportPath(const char* path) const;
     void fail(const char* reason);
 
