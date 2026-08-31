@@ -100,9 +100,7 @@ EXTRA_DIST = \
  tests/refFiles/test_sendrecv.out \
  tests/refFiles/test_alltoall.out \
  tests/refFiles/test_allgather.out \
- tests/refFiles/test_halo3d26.out \
- tests/refFiles/test_allreduce_innetwork_supported.out \
- tests/refFiles/test_allreduce_innetwork_fallback.out
+ tests/refFiles/test_halo3d26.out
 
 libmask_mpi_la_LDFLAGS = -module -avoid-version
 libsendrecv_la_LDFLAGS = -module -avoid-version

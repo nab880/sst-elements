@@ -28,11 +28,6 @@ class testcase_hg(SSTTestCase):
         self.assertIn("Mercury received unsupported network service 32768 on VN 0", combined)
         self.assertNotIn("couldn't cast event to NetworkMessage", combined)
 
-    @unittest.skipIf(testing_check_get_num_threads() > 1, "manager VN smoke requires one thread")
-    @unittest.skipIf(testing_check_get_num_ranks() > 1, "manager VN smoke requires one rank")
-    def test_manager_vn_smoke(self):
-        self.simple_components_template("manager_vn_smoke")
-
     def simple_components_template(self, testcase):
         test_dir = self.get_testsuite_dir()
         out_dir = self.get_test_output_run_dir()

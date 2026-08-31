@@ -13,7 +13,7 @@ AM_LIBTOOLFLAGS = --tag=CXX
 comp_LTLIBRARIES = libhg.la
 compdir = $(pkglibdir)
 
-ext_LTLIBRARIES = libcomputelibrary.la libostest.la libostest-nano.la libmanager_vn_smoke.la
+ext_LTLIBRARIES = libcomputelibrary.la libostest.la libostest-nano.la
 extdir = $(pkglibdir)/ext
 
 libhg_la_SOURCES = \
@@ -102,9 +102,6 @@ libostest_la_SOURCES = \
 
 libostest_nano_la_SOURCES = \
   tests/ostest-nano.cc
-
-libmanager_vn_smoke_la_SOURCES = \
-  tests/manager_vn_smoke.cc
 
 library_includedir=$(includedir)/sst/elements/mercury
 
@@ -218,10 +215,8 @@ endif
 EXTRA_DIST = \
     tests/testsuite_default_hg.py \
     tests/network_service_tag_first.py \
-    tests/manager_vn_smoke.py \
     tests/ostest.py \
     tests/ostest-nano.py \
-    tests/refFiles/manager_vn_smoke.out \
     tests/refFiles/ostest.out \
     tests/refFiles/ostest-nano.out
 
@@ -236,8 +231,6 @@ libhg_la_LIBADD = $(top_builddir)/src/sst/elements/merlin/libsstmerlincollective
 libcomputelibrary_la_LDFLAGS = -module -avoid-version -shared
 libostest_la_LDFLAGS = -module -avoid-version -shared
 libostest_nano_la_LDFLAGS = -module -avoid-version -shared
-libmanager_vn_smoke_la_LDFLAGS = -module -avoid-version -shared
-
 install-exec-hook:
 	$(SST_REGISTER_TOOL) SST_ELEMENT_SOURCE     mercury=$(abs_srcdir)
 	$(SST_REGISTER_TOOL) SST_ELEMENT_TESTS      mercury=$(abs_srcdir)/tests

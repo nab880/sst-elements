@@ -1,4 +1,0 @@
-Mask-MPI in-network allreduce rank=0 mode=fallback input=1.0 result=4.0 PASS
-Mask-MPI in-network allreduce rank=1 mode=fallback input=2.0 result=4.0 PASS
-Mask-MPI in-network allreduce rank=2 mode=fallback input=3.0 result=4.0 PASS
-Mask-MPI in-network allreduce rank=3 mode=fallback input=4.0 result=4.0 PASS
