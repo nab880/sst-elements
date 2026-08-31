@@ -541,8 +541,8 @@ void Nic::tryPublishCollectiveRoute()
         SimpleNetwork::SERVICE_FEATURE_SERIALIZATION |
         SimpleNetwork::SERVICE_FEATURE_INTERMEDIATE_TERMINATION_SAFE |
         SimpleNetwork::SERVICE_FEATURE_FRESH_BASE_REQUEST_TAG_FIRST_RECEIVE;
-    const SimpleNetwork::nid_t logical_endpoint_id = m_linkControl->getEndpointID();
-    if ( m_linkBytesPerSec == 0 || logical_endpoint_id < 0 ||
+    const SimpleNetwork::nid_t physical_endpoint_id = m_linkControl->getEndpointID();
+    if ( m_linkBytesPerSec == 0 || physical_endpoint_id != m_myNodeId ||
             !m_linkControl->queryServiceCapability(COLLECTIVE_SERVICE_ID, capability) ||
             !capability.isValidFor(COLLECTIVE_SERVICE_ID) ||
             (capability.features & required) != required ||
@@ -581,7 +581,7 @@ void Nic::tryPublishCollectiveRoute()
     participant.fabric.emplace();
     participant.fabric->endpoint_reduce_vn = collective->reduce_vn;
     participant.fabric->endpoint_result_vn = collective->result_vn;
-    participant.fabric->injection_dest_nid = collective->root_logical_nid;
+    participant.fabric->injection_dest_nid = collective->root_nid;
     if ( !participant.valid() ) {
         m_dbg.fatal(CALL_INFO, -1, "Invalid static Firefly collective participant handle\n");
     }
@@ -613,7 +613,8 @@ void Nic::handleCollectiveEvent( NicCollectiveSubmitCmdEvent* event, int id )
     }
 
     auto request = std::make_unique<SimpleNetwork::Request>(
-        collective->participant.fabric->injection_dest_nid, m_linkControl->getEndpointID(),
+        collective->participant.fabric->injection_dest_nid,
+        static_cast<SimpleNetwork::nid_t>(collective->participant.logical_participant_id),
         static_cast<size_t>(FIREFLY_COLLECTIVE_REQUEST_BITS), true, true);
     request->vn = collective->reduce_vn;
     request->allow_adaptive = false;
@@ -666,7 +667,7 @@ void Nic::processCollectivePacket( SimpleNetwork::Request* raw_request, int vn )
             !request->hasService() ||
             request->getServiceID() != COLLECTIVE_SERVICE_ID ||
             request->src != collective->root_logical_nid ||
-            request->dest != m_linkControl->getEndpointID() ||
+            request->dest != m_myNodeId ||
             request->size_in_bits != FIREFLY_COLLECTIVE_REQUEST_BITS ||
             !request->head || !request->tail || request->allow_adaptive ||
             request->inspectPayload() != nullptr || collective->active_invocation == 0 ) {
