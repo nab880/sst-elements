@@ -67,7 +67,7 @@ class testcase_merlin_Component(SSTTestCase):
 
     def test_merlin_fattree_inc(self):
         self.merlin_test_template("fattree_inc_test")
- 
+
 
     @unittest.skipIf(not(('sympy.polys.galoistools' in sys.modules) and ('sympy.polys.domains' in sys.modules)), "Polarfly construction requires sympy")
     def test_merlin_polarfly_455(self):
