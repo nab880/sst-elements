@@ -27,6 +27,19 @@ jobs:
   tests:
     needs: [all-prechecks]
     uses: ./.github/workflows/build_and_test.yml
+    with:
+      core_ref: >-
+        ${{
+          startsWith(github.head_ref || github.ref_name, 'coll-work-')
+          && '4bc0c2d96395b0f5a1d5337cd0520924c67e42d5'
+          || 'devel'
+        }}
+      core_repository: >-
+        ${{
+          startsWith(github.head_ref || github.ref_name, 'coll-work-')
+          && 'nab880/sst-core'
+          || 'sstsimulator/sst-core'
+        }}
     permissions:
       actions: write
   all-tests:
