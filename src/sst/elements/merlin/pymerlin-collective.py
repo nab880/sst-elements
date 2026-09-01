@@ -8,6 +8,7 @@
 # information, see the LICENSE file in the top level directory of the
 # distribution.
 
+from copy import deepcopy
 from types import MappingProxyType
 
 from sst.merlin.base import hr_router
@@ -227,6 +228,13 @@ class StaticCollectiveRouter(hr_router):
         self._declareClassVariables(["_collective_plan", "_collective_statistics"])
         self._collective_plan = plan
         self._collective_statistics = enable_statistics
+
+    def __deepcopy__(self, memo):
+        clone = self.__class__.__new__(self.__class__)
+        memo[id(self)] = clone
+        for name, value in self.__dict__.items():
+            object.__setattr__(clone, name, deepcopy(value, memo))
+        return clone
 
     def instanceRouter(self, name, radix, router_id):
         fact = self._collective_plan.router(router_id)
