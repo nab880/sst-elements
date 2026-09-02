@@ -14,7 +14,7 @@ AM_CPPFLAGS += \
 # unpleasant hack to make vintage automake (e.g. 1.13.4) work
 AM_LIBTOOLFLAGS = --tag=CXX
 
-ext_LTLIBRARIES = libsumi.la libpmi.la
+ext_LTLIBRARIES = libsumi.la libpmi.la libsumicollectives.la
 extdir = $(pkglibdir)/ext
 
 libsumi_la_SOURCES = \
@@ -104,8 +104,19 @@ libsumi_la_LDFLAGS = -module -avoid-version
 libpmi_la_SOURCES = pmi/libpmi.cc
 libpmi_la_LDFLAGS = -avoid-version
 
+libsumicollectives_la_SOURCES = \
+  tests/sumi_collectives.cc \
+  tests/sumi_collectives_app.cc
+libsumicollectives_la_LDFLAGS = -module -avoid-version
+
+EXTRA_DIST += \
+  tests/platform_file_iris_test.py \
+  tests/test_sumi_collectives.py \
+  tests/testsuite_default_iris.py
+
 install-exec-hook:
 	$(SST_REGISTER_TOOL) SST_ELEMENT_SOURCE     iris=$(abs_srcdir)
+	$(SST_REGISTER_TOOL) SST_ELEMENT_TESTS      iris=$(abs_srcdir)/tests
 
 install-data-hook:
 	@$(MKDIR_P) $(DESTDIR)$(includedir)/iris

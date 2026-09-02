@@ -124,6 +124,8 @@ class HgOS(TemplateBase):
                                            "max_vshort_msg_size",
                                            "max_eager_msg_size",
                                            "use_put_window",
+                                           "eager_cutoff",
+                                           "use_put_protocol",
                                            "compute_library_access_width",
                                            "compute_library_loop_overhead",
                                            "smp_optimize",
