@@ -51,6 +51,8 @@ Questions? Contact sst-macro-help@sandia.gov
 
 namespace SST::Iris::sumi {
 
+// The reduction function must be associative and commutative; the DAG does
+// not preserve global rank order for noncommutative operations.
 class HalvingReduceScatterActor :
   public DagCollectiveActor
 {

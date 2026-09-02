@@ -112,6 +112,9 @@ BtreeScatterActor::finalizeBuffers()
   int max_recv_buf_size = midpoint_*nelems_*type_size_;
   if (me == root_){
     if (root_ != 0){
+      if (!recv_in_place_){
+        my_api_->memcopy(result_buffer_, recv_buffer_, result_size);
+      }
       my_api_->freeWorkspace(recv_buffer_,max_recv_buf_size);
     }
   } else {
@@ -144,15 +147,15 @@ BtreeScatterActor::initDag()
   //as with many other collectives - make absolutely no sense to run this on unpacked data
   //collective does not really need to worry about processing packed versus unpacked data
 
-  //the root always sends from a send buffer
-  //the other nodes will recv into a temp buffer - and then send from that
-  SendAction::buf_type_t send_ty = me == root_ ?
+  // Initial root sends use the caller's full source buffer. Tree sends use the
+  // subtree received into recv_buffer_, except rank zero when it is the root.
+  SendAction::buf_type_t tree_send_ty = me == 0 ?
         SendAction::temp_send : SendAction::prev_recv;
 
   if (root_ != midpoint_){ //if they are equal, this will be taken care of in init_buffers
     if (me == root_){
       //send half my data to midpoint to begin the scatter
-      Action* ac = new SendAction(round, midpoint_, send_ty);
+      Action* ac = new SendAction(round, midpoint_, SendAction::temp_send);
       ac->offset = nelems_ * midpoint_;
       ac->nelems = nelems_ * std::min(nproc-midpoint_, midpoint_);
       addDependency(prev, ac);
@@ -170,7 +173,7 @@ BtreeScatterActor::initDag()
   if (root_ != 0){
     //uh oh - need an extra send
     if (me == root_){
-      Action* ac = new SendAction(round, 0, send_ty);
+      Action* ac = new SendAction(round, 0, SendAction::temp_send);
       ac->nelems = nelems_ * midpoint_;
       ac->offset = 0;
       addDependency(prev, ac);
@@ -195,7 +198,7 @@ BtreeScatterActor::initDag()
         //I send up
         int partner = me + partnerGap;
         if (partner < nproc){
-          Action* ac = new SendAction(round, partner, send_ty);
+          Action* ac = new SendAction(round, partner, tree_send_ty);
           ac->offset = partnerGap * nelems_;
           ac->nelems = std::min(nproc-partner,partnerGap) * nelems_;
           addDependency(prev, ac);

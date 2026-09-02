@@ -112,6 +112,18 @@ CollectiveDoneMessage* comm_scatter(int root, void* dst, void* src, int nelems, 
 CollectiveDoneMessage* comm_bcast(int root, void* buffer, int nelems, int type_size, int tag,
                 int cq_id, Communicator* comm = nullptr);
 
+CollectiveDoneMessage* comm_reduce_scatter(void* dst, void* src, int nelems,
+                    int type_size, int tag, reduce_fxn fxn, int cq_id,
+                    Communicator* comm = nullptr);
+
+template <typename data_t, template <typename> class Op>
+CollectiveDoneMessage* comm_reduce_scatter(void* dst, void* src, int nelems,
+                    int tag, int cq_id, Communicator* comm = nullptr){
+  typedef ReduceOp<Op, data_t> op_class_type;
+  return comm_reduce_scatter(dst, src, nelems, sizeof(data_t), tag,
+                             &op_class_type::op, cq_id, comm);
+}
+
 /**
 * The total size of the input/result buffer in bytes is nelems*type_size
 * @param dst  Buffer for the result. Can be NULL to ignore payloads.
@@ -167,3 +179,5 @@ void sleep_hires(double sec);
 double wall_time();
 
 }
+
+#endif // sumi_msg_api_h

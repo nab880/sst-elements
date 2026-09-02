@@ -190,6 +190,10 @@ HalvingReduceScatterActor::initRingDag()
   //block that finishes accumulating on rank r is exactly block r.
   int nproc = dom_nproc_;
   int me = dom_me_;
+  if (nproc > static_cast<int>(Action::max_round)){
+    sst_hg_abort_printf("ring reduce-scatter supports at most %u ranks; "
+                        "got %d", Action::max_round, nproc);
+  }
   int right = (me + 1) % nproc;
   int left = (me + nproc - 1) % nproc;
 

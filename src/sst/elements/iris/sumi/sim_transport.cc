@@ -739,8 +739,11 @@ CollectiveEngine::skipCollective(Collective::type_t ty,
 {
   if (!comm) comm = global_domain_;
   if (comm->nproc() == 1){
-    tport_->memcopy(dst, src, nelems*type_size);
-    return new CollectiveDoneMessage(tag, ty, comm, cq_id);
+    if (dst != src) tport_->memcopy(dst, src, nelems*type_size);
+    auto* msg = new CollectiveDoneMessage(tag, ty, comm, cq_id);
+    msg->set_result(dst);
+    msg->set_comm_rank(comm->myCommRank());
+    return msg;
   }
   return nullptr;
 }

@@ -111,6 +111,14 @@ comm_allreduce(void *dst, void *src, int nelems, int type_size, int tag, reduce_
   return current_engine()->allreduce(dst, src, nelems, type_size, tag, fxn, cq_id, comm);
 }
 
+CollectiveDoneMessage*
+comm_reduce_scatter(void *dst, void *src, int nelems, int type_size, int tag,
+                    reduce_fxn fxn, int cq_id, Communicator* comm)
+{
+  return current_engine()->reduceScatter(dst, src, nelems, type_size, tag,
+                                         fxn, cq_id, comm);
+}
+
 CollectiveDoneMessage* comm_scan(void *dst, void *src, int nelems, int type_size, int tag, reduce_fxn fxn,
                int cq_id, Communicator* comm)
 {
