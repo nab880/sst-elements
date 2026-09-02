@@ -498,10 +498,8 @@ constexpr AlgKeys alg_keys[] = {
     AlgTarget::operation },
   { Collective::bcast, "collective.bcast", "SUMI_BCAST_ALG",
     AlgTarget::operation },
-  // reduce_scatter is deliberately absent: no algorithm is registered yet
-  // (the built-in HalvingReduceScatter is an abort stub), so advertising a
-  // key would offer a param whose every value aborts. Restore the row when
-  // a real implementation registers itself.
+  { Collective::reduce_scatter, "collective.reduce_scatter",
+    "SUMI_REDUCE_SCATTER_ALG", AlgTarget::operation },
   { Collective::scan, "collective.scan", "SUMI_SCAN_ALG",
     AlgTarget::operation },
   { Collective::gather, "collective.gather", "SUMI_GATHER_ALG",

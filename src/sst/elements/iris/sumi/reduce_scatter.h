@@ -42,7 +42,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 Questions? Contact sst-macro-help@sandia.gov
 */
 
-#pragma
+#pragma once
 
 #include <iris/sumi/collective.h>
 #include <iris/sumi/collective_actor.h>
@@ -57,26 +57,37 @@ class HalvingReduceScatterActor :
 
  public:
   HalvingReduceScatterActor(CollectiveEngine* engine, void* dst, void* src,
-                        int  /*nelems*/, int type_size, int tag,  reduce_fxn fxn, int cq_id, Communicator* comm) :
+                        int nelems, int type_size, int tag,  reduce_fxn fxn, int cq_id, Communicator* comm) :
     DagCollectiveActor(Collective::reduce_scatter, engine, dst, src, type_size, tag, cq_id, comm, fxn),
-    fxn_(fxn)
+    fxn_(fxn), nelems_(nelems), reduce_buffer_(nullptr), final_dst_(nullptr)
   {
   }
 
   std::string toString() const override {
-    return "virtual all reduce actor";
+    return "reduce-scatter actor";
   }
 
   void bufferAction(void *dst_buffer, void *msg_buffer, Action* ac) override;
 
  private:
-  bool isLowerPartner(int virtual_me, int partner_gap);
+  void finalize() override;
   void finalizeBuffers() override;
   void initBuffers() override;
   void initDag() override;
 
+  //recursive-halving DAG (power-of-two rank counts)
+  void initHalvingDag();
+  //ring reduce-scatter DAG (arbitrary rank counts)
+  void initRingDag();
+
  private:
   reduce_fxn fxn_;
+  //number of elements per rank in the scattered result (the block size)
+  int nelems_;
+  //full-size scratch we reduce in place before scattering out the final block
+  void* reduce_buffer_;
+  //caller's per-rank result buffer (holds nelems_ elements on exit)
+  void* final_dst_;
 };
 
 class HalvingReduceScatter :
@@ -91,7 +102,7 @@ class HalvingReduceScatter :
   }
 
   std::string toString() const override {
-    return "sumi allreduce";
+    return "sumi reduce_scatter";
   }
 
   DagCollectiveActor* newActor() const override {

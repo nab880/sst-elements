@@ -19,6 +19,7 @@
 #include <iris/sumi/alltoall.h>
 #include <iris/sumi/ring_allreduce.h>
 #include <iris/sumi/reduce.h>
+#include <iris/sumi/reduce_scatter.h>
 #include <iris/sumi/bcast.h>
 #include <iris/sumi/scan.h>
 #include <iris/sumi/gather.h>
@@ -43,6 +44,9 @@ SUMI_REGISTER_COLLECTIVE(alltoall, "direct", DirectAlltoallCollective,
 
 SUMI_REGISTER_COLLECTIVE(reduce, "recdouble", WilkeHalvingReduce,
     a.engine, a.root, a.dst, a.src, a.nelems, a.type_size, a.tag, a.fxn, a.cq_id, a.comm)
+
+SUMI_REGISTER_COLLECTIVE(reduce_scatter, "halving", HalvingReduceScatter,
+    a.engine, a.dst, a.src, a.nelems, a.type_size, a.tag, a.fxn, a.cq_id, a.comm)
 
 SUMI_REGISTER_COLLECTIVE(bcast, "btree", BinaryTreeBcastCollective,
     a.engine, a.root, a.dst, a.nelems, a.type_size, a.tag, a.cq_id, a.comm)
