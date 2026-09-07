@@ -1,0 +1,4 @@
+Mask-MPI in-network allreduce rank=0 mode=supported input=1.0 result=10.0 PASS
+Mask-MPI in-network allreduce rank=1 mode=supported input=2.0 result=10.0 PASS
+Mask-MPI in-network allreduce rank=2 mode=supported input=3.0 result=10.0 PASS
+Mask-MPI in-network allreduce rank=3 mode=supported input=4.0 result=10.0 PASS

@@ -66,6 +66,9 @@ public:
   int nsockets() { return nsockets_; }
   InstructionProcessor* proc() { return proc_; }
 
+  /** Share the compute memory model's channels with NIC staging transfers. */
+  void accessHostMemory(uint64_t bytes, ExecutionEvent* callback) override;
+
   std::string toString() override { return sprintf("HgNodeCL%d:",my_addr_); }
 
 private:

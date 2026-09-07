@@ -79,6 +79,10 @@ public:
 
   SST::Hg::NicAPI* nic() { return nic_; }
 
+  /** Consume a host-memory transfer and its callback. Nodes without a memory
+   * model retain their zero-cost approximation, with asynchronous completion. */
+  virtual void accessHostMemory(uint64_t bytes, ExecutionEvent* callback);
+
   virtual std::string toString() { return sprintf("HgNode%d:",my_addr_); }
 
 protected:

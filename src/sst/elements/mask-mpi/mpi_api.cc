@@ -118,6 +118,8 @@ MpiApi* mask_mpi()
 MpiApi::MpiApi(SST::Params& params, SST::Hg::App* app) :
   SST::Iris::sumi::SimTransport(params, app),
   queue_(nullptr),
+  collective_offload_(std::make_unique<MpiCollectiveOffload>(
+      *this, params.find<bool>("enable_collective_offload", false))),
   next_type_id_(0),
   next_op_id_(first_custom_op_id),
   status_(is_fresh),

@@ -61,18 +61,26 @@ void
 NodeBase::complete(unsigned int phase)
 {
   SST::Component::complete(phase);
+  if (nic_ && nic_->collectiveEndpoint()) nic_->complete(phase);
 }
 
 void
 NodeBase::finish()
 {
   SST::Component::finish();
+  if (nic_ && nic_->collectiveEndpoint()) nic_->finish();
 }
 
 void
 NodeBase::handle(Request* req)
 {
   os_->handleRequest(req);
+}
+
+void
+NodeBase::accessHostMemory(uint64_t, ExecutionEvent* callback)
+{
+  sendExecutionEventNow(callback);
 }
 
 } // namespace Hg

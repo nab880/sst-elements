@@ -65,6 +65,10 @@ Questions? Contact sst-macro-help@sandia.gov
 #include <mpi_queue/mpi_queue_fwd.h>
 #include <mpi_delay_stats.h>
 
+#include <mpi_collective_offload.h>
+
+#include <memory>
+
 #include <unordered_map>
 
 //#include <sstmac/common/stats/ftq_tag.h>
@@ -372,8 +376,8 @@ class MpiApi : public SST::Iris::sumi::SimTransport
             MPI_Comm comm);
 
   int allreduce(const void* src, void* dst,
-            int count, MPI_Datatype type, MPI_Op op,
-            MPI_Comm comm);
+                int count, MPI_Datatype type, MPI_Op op,
+                MPI_Comm comm);
 
   int scan(int count, MPI_Datatype type, MPI_Op op,
             MPI_Comm comm);
@@ -683,6 +687,9 @@ class MpiApi : public SST::Iris::sumi::SimTransport
 
   SST::Iris::sumi::CollectiveDoneMessage*  startAllreduce(CollectiveOp* op);
 
+  CollectiveOp::ptr prepareAllreduce(MpiComm* commPtr, int count, MPI_Datatype type,
+                                     MPI_Op mop, const void* src, void* dst);
+
   SST::Iris::sumi::CollectiveDoneMessage*  startBarrier(CollectiveOp* op);
 
   SST::Iris::sumi::CollectiveDoneMessage*  startBcast(CollectiveOp* op);
@@ -813,7 +820,11 @@ class MpiApi : public SST::Iris::sumi::SimTransport
  private:
   friend class MpiCommFactory;
 
+  friend class MpiCollectiveOffload;
+
   MpiQueue* queue_;
+
+  std::unique_ptr<MpiCollectiveOffload> collective_offload_;
 
   MPI_Datatype next_type_id_;
 
