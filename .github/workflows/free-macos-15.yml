@@ -3,6 +3,15 @@ name: Build/test on macOS 15
 
 on:
   workflow_call:
+    inputs:
+      core_ref:
+        default: devel
+        required: false
+        type: string
+      core_repository:
+        default: sstsimulator/sst-core
+        required: false
+        type: string
 
 permissions: {}
 
@@ -16,8 +25,8 @@ jobs:
         with:
           path: sst-core
           persist-credentials: false
-          ref: devel
-          repository: sstsimulator/sst-core
+          ref: ${{ inputs.core_ref }}
+          repository: ${{ inputs.core_repository }}
 
       - name: Clone elements
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
