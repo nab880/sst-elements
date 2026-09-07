@@ -143,3 +143,9 @@ overheads (both default to zero). The adapter retains source snapshots and
 incoming result bytes through memory completion and any network-credit wait.
 The caller keeps its result buffer alive until completion; only one invocation
 can be active.
+
+## Follow-up AI demonstrations
+
+Functional scalar-offload and hybrid vector-fallback/scalar-offload training
+workloads are in [`ember/examples/ai`](../../../ember/examples/ai/README.md)
+and [`mask-mpi/examples/ai`](../../../mask-mpi/examples/ai/README.md).
