@@ -122,8 +122,16 @@ void FunctionSM::initFunction( Info* info,
         module = defaultParams.find<std::string>("module");
     }
 
-    m_dbg.debug(CALL_INFO,3,0,"func=`%s` module=`%s`\n",
-                            name.c_str(),module.c_str());
+    std::string implementation = name;
+    if ( num == Allreduce && module == "firefly" &&
+            (params.find<bool>("enableOffload", false) ||
+             params.find<bool>("forceSoftware", false) ||
+             params.find<bool>("reportOffload", false)) ) {
+        implementation = "AllreduceOffload";
+    }
+
+    m_dbg.debug(CALL_INFO,3,0,"func=`%s` module=`%s.%s`\n",
+        name.c_str(), module.c_str(), implementation.c_str());
 
     if ( params.find<std::string>("name").empty() ) {
         params.insert( "name",  defaultParams.find<std::string>( "name" ), true );
@@ -150,7 +158,7 @@ void FunctionSM::initFunction( Info* info,
 
     params.insert( "nodeId", defaultParams.find<std::string>( "nodeId" ), true );
 
-    m_smV[ num ] = loadModule<FunctionSMInterface>( module + "." + name, params );
+    m_smV[ num ] = loadModule<FunctionSMInterface>( module + "." + implementation, params );
 
     assert( m_smV[ Init ] );
     m_smV[ num ]->setInfo( info );
@@ -235,4 +243,3 @@ void FunctionSM::handleToDriver( Event* e )
     m_sm = NULL;
     delete e;
 }
-

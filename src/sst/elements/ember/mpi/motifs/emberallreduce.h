@@ -39,6 +39,7 @@ public:
         {   "arg.compute",      "Sets the time spent computing",        "1"},
         {   "arg.count",        "Sets the number of elements to reduce",        "1"},
         {   "arg.doUserFunc",   "Test reduce operation",        "false"},
+        {   "arg.verify",       "Initialize and verify the functional SUM result", "false"},
     )
 
     SST_ELI_DOCUMENT_STATISTICS(
@@ -75,6 +76,7 @@ private:
     uint64_t m_compute;
 	uint32_t m_iterations;
 	uint32_t m_count;
+    bool     m_verify;
     void*    m_sendBuf;
     void*    m_recvBuf;
     uint32_t m_loopIndex;

@@ -18,6 +18,7 @@
 #include "ctrlMsg.h"
 #include "nic.h"
 #include "info.h"
+#include "virtNic.h"
 
 #include "ctrlMsgProcessQueuesState.h"
 #include "ctrlMsgMemory.h"
@@ -83,6 +84,25 @@ void API::setVars( Info* info, VirtNic* nic, Thornhill::MemoryHeapLink* mem, Lin
 
     m_dbg.debug(CALL_INFO,1,1,"\n");
     m_processQueuesState->setVars( nic, m_info, m_mem, m_memHeapLink, retLink );
+}
+
+SST::Collective::CollectiveEndpoint* API::collectiveEndpoint() const
+{
+    auto* nic = m_processQueuesState->nic();
+    return nic == nullptr ? nullptr : nic->collectiveEndpoint();
+}
+
+bool API::resumeCollectiveFunction()
+{
+    return m_processQueuesState->nic() != nullptr && m_processQueuesState->resumeFunction();
+}
+
+SST::Collective::CollectiveSubmitResult API::submitCollective(
+    const SST::Collective::CollectiveSubmission& submission, Hermes::Vaddr source_address, Hermes::Vaddr result_address)
+{
+    auto* nic = m_processQueuesState->nic();
+    return nic == nullptr ? SST::Collective::CollectiveSubmitResult::Invalid :
+        nic->submitCollective(submission, source_address, result_address);
 }
 
 void API::makeProgress() {
