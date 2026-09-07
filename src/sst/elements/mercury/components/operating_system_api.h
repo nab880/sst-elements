@@ -25,6 +25,7 @@
 #include <memory>
 
 namespace SST::Collective {
+struct CollectiveParticipant;
 class CollectiveEndpoint;
 }
 

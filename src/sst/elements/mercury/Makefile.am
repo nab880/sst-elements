@@ -15,6 +15,12 @@ compdir = $(pkglibdir)
 ext_LTLIBRARIES = libcomputelibrary.la libostest.la libostest-nano.la libmanager_vn_smoke.la
 extdir = $(pkglibdir)/ext
 
+ext_LTLIBRARIES += libcollective_host_timing.la
+
+libcollective_host_timing_la_SOURCES = tests/collective_host_timing.cc
+libcollective_host_timing_la_LDFLAGS = -module -avoid-version -shared
+
+
 libhg_la_SOURCES = \
   common/event_link.cc \
   common/component.cc \
@@ -30,6 +36,7 @@ libhg_la_SOURCES = \
   components/compute_library/node_cl.cc \
   components/compute_library/operating_system_cl.cc \
   components/compute_library/operating_system_cl_api.cc \
+  components/collective_adapter.cc \
   components/nic.cc \
   components/nic_api.cc \
   components/node.cc \
@@ -141,6 +148,7 @@ nobase_library_include_HEADERS = \
   components/compute_library/operating_system_cl.h \
   components/compute_library/operating_system_cl_api.h \
   components/compute_library/operating_system_cl_fwd.h \
+  components/collective_adapter.h \
   components/nic.h \
   components/nic_api.h \
   components/nic_fwd.h \
@@ -215,12 +223,14 @@ endif
 EXTRA_DIST = \
     tests/testsuite_default_hg.py \
     tests/network_service_tag_first.py \
+    tests/collective_host_timing.py \
     tests/manager_vn_smoke.py \
     tests/ostest.py \
     tests/ostest-nano.py \
     tests/refFiles/manager_vn_smoke.out \
     tests/refFiles/ostest.out \
     tests/refFiles/ostest-nano.out
+
 
 deprecated_EXTRA_DIST =
 
@@ -229,6 +239,7 @@ EXTRA_DIST += $(deprecated_EXTRA_DIST)
 endif
 
 libhg_la_LDFLAGS = -module -avoid-version -shared
+
 libcomputelibrary_la_LDFLAGS = -module -avoid-version -shared
 libostest_la_LDFLAGS = -module -avoid-version -shared
 libostest_nano_la_LDFLAGS = -module -avoid-version -shared

@@ -22,7 +22,8 @@ from sst.merlin.base import *
 class HgJob(Job):
     def __init__(self, job_id, numNodes, numCores = 1, nicsPerNode = 1):
         Job.__init__(self,job_id,numNodes * nicsPerNode)
-        self._declareClassVariables(["_numCores","_nicsPerNode","node","nic","os","_params","_numNodes"])
+        self._declareClassVariables(["_numCores","_nicsPerNode","node","nic","os","_params","_numNodes", "_collective_plan"])
+        self._collective_plan = None
         self._numCores = numCores
         self._nicsPerNode = nicsPerNode
         self._numNodes = numNodes
@@ -34,11 +35,41 @@ class HgJob(Job):
         return "HgJob"
 
 
+    def useCollectivePlan(self, plan):
+        """Bind every node of this job to a StaticCollectivePlan.
+
+        Allocation must already match the plan's exact physical/logical
+        membership, with one rank and NIC per node. The node's num_vns must exceed both service VNs
+        and its ordinary and manager VNs must be different from them.
+        """
+        from sst.merlin.collective import StaticCollectivePlan
+        if not isinstance(plan, StaticCollectivePlan):
+            raise TypeError("plan must be a StaticCollectivePlan")
+        if self._numCores != 1 or self._nicsPerNode != 1:
+            raise ValueError("static collectives require one rank and NIC per Mercury node")
+        plan.validate_job(self)
+        self._collective_plan = plan
+        self.nic.enable_static_collective = True
+        self.nic.job_namespace = plan.job_namespace
+        self.nic.route_id = plan.route_id
+        self.nic.root_nid = plan.root_nid
+        self.nic.root_logical_nid = plan.root_logical_nid
+        self.node.reduce_vn = plan.reduce_vn
+        self.node.result_vn = plan.result_vn
+
     def build(self, nodeID, extraKeys):
+        if self._collective_plan:
+            if self._first_build:
+                self._collective_plan.validate_job(self)
+            self._collective_plan.validate_participant(nodeID, self._nid_map[nodeID])
+        self._check_first_build()
         logical_id = self._nid_map[nodeID]
         node = self.node.build(nodeID,logical_id,self._numNodes * self._numCores, self._numCores)
         os = self.os.build(node,"os_slot")
         nic = self.nic.build(node,"nic_slot")
+        if self.nic._getGroupParams("params").get("enable_static_collective", False):
+            nic.addParam("physical_endpoint_id", nodeID)
+            nic.addParam("logical_participant_id", logical_id)
 
         # Build NetworkInterface
         networkif, port_name = self.network_interface.build(node,"link_control_slot",0,self.job_id,self.size,logical_id,True)
@@ -81,6 +112,15 @@ class HgNIC(TemplateBase):
         TemplateBase.__init__(self)
         self._declareParams("params",["verbose",
                                       "mtu",
+                                      "enable_static_collective",
+                                      "job_namespace",
+                                      "route_id",
+                                      "root_nid",
+                                      "root_logical_nid",
+                                      "physical_endpoint_id",
+                                      "logical_participant_id",
+                                      "collective_submit_delay_ns",
+                                      "collective_completion_delay_ns",
                                      ])
         self._subscribeToPlatformParamSet("nic")
 
@@ -118,6 +158,7 @@ class HgOS(TemplateBase):
                                            "use_put_window",
                                            "compute_library_access_width",
                                            "compute_library_loop_overhead",
+                                           "enable_collective_offload",
                                           ],
                                           "app1.")
         self._subscribeToPlatformParamSet("operating_system")

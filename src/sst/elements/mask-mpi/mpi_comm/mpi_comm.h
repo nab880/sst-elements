@@ -174,6 +174,13 @@ class MpiComm : public SST::Iris::sumi::Communicator
     ireqs_[tag] = req;
   }
 
+  bool removeRequest(int tag, const MpiRequest* req) {
+    auto it = ireqs_.find(tag);
+    if (it == ireqs_.end() || it->second != req) return false;
+    ireqs_.erase(it);
+    return true;
+  }
+
   MpiRequest* getRequest(int tag) const {
     auto it = ireqs_.find(tag);
     if (it == ireqs_.end()){
