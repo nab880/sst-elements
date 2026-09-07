@@ -15,11 +15,16 @@ compdir = $(pkglibdir)
 ext_LTLIBRARIES = libcomputelibrary.la libostest.la libostest-nano.la libmanager_vn_smoke.la
 extdir = $(pkglibdir)/ext
 
+ext_LTLIBRARIES += libfcontext_fp_preservation.la
 ext_LTLIBRARIES += libcollective_host_timing.la
 
 libcollective_host_timing_la_SOURCES = tests/collective_host_timing.cc
 libcollective_host_timing_la_LDFLAGS = -module -avoid-version -shared
 
+libfcontext_fp_preservation_la_SOURCES = \
+  tests/fcontext_fp_preservation.cc
+
+libfcontext_fp_preservation_la_LDFLAGS = -module -avoid-version -shared
 
 libhg_la_SOURCES = \
   common/event_link.cc \
@@ -231,6 +236,9 @@ EXTRA_DIST = \
     tests/refFiles/ostest.out \
     tests/refFiles/ostest-nano.out
 
+EXTRA_DIST += \
+    tests/fcontext_fp_preservation.py \
+    tests/testsuite_default_hg_fcontext.py
 
 deprecated_EXTRA_DIST =
 
