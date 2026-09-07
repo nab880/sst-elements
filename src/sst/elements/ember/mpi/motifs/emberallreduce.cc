@@ -17,6 +17,9 @@
 #include <sst_config.h>
 #include "emberallreduce.h"
 
+#include <cmath>
+#include <limits>
+
 using namespace SST::Ember;
 
 static void test(void* a, void* b, int* len, PayloadDataType* ) {
@@ -33,7 +36,13 @@ EmberAllreduceGenerator::EmberAllreduceGenerator(SST::ComponentId_t id,
 	m_iterations = (uint32_t) params.find("arg.iterations", 1);
 	m_compute    = (uint32_t) params.find("arg.compute", 0);
 	m_count      = (uint32_t) params.find("arg.count", 1);
-	if ( params.find<bool>("arg.doUserFunc", false )  )   {
+	m_verify     = params.find<bool>("arg.verify", false);
+	const bool doUserFunc = params.find<bool>("arg.doUserFunc", false);
+	if ( m_verify && (doUserFunc || m_count == 0 || m_iterations == 0) ) {
+		fatal(CALL_INFO, -1,
+		    "Allreduce verification requires built-in SUM, a nonzero count, and an iteration\n");
+	}
+	if ( doUserFunc ) {
 		m_op = op_create( test, 0 );
 	} else {
 		m_op = Hermes::MP::SUM;
@@ -43,6 +52,19 @@ EmberAllreduceGenerator::EmberAllreduceGenerator(SST::ComponentId_t id,
 bool EmberAllreduceGenerator::generate( std::queue<EmberEvent*>& evQ) {
 
     if ( m_loopIndex == m_iterations ) {
+        if ( m_verify ) {
+            const double expected = static_cast<double>(size()) * (size() + 1) / 2.0;
+            for ( uint32_t i = 0; i < m_count; ++i ) {
+                const double actual = static_cast<double*>(m_recvBuf)[i];
+                if ( !std::isfinite(actual) || actual != expected ) {
+                    fatal(CALL_INFO, -1,
+                        "Allreduce verification failed at rank %d element %u: expected %.6f, got %.6f\n",
+                        rank(), i, expected, actual);
+                }
+            }
+            output("Ember Allreduce verify rank %d input %.6f result %.6f PASS\n",
+                rank(), static_cast<double>(rank() + 1), expected);
+        }
         if ( 0 == rank() ) {
             double latency = (double)(m_stopTime-m_startTime)/(double)m_iterations;
             latency /= 1000000000.0;
@@ -55,6 +77,12 @@ bool EmberAllreduceGenerator::generate( std::queue<EmberEvent*>& evQ) {
 		memSetBacked();
 		m_sendBuf = memAlloc(sizeofDataType(DOUBLE)*m_count);
 		m_recvBuf = memAlloc(sizeofDataType(DOUBLE)*m_count);
+        if ( m_verify ) {
+            for ( uint32_t i = 0; i < m_count; ++i ) {
+                static_cast<double*>(m_sendBuf)[i] = static_cast<double>(rank() + 1);
+                static_cast<double*>(m_recvBuf)[i] = std::numeric_limits<double>::quiet_NaN();
+            }
+        }
         enQ_getTime( evQ, &m_startTime );
     }
 

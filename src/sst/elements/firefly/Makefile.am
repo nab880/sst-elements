@@ -2,14 +2,18 @@
 #
 #
 
-AM_CPPFLAGS += $(MPI_CPPFLAGS) \
-	-I$(top_srcdir)/src
+# Prefer this source tree to headers from an earlier Elements installation.
+AM_CPPFLAGS = -I$(top_srcdir)/src \
+	@AM_CPPFLAGS@ \
+	$(MPI_CPPFLAGS)
 
 compdir = $(pkglibdir)
 comp_LTLIBRARIES = libfirefly.la
 
 libfirefly_la_SOURCES = \
 	protocolAPI.h \
+	collectiveAdapter.h \
+	collectiveAdapter.cc \
 	ioVec.h \
 	info.h \
 	group.h \
@@ -49,6 +53,7 @@ libfirefly_la_SOURCES = \
 	funcSM/gatherv.cc \
 	funcSM/allgather.cc \
 	funcSM/allgather.h \
+	funcSM/allreduce.cc \
 	funcSM/allreduce.h \
 	funcSM/collectiveOps.h \
 	funcSM/collectiveTree.cc \
@@ -170,12 +175,21 @@ libfirefly_la_SOURCES = \
 	nicNetworkIO.h \
 	nicNetworkIOStream.cc \
 	nicNetworkIOStream.h \
+	tests/emptyRequestRegressionTest.cc \
+	tests/emptyRequestRegressionTest.h \
+	tests/collectiveHostTimingTest.cc \
 	pyfirefly.py
 
 libfirefly_la_LDFLAGS = -module -avoid-version
 
+EXTRA_DIST = \
+	tests/empty_request_regression.py \
+	tests/collective_host_timing.py \
+	tests/testsuite_default_firefly.py
+
 install-exec-hook:
 	$(SST_REGISTER_TOOL) SST_ELEMENT_SOURCE     firefly=$(abs_srcdir)
+	$(SST_REGISTER_TOOL) SST_ELEMENT_TESTS      firefly=$(abs_srcdir)/tests
 
 BUILT_SOURCES = \
     pyfirefly.inc

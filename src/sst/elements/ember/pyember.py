@@ -23,7 +23,8 @@ from sst.firefly import *
 class EmberJob(Job):
     def __init__(self, job_id, num_nodes, apis, numCores = 1, nicsPerNode = 1):
         Job.__init__(self,job_id,num_nodes * nicsPerNode)
-        self._declareClassVariables(["_motifNum","_motifs","_numCores","_nicsPerNode","nic","_loopBackDict","_logfilePrefix","_logfileNids","os","_apis"])
+        self._declareClassVariables(["_motifNum","_motifs","_numCores","_nicsPerNode","nic","_loopBackDict","_logfilePrefix","_logfileNids","os","_apis", "_collective_plan"])
+        self._collective_plan = None
 
         # Not needed - the subclasses will set the nic to the correct type:
         #x = self._createPrefixedParams("nic")
@@ -89,8 +90,34 @@ class EmberJob(Job):
         self._logfilePrefix = logfilePrefix;
         self._logfileNids = nids
 
+    def useCollectivePlan(self, plan):
+        """Bind every NIC of this job to a StaticCollectivePlan.
+
+        Allocation must already match the plan's exact physical/logical
+        membership, with one rank per NIC. The NIC's numVNs must exceed
+        both service VNs. Membership is checked again before construction.
+        """
+        from sst.merlin.collective import StaticCollectivePlan
+        if not isinstance(plan, StaticCollectivePlan):
+            raise TypeError("plan must be a StaticCollectivePlan")
+        if self._numCores != self._nicsPerNode:
+            raise ValueError("static collectives require one rank per NIC")
+        plan.validate_job(self)
+        self._collective_plan = plan
+        self.nic.collectiveEnable = True
+        self.nic.collectiveJobNamespace = plan.job_namespace
+        self.nic.collectiveRouteId = plan.route_id
+        self.nic.collectiveRootNid = plan.root_nid
+        self.nic.collectiveRootLogicalNid = plan.root_logical_nid
+        self.nic.collectiveReduceVN = plan.reduce_vn
+        self.nic.collectiveResultVN = plan.result_vn
+
 
     def build(self, nodeID, extraKeys):
+        if self._collective_plan:
+            if self._first_build:
+                self._collective_plan.validate_job(self)
+            self._collective_plan.validate_participant(nodeID, self._nid_map[nodeID])
         if self._check_first_build():
             sst.addGlobalParams("loopback_params_%s"%self._instance_name,
                             { "numCores" : self._numCores,
@@ -101,14 +128,21 @@ class EmberJob(Job):
             sst.addGlobalParams("params_%s"%self._instance_name, self._motifs);
             sst.addGlobalParams("params_%s"%self._instance_name, self._apis);
 
+        logical_id = self._nid_map[nodeID]
         nic, slot_name = self.nic.build(nodeID,self._numCores // self._nicsPerNode)
+        try:
+            collective_enabled = self.nic._getGroupParams("main").get(
+                "collectiveEnable", False)
+        except (AttributeError, KeyError):
+            collective_enabled = False
+        if collective_enabled:
+            nic.addParam("collectiveParticipantLogicalId", logical_id)
 
         #print( nodeID, "nic", self._getGroupParams("nic") )
         #print( nodeID, "ember", self._getGroupParams("ember") )
         # not needed: nic.addParams( self._getGroupParams("nic") ).  This is done already in the nic.build call
 
         # Build NetworkInterface
-        logical_id = self._nid_map[nodeID]
         networkif, port_name = self.network_interface.build(nic,slot_name,0,self.job_id,self.size,logical_id,False)
 
         # Store return value for later

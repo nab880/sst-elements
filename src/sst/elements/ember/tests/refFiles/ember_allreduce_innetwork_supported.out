@@ -1,0 +1,8 @@
+Ember Allreduce verify rank 0 input 1.000000 result 10.000000 PASS
+Ember Allreduce verify rank 1 input 2.000000 result 10.000000 PASS
+Ember Allreduce verify rank 2 input 3.000000 result 10.000000 PASS
+Ember Allreduce verify rank 3 input 4.000000 result 10.000000 PASS
+Firefly Allreduce rank 0 OFFLOAD ACCEPTED
+Firefly Allreduce rank 1 OFFLOAD ACCEPTED
+Firefly Allreduce rank 2 OFFLOAD ACCEPTED
+Firefly Allreduce rank 3 OFFLOAD ACCEPTED

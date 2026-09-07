@@ -149,6 +149,14 @@ class ProcessQueuesState : public SubComponent
     void setVars( VirtNic* nic, Info* info, MemoryBase* mem,
         Thornhill::MemoryHeapLink* m_memHeapLink, Link* returnToCaller );
 
+    VirtNic* nic() const { return m_nic; }
+    bool resumeFunction()
+    {
+        if ( m_returnToCaller == nullptr ) return false;
+        m_returnToCaller->send(0, nullptr);
+        return true;
+    }
+
     void enterInit( bool );
     void enterSend( _CommReq*, uint64_t exitDelay = 0 );
     void enterRecv( _CommReq*, uint64_t exitDelay = 0 );

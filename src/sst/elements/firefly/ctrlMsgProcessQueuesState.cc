@@ -25,7 +25,7 @@ using namespace SST;
 
 ProcessQueuesState::ProcessQueuesState( ComponentId_t id, Params& params ) :
         SubComponent( id ),
-
+        m_nic(nullptr),
         m_getKey( 0 ),
         m_rspKey( 0 ),
         m_needRecv( 0 ),
@@ -34,6 +34,7 @@ ProcessQueuesState::ProcessQueuesState( ComponentId_t id, Params& params ) :
         m_missedInt( false ),
         m_intCtx(NULL),
 		m_simVAddrs(NULL),
+        m_returnToCaller(nullptr),
         m_numSent(0),
         m_numRecv(0),
         m_rendezvousVN(0),

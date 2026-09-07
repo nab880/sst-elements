@@ -23,6 +23,8 @@
 #include <sst/core/params.h>
 #include <sst/core/timeLord.h>
 
+#include <algorithm>
+#include <limits>
 #include <sstream>
 
 #include "nic.h"
@@ -31,6 +33,38 @@ using namespace SST;
 using namespace SST::Firefly;
 using namespace SST::Interfaces;
 using namespace std::placeholders;
+
+struct Nic::FeatureState {
+    struct CollectiveState {
+        uint64_t job_namespace = 1;
+        uint64_t route_id = 1;
+        SST::Interfaces::SimpleNetwork::nid_t root_nid = 0;
+        SST::Interfaces::SimpleNetwork::nid_t root_logical_nid = -1;
+        int64_t participant_logical_id = -1;
+        int reduce_vn = 0;
+        int result_vn = 1;
+        bool route_published = false;
+        SST::Collective::RouteIdV1 route;
+        SST::Collective::CollectiveParticipant participant;
+        uint64_t active_invocation = 0;
+        uint64_t completed_invocation = 0;
+        Hermes::Vaddr result_address = 0;
+        bool result_pending = false;
+        uint64_t submit_delay_ns = 0;
+        uint64_t completion_delay_ns = 0;
+
+        Statistic<uint64_t>* enqueued = nullptr;
+        Statistic<uint64_t>* scheduler_sends = nullptr;
+        Statistic<uint64_t>* send_retries = nullptr;
+        Statistic<uint64_t>* results_completed = nullptr;
+        Statistic<uint64_t>* dma_read_bytes = nullptr;
+        Statistic<uint64_t>* dma_write_bytes = nullptr;
+    };
+
+    std::optional<CollectiveState> collective;
+    SimTime_t last_enqueue = 0;
+    int enqueue_sequence = 0;
+};
 
 int Nic::MaxPayload = (int)((1L<<32) - 1);
 int Nic::m_packetId = 0;
@@ -46,10 +80,10 @@ Nic::Nic(ComponentId_t id, Params &params) :
     m_respKey(1),
 	m_predNetIdleTime(0),
     m_linkBytesPerSec(0),
-	m_detailedInterface(NULL),
-    m_getHdrVN(0),
-    m_getRespLargeVN(0),
-    m_getRespSmallVN(0)
+	    m_detailedInterface(NULL),
+	    m_getHdrVN(0),
+	    m_getRespLargeVN(0),
+	    m_getRespSmallVN(0)
 {
     m_myNodeId = params.find<int>("nid", -1);
     assert( m_myNodeId != -1 );
@@ -71,6 +105,28 @@ Nic::Nic(ComponentId_t id, Params &params) :
 	m_nic2host_lat_ns = calcDelay_ns( params.find<SST::UnitAlgebra>("nic2host_lat", SST::UnitAlgebra("150ns")));
 
     m_numVN = params.find<int>("numVNs",1);
+    if ( params.find<bool>("collectiveEnable", false) ) {
+        auto& collective = ensureFeatureState().collective.emplace();
+        collective.job_namespace = params.find<uint64_t>("collectiveJobNamespace", 1);
+        collective.route_id = params.find<uint64_t>("collectiveRouteId", 1);
+        collective.root_nid = params.find<int64_t>("collectiveRootNid", 0);
+        collective.root_logical_nid = params.find<int64_t>("collectiveRootLogicalNid", -1);
+        if ( collective.root_logical_nid < 0 ) collective.root_logical_nid = collective.root_nid;
+        collective.participant_logical_id =
+            params.find<int64_t>("collectiveParticipantLogicalId", -1);
+        collective.reduce_vn = params.find<int>("collectiveReduceVN", 0);
+        collective.result_vn = params.find<int>("collectiveResultVN", 1);
+        const auto submit_delay = params.find<int64_t>("collectiveSubmitDelay_ns", 0);
+        const auto completion_delay = params.find<int64_t>("collectiveCompletionDelay_ns", 0);
+        const auto ns_factor = getTimeConverter("1ns").getFactor();
+        const uint64_t max_delay = std::numeric_limits<SimTime_t>::max() / ns_factor;
+        if ( submit_delay < 0 || completion_delay < 0 ||
+             static_cast<uint64_t>(submit_delay) > max_delay || static_cast<uint64_t>(completion_delay) > max_delay ) {
+            m_dbg.fatal(CALL_INFO, 1, "Collective submit and completion delays must be nonnegative and fit the timebase\n");
+        }
+        collective.submit_delay_ns = static_cast<uint64_t>(submit_delay);
+        collective.completion_delay_ns = static_cast<uint64_t>(completion_delay);
+    }
     m_getHdrVN = params.find<int>("getHdrVN",0);
     m_getRespLargeVN = params.find<int>("getRespLargeVN", 0 );
     m_getRespSmallVN = params.find<int>("getRespSmallVN", 0 );
@@ -96,6 +152,17 @@ Nic::Nic(ComponentId_t id, Params &params) :
 
 
     m_num_vNics = params.find<int>("num_vNics", 1 );
+
+    auto* collective = m_featureState && m_featureState->collective ? &*m_featureState->collective : nullptr;
+    if ( collective &&
+            (m_num_vNics != 1 || collective->job_namespace == 0 || collective->root_nid < 0 ||
+             collective->participant_logical_id < 0 || collective->reduce_vn < 0 ||
+             collective->result_vn < 0 || collective->reduce_vn == collective->result_vn ||
+             m_numVN <= collective->reduce_vn || m_numVN <= collective->result_vn) ) {
+        m_dbg.fatal(CALL_INFO, -1,
+            "Static Firefly collective requires one vNIC, a valid route and root, "
+            "and two distinct service VNs below numVNs\n");
+    }
 
     for ( unsigned i = 0; i < m_num_vNics; i++  ) {
         m_sendStreamNum.push_back(0);
@@ -331,6 +398,14 @@ Nic::Nic(ComponentId_t id, Params &params) :
 
 	m_recvStreamPending = registerStatistic<uint64_t>("recvStreamPending");
 	m_sendStreamPending = registerStatistic<uint64_t>("sendStreamPending");
+	if ( collective ) {
+		collective->enqueued = registerStatistic<uint64_t>("collectiveEnqueued");
+		collective->scheduler_sends = registerStatistic<uint64_t>("collectiveSchedulerSends");
+		collective->send_retries = registerStatistic<uint64_t>("collectiveSendRetries");
+		collective->results_completed = registerStatistic<uint64_t>("collectiveResultsCompleted");
+        collective->dma_read_bytes = registerStatistic<uint64_t>("collectiveDmaReadBytes");
+        collective->dma_write_bytes = registerStatistic<uint64_t>("collectiveDmaWriteBytes");
+	}
 
     Statistic<uint64_t>* m_sentByteCount;
     Statistic<uint64_t>* m_rcvdByteCount;
@@ -369,6 +444,25 @@ Nic::~Nic()
 	delete m_arbitrateDMA;
 }
 
+Nic::FeatureState& Nic::ensureFeatureState()
+{
+    if ( !m_featureState ) m_featureState = std::make_unique<FeatureState>();
+    return *m_featureState;
+}
+
+bool Nic::collectiveRoutePublished() const
+{
+    return m_featureState && m_featureState->collective &&
+        m_featureState->collective->route_published;
+}
+
+bool Nic::collectiveVNReserved(int vn) const
+{
+    return collectiveRoutePublished() &&
+        (vn == m_featureState->collective->reduce_vn ||
+         vn == m_featureState->collective->result_vn);
+}
+
 void Nic::init( unsigned int phase )
 {
     m_dbg.debug(CALL_INFO,1,1,"phase=%d\n",phase);
@@ -388,6 +482,7 @@ void Nic::init( unsigned int phase )
     if ( m_linkBytesPerSec == 0 && m_linkControl->isNetworkInitialized() ) {
         m_linkBytesPerSec = m_linkControl->getLinkBW().getRoundedValue()/8;
     }
+    tryPublishCollectiveRoute();
 }
 
 void Nic::handleVnicEvent( Event* ev, int id )
@@ -408,6 +503,10 @@ void Nic::handleVnicEvent( Event* ev, int id )
 
       case NicCmdBaseEvent::NetworkIO:
 		m_networkIO->handleEvent( static_cast<NicNetworkIOCmdEvent*>(event), id );
+		break;
+
+      case NicCmdBaseEvent::Collective:
+		m_selfLink->send( getDelay_ns( ), new SelfEvent( ev, id ) );
 		break;
 
 	  default:
@@ -441,6 +540,149 @@ void Nic::handleMsgEvent( NicCmdEvent* event, int id )
     }
 }
 
+void Nic::tryPublishCollectiveRoute()
+{
+    using namespace SST::Collective;
+
+    auto* collective = m_featureState && m_featureState->collective ?
+        &*m_featureState->collective : nullptr;
+    if ( collective == nullptr || collective->route_published ||
+            !m_linkControl->isNetworkInitialized() ) {
+        return;
+    }
+
+    const SimpleNetwork::nid_t physical_endpoint_id = m_linkControl->getEndpointID();
+    if ( m_linkBytesPerSec == 0 || physical_endpoint_id != m_myNodeId ||
+            !supportsStaticCollectiveTransport(
+                *m_linkControl, collective->reduce_vn, collective->result_vn) ) {
+        m_dbg.fatal(CALL_INFO, -1,
+            "collectiveEnable=true but no validated collective service route is available\n");
+    }
+
+    const RouteIdV1 route {collective->job_namespace, collective->route_id};
+    if ( !route.valid() ) {
+        m_dbg.fatal(CALL_INFO, -1, "Invalid static Firefly collective route\n");
+    }
+
+    CollectiveParticipant participant;
+    participant.route = route;
+    participant.physical_endpoint_id = m_myNodeId;
+    participant.logical_participant_id = collective->participant_logical_id;
+    participant.reduce_vn = collective->reduce_vn;
+    participant.result_vn = collective->result_vn;
+    if ( !participant.valid() ) {
+        m_dbg.fatal(CALL_INFO, -1, "Invalid static Firefly collective participant handle\n");
+    }
+
+    collective->route = route;
+    collective->participant = participant;
+    collective->route_published = true;
+    m_vNicV[0]->publishCollectiveParticipant(collective->participant);
+}
+
+void Nic::handleCollectiveEvent( NicCollectiveSubmitCmdEvent* event, int id )
+{
+    using namespace SST::Collective;
+
+    auto* collective = m_featureState && m_featureState->collective ?
+        &*m_featureState->collective : nullptr;
+    const auto& contribution = event->contribution;
+    if ( collective == nullptr || !collective->route_published || id != 0 || m_num_vNics != 1 ||
+            contribution.route != collective->route || !contribution.valid() ||
+            contribution.invocation_id <= collective->completed_invocation ||
+            collective->active_invocation != 0 ) {
+        m_dbg.fatal(CALL_INFO, -1, "Invalid or duplicate Firefly collective submit command\n");
+    }
+
+    const uint64_t invocation_id = contribution.invocation_id;
+    collective->active_invocation = invocation_id;
+    collective->result_address = event->result_address;
+    // Functional source bytes were copied before Accepted. Keep that snapshot
+    // while the same DMA resources used by ordinary messages stage its bytes.
+    schedCallback([this, collective, event, id, invocation_id]() {
+        auto* ops = new std::vector<MemOp> {
+            MemOp(event->source_address, event->contribution.value.size(), MemOp::BusDmaFromHost)};
+        collective->dma_read_bytes->addData(event->contribution.value.size());
+        dmaRead(allocNicSendUnit(), id, ops, [this, collective, event, invocation_id]() {
+            auto request = makeStaticCollectiveContributionRequest(event->contribution, collective->root_nid,
+                collective->participant.logical_participant_id, collective->reduce_vn);
+            if ( !request ) {
+                m_dbg.fatal(CALL_INFO, -1, "Firefly constructed an invalid collective contribution\n");
+            }
+            queueTaggedPacket(std::move(request));
+            m_vNicV[0]->notifyCollectiveSubmitAccepted(invocation_id);
+            delete event;
+        });
+    }, collective->submit_delay_ns);
+}
+
+void Nic::queueTaggedPacket( std::unique_ptr<SimpleNetwork::Request> request )
+{
+    if ( !request || !request->hasService() || request->inspectPayload() != nullptr ||
+            request->vn < 0 || request->vn >= m_numVN ) {
+        m_dbg.fatal(CALL_INFO, -1, "Cannot queue malformed tagged Request\n");
+    }
+    auto* collective = m_featureState && m_featureState->collective ?
+        &*m_featureState->collective : nullptr;
+    const bool is_collective = request->getServiceID() == SST::Collective::COLLECTIVE_SERVICE_ID &&
+        collective && collective->route_published && request->vn == collective->reduce_vn;
+    if ( !is_collective ) {
+        m_dbg.fatal(CALL_INFO, -1, "Cannot queue unsupported tagged Request\n");
+    }
+
+    const SimTime_t now = getCurrentSimCycle();
+    if ( now > m_featureState->last_enqueue ) {
+        m_featureState->last_enqueue = now;
+        m_featureState->enqueue_sequence = 0;
+    }
+    const int priority = std::numeric_limits<int>::max() / 2 +
+        m_featureState->enqueue_sequence++;
+    const int vn = request->vn;
+    auto* entry = new PriorityX(now, priority, new X({}, request.release()));
+    collective->enqueued->addData(1);
+    notifyHavePkt(entry, vn);
+}
+
+void Nic::processCollectivePacket( SimpleNetwork::Request* raw_request, int vn )
+{
+    using namespace SST::Collective;
+
+    std::unique_ptr<SimpleNetwork::Request> request(raw_request);
+    auto* collective = m_featureState && m_featureState->collective ?
+        &*m_featureState->collective : nullptr;
+    if ( collective == nullptr || !collective->route_published || !request ||
+            vn != collective->result_vn || collective->active_invocation == 0 || collective->result_pending ) {
+        m_dbg.fatal(CALL_INFO, -1, "Malformed collective result reached the Firefly NIC\n");
+    }
+
+    auto result = inspectStaticCollectiveResult(*request, collective->route,
+        collective->active_invocation, collective->root_logical_nid,
+        m_myNodeId, collective->result_vn);
+    if ( !result ) {
+        m_dbg.fatal(CALL_INFO, -1, "Invalid collective result descriptor reached the Firefly NIC\n");
+    }
+
+    const uint64_t invocation_id = collective->active_invocation;
+    collective->result_pending = true;
+    m_rcvdByteCount->addData((request->size_in_bits + 7) / 8);
+    auto* completion = new NicCollectiveResultEvent(std::move(*result));
+    auto* ops = new std::vector<MemOp> {
+        MemOp(collective->result_address, completion->result.value.size(), MemOp::BusDmaToHost)};
+    collective->dma_write_bytes->addData(completion->result.value.size());
+    // Follow ordinary DMA completion semantics. SimpleMemoryModel posts
+    // stores: memory latency still occupies its queues after this callback.
+    dmaWrite(allocNicRecvUnit(0), 0, ops, [this, collective, completion, invocation_id]() {
+        schedCallback([this, collective, completion, invocation_id]() {
+            collective->active_invocation = 0;
+            collective->completed_invocation = invocation_id;
+            collective->result_pending = false;
+            collective->result_address = 0;
+            collective->results_completed->addData(1);
+            m_vNicV[0]->send(completion);
+        }, collective->completion_delay_ns);
+    });
+}
+
 void Nic::handleSelfEvent( Event *e )
 {
     SelfEvent* event = static_cast<SelfEvent*>(e);
@@ -472,6 +714,9 @@ void Nic::handleVnicEvent2( Event* ev, int id )
       case NicCmdBaseEvent::NetworkIO:
 		m_networkIO->handleEvent( static_cast<NicNetworkIOCmdEvent*>(event), id );
 		break;
+    case NicCmdBaseEvent::Collective:
+        handleCollectiveEvent( static_cast<NicCollectiveSubmitCmdEvent*>(event), id );
+        break;
     default:
         assert(0);
     }
@@ -592,56 +837,92 @@ void Nic::notifySendDone( SendMachine* mach, SendEntryBase* entry  ) {
     }
 }
 
+void Nic::armNetworkSend( int vn, SimpleNetwork::NetworkServiceID retry_service )
+{
+    if ( retry_service == SST::Collective::COLLECTIVE_SERVICE_ID ) {
+        m_featureState->collective->send_retries->addData(1);
+    }
+    schedCallback(
+        [=]() {
+            m_linkSendWidget->setNotify(
+                [=]() {
+                    SimTime_t curTime = getCurrentSimCycle();
+                    if ( curTime > m_predNetIdleTime ) {
+                        m_dbg.debug(CALL_INFO,1,NIC_DBG_SEND_NETWORK,
+                            "network stalled latency=%" PRI_SIMTIME "\n", curTime - m_predNetIdleTime);
+                        m_networkStall->addData(curTime - m_predNetIdleTime);
+                    }
+                    feedTheNetwork(vn);
+                }, vn);
+        }, 0);
+}
+
 void Nic::feedTheNetwork( int vn )
 {
     m_dbg.debug(CALL_INFO,5,NIC_DBG_SEND_NETWORK,"\n");
 
     auto& pq = m_sendPQ[vn];
-	while ( ! pq.empty() ) {
+    while ( !pq.empty() ) {
+        PriorityX* entry = pq.top();
+        X& x = *entry->data();
+        const bool service = x.isService();
+        const auto service_id = service ? x.service_pkt->getServiceID() :
+            SimpleNetwork::NETWORK_SERVICE_NONE;
 
-		PriorityX* entry = pq.top();
-		X& x = *entry->data();
+        if ( !m_linkControl->spaceToSend(vn, x.sizeInBits()) ) {
+            m_dbg.debug(CALL_INFO,1,NIC_DBG_SEND_NETWORK,"blocking on network\n");
+            armNetworkSend(vn, service_id);
+            return;
+        }
 
-		bool ret = m_linkControl->spaceToSend( vn, x.pkt->calcPayloadSizeInBits() );
-		if ( ! ret ) {
+        if ( service ) {
+            // sendTaggedPkt() admits only the published collective service.
+            if ( !sendTaggedPkt(x.service_pkt, vn) ) {
+                armNetworkSend(vn, service_id);
+                return;
+            }
+            m_featureState->collective->scheduler_sends->addData(1);
+        } else {
+            if ( collectiveVNReserved(vn) ) {
+                m_dbg.fatal(CALL_INFO, -1,
+                    "Ordinary Firefly packet attempted reserved collective VN %d\n", vn);
+            }
+            sendPkt(x.pkt, x.dest, vn);
+        }
 
-			m_dbg.debug(CALL_INFO,1,NIC_DBG_SEND_NETWORK,"blocking on network\n" );
-            schedCallback(
-                [=](){
-                    m_linkSendWidget->setNotify( [=]() {
-						SimTime_t curTime = getCurrentSimCycle();
-						if ( curTime > m_predNetIdleTime ) {
-							m_dbg.debug(CALL_INFO,1,NIC_DBG_SEND_NETWORK,"network stalled latency=%" PRI_SIMTIME "\n",
-								curTime -  m_predNetIdleTime);
-							m_networkStall->addData( curTime - m_predNetIdleTime );
-						}
-						feedTheNetwork( vn );
-					}, vn);
-				} ,0 );
+        SimTime_t curTime = getCurrentSimCycle();
+        SimTime_t latPS = ((double)x.sizeInBytes() / (double)m_linkBytesPerSec) * 1000000000000;
+        if ( curTime > m_predNetIdleTime ) m_predNetIdleTime = curTime;
+        m_predNetIdleTime += latPS;
 
-			return;
-		} else {
+        m_dbg.debug(CALL_INFO,1,NIC_DBG_SEND_NETWORK,"predNetIdleTime=%" PRI_SIMTIME "\n",m_predNetIdleTime );
+        m_dbg.debug(CALL_INFO,1,NIC_DBG_SEND_NETWORK,"p1=%" PRI_SIMTIME " p2=%d\n", entry->p1(), entry->p2() );
 
-			SimTime_t curTime = getCurrentSimCycle();
-			SimTime_t latPS = ( (double) x.pkt->payloadSize() / (double) m_linkBytesPerSec ) * 1000000000000;
+        if ( x.callback ) x.callback();
+        delete &x;
+        delete entry;
+        pq.pop();
+    }
+}
 
-			if ( curTime > m_predNetIdleTime ) {
-				m_predNetIdleTime = curTime;
-			}
-			m_predNetIdleTime += latPS;
+bool Nic::sendTaggedPkt( SimpleNetwork::Request* request, int vn )
+{
+    if ( request == nullptr || request->vn != vn || !request->hasService() ||
+            request->inspectPayload() != nullptr ) {
+        m_dbg.fatal(CALL_INFO, -1, "Scheduler received a malformed tagged Request\n");
+    }
+    const auto service_id = request->getServiceID();
+    const bool collective = service_id == SST::Collective::COLLECTIVE_SERVICE_ID &&
+        collectiveRoutePublished();
+    if ( !collective ) {
+        m_dbg.fatal(CALL_INFO, -1, "Scheduler received an unsupported tagged Request\n");
+    }
+    const size_t modeled_bytes = (request->size_in_bits + 7) / 8;
+    if ( !m_linkControl->send(request, vn) ) return false;
 
-			m_dbg.debug(CALL_INFO,1,NIC_DBG_SEND_NETWORK,"predNetIdleTime=%" PRI_SIMTIME "\n",m_predNetIdleTime );
-			m_dbg.debug(CALL_INFO,1,NIC_DBG_SEND_NETWORK,"p1=%" PRI_SIMTIME " p2=%d\n", entry->p1(), entry->p2() );
-
-			sendPkt( x.pkt, x.dest, vn );
-
-			x.callback();
-
-			delete &x;
-			delete entry;
-			pq.pop();
-		}
-	}
+    m_sentPkts->addData(1);
+    m_sentByteCount->addData(modeled_bytes);
+    return true;
 }
 
 void Nic::sendPkt( FireflyNetworkEvent* ev, int dest, int vn )
@@ -808,4 +1089,3 @@ Hermes::MemAddr Nic::findShmem(  int core, Hermes::Vaddr addr, size_t length )
 
     return region.first.offset(offset);
 }
-

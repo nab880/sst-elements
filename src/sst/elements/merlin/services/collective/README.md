@@ -14,19 +14,30 @@ init/setup checks for transport facts unavailable to the model, including
 connectivity, flit size, output capacity, and downstream credits. Any failure
 therefore ends initialization before timed traffic runs.
 
+The Mask-MPI and Ember regressions are the executable endpoint examples:
+
+```sh
+sst src/sst/elements/mask-mpi/tests/test_allreduce_innetwork.py
+sst src/sst/elements/ember/tests/ember_allreduce_innetwork.py \
+    --model-options="supported"
+```
+
+Four participants contribute `1.0` through `4.0`; each must receive `10.0`.
+The six-edge static tree sends one reduction packet up and one result packet
+down each edge, exactly `2E = 12` collective packets. Unsupported operations
+exercise each endpoint stack's existing software fallback.
+
 Installing a dormant service must not change ordinary Merlin traffic. The
 default remains LRU when a processor is installed.
 
-LRU (`merlin.xbar_arb_lru`) is the supported crossbar policy for active
-collective offload. The main microbenchmarks and AI examples select it
-explicitly for both offload and software runs. RR (`merlin.xbar_arb_rr`) is
-experimental for active services: sustained traffic on multiple synthetic
-VCs can starve. Ordinary traffic and dormant services retain RR support;
-the intentional RR regressions and experiments remain available to study
-that policy.
+An installed collective processor requires LRU (`merlin.xbar_arb_lru`), even
+when no invocation is running. RR rejects processors that own VNs during
+initialization. Ordinary RR traffic and transparent pass processors that own
+no VNs retain the ordinary arbitration path.
 
-The regression compares disabled and dormant runs byte-for-byte for the
-default and each explicit LRU/RR policy:
+The regression compares disabled and dormant collective runs byte-for-byte
+for the default and explicit LRU policy. Separate generic-service regressions
+compare disabled/pass RR runs exactly:
 
 ```sh
 sst src/sst/elements/merlin/tests/merlin_static_ordinary_baseline.py
@@ -44,11 +55,18 @@ and router VN numbers must agree. Remapped service VNs are rejected by
 transport capability checks before offload acceptance. Ordinary VNs may
 still be remapped.
 `StaticCollectivePlan.from_fattree` derives the tree from a `topoFatTree`, so
-models do not hand-write router ports. Passing an allocated job as
-`logical_ids` includes only its participants and their paths.
-`plan.validate_job(job)` requires exact physical membership and logical rank
-order; native bindings in the following layers repeat that check at build
-time to catch reallocation. Sparse allocations retain physical host ports.
+models do not hand-write router ports, and `job.useCollectivePlan(plan)` binds
+an Ember or Mercury job's NICs to the plan after allocation. Only allocated
+participants and their paths are included. Binding requires exact physical
+membership and logical rank order; construction checks them again to catch
+reallocation. Sparse allocations retain physical host port numbers:
+
+```python
+system.allocateNodes(job, "linear")
+plan = StaticCollectivePlan.from_fattree(topology, logical_ids=job, reduce_vn=1, result_vn=2)
+job.useCollectivePlan(plan)
+topology.router = StaticCollectiveRouter(plan)
+```
 
 Endpoint stacks see one `CollectiveParticipant` (route, physical and logical
 IDs, the two VNs) and drive the endpoint with `CollectiveSubmission`,
@@ -66,7 +84,8 @@ recovery, cancellation, nonblocking collective, batching, or chunk pipelining.
 A Merlin-only model with the processor installed can be checkpointed while
 no invocation is active; an active invocation or staged ingress transfer at
 checkpoint time is rejected, and `testsuite_default_collective.py` restarts
-the baseline model from a checkpoint.
+the baseline model from a checkpoint. Mercury and Firefly are not
+checkpointable.
 
 Resource timing uses the router's existing clock:
 
@@ -93,8 +112,34 @@ branch bits remain in the processor; packets are constructed as output
 capacity becomes available. Independent output queues avoid a blocked
 destination holding up other ready destinations. All packets still share one
 synthetic crossbar input, with bandwidth determined by `xbar_bw` and normal
-output credits. `pending_egress_capacity` is a positive compatibility setting;
-lazy emission needs only one temporary packet, irrespective of fanout.
+output credits. Lazy emission needs only one temporary packet, irrespective
+of fanout.
 
 The service describes packet size in bits. Merlin derives flits from its
 configured `flit_size`; the scalar profile does not require 8-byte flits.
+
+Firefly stages contributions through its existing NIC DMA read resources and
+completes results after a DMA write. Functional source bytes are copied on
+acceptance, so later source changes do not affect the result. Simulated
+source/result addresses come from the native Firefly operation.
+`collectiveSubmitDelay_ns` and `collectiveCompletionDelay_ns` add nonnegative
+engine overhead (both default to zero). `collectiveDmaReadBytes` and
+`collectiveDmaWriteBytes` expose the memory traffic. The configured memory
+model controls latency and contention; the basic model can approximate a
+small buffered transfer as zero delay.
+
+DMA write completion follows the selected native model. Firefly's
+SimpleMemoryModel posts stores: the collective may complete after the write
+enters the memory path, while its configured write latency continues to occupy
+memory resources and can delay later operations. It does not wait for DRAM
+retirement. This matches ordinary Firefly DMA writes.
+
+Mercury `NodeCL` stages both contributions and results through its existing
+MemoryModel channels, sharing bandwidth and contention with compute memory
+traffic. Other Mercury node types retain their existing zero-cost memory
+approximation. NIC parameters `collective_submit_delay_ns` and
+`collective_completion_delay_ns` add nonnegative launch and completion
+overheads (both default to zero). The adapter retains source snapshots and
+incoming result bytes through memory completion and any network-credit wait.
+The caller keeps its result buffer alive until completion; only one invocation
+can be active.
