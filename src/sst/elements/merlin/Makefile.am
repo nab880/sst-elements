@@ -39,6 +39,7 @@ libmerlin_la_SOURCES = \
 	test/network_service/networkServiceTest.cc \
 	test/network_service/pr2IntegrationFixture.h \
 	test/network_service/pr2IntegrationFixture.cc \
+	test/network_service/networkServiceProbe.cc \
 	test/request_ownership/cloneTrackingEvent.h \
 	test/request_ownership/requestOwnershipTest.cc \
 	test/collective/contractTest.cc \
@@ -152,6 +153,7 @@ EXTRA_DIST = \
 	tests/network_service_missing_processor.py \
 	tests/network_service_pass_tagged.py \
 	tests/network_service_pr2_integration.py \
+	tests/network_service_model.py \
 	tests/network_service_pass_baseline.py \
 	tests/network_service_vn_remap.py \
 	tests/refFiles/test_merlin_dragon_128_platform_test.out \
