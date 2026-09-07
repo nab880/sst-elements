@@ -109,6 +109,7 @@ libmerlin_la_SOURCES = \
 	pymerlin-base.py \
 	pymerlin-endpoint.py \
 	pymerlin-router.py \
+	pymerlin-collective.py \
 	interfaces/pymerlin-interface.py \
 	target_generator/pymerlin-targetgen.py \
 	topology/pymerlin-topo-any.py \
@@ -122,6 +123,10 @@ libmerlin_la_SOURCES = \
 EXTRA_DIST = \
 	tests/testsuite_default_collective.py \
 	tests/collective_contract.py \
+	tests/collective_test_stats.py \
+	tests/merlin_static_plan_contract.py \
+	tests/merlin_static_invalid_plan.py \
+	tests/merlin_static_ordinary_baseline.py \
 	tests/merlin_static_processor_contract.py \
 	services/collective/README.md \
 	tests/refFiles/collective_contract.out \
@@ -185,6 +190,7 @@ BUILT_SOURCES = \
 	pymerlin-base.inc \
 	pymerlin-endpoint.inc \
 	pymerlin-router.inc \
+	pymerlin-collective.inc \
 	interfaces/pymerlin-interface.inc \
 	target_generator/pymerlin-targetgen.inc \
 	topology/pymerlin-topo-dragonfly.inc \

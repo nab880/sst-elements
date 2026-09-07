@@ -16,7 +16,63 @@
 # distribution.
 
 import sst
+from types import MappingProxyType
 from sst.merlin.base import *
+
+
+class FatTreeConnectivity:
+    """Immutable physical router/endpoint ports for one fat-tree shape.
+
+    Both construction and collective planning consume this description;
+    router links are oriented from the upper router to the lower router.
+    Router iteration retains the historical depth-first construction order.
+    """
+
+    def __init__(self, downs, ups, routers_per_level, groups_per_level, start_ids):
+        per_group = tuple(routers // groups for routers, groups in
+                          zip(routers_per_level, groups_per_level))
+        routers = {}
+        router_links = []
+        endpoint_links = {}
+        down_links = {}
+
+        def router_id(level, group, index):
+            return start_ids[level] + group * per_group[level] + index
+
+        def describe_group(level, group):
+            for index in range(per_group[level]):
+                upper = router_id(level, group, index)
+                down_links[upper] = []
+                if level:
+                    for port in range(downs[level]):
+                        lower = router_id(level - 1, group * downs[level] + port,
+                                          index % per_group[level - 1])
+                        lower_port = downs[level - 1] + index // per_group[level - 1]
+                        edge = (upper, port, lower, lower_port)
+                        router_links.append(edge)
+                        down_links[upper].append(edge)
+                else:
+                    endpoint_links[upper] = tuple(
+                        (upper * downs[0] + port, upper, port)
+                        for port in range(downs[0]))
+            if level:
+                for port in range(downs[level]):
+                    describe_group(level - 1, group * downs[level] + port)
+            radix = downs[level] + (ups[level] if level < len(ups) else 0)
+            for index in range(per_group[level]):
+                routers[router_id(level, group, index)] = ((level, group, index), radix)
+
+        describe_group(len(downs) - 1, 0)
+        self.routers = MappingProxyType(routers)
+        self.router_links = tuple(router_links)
+        self.endpoint_links = MappingProxyType(endpoint_links)
+        self.down_links = MappingProxyType({router: tuple(edges)
+                                            for router, edges in down_links.items()})
+        self.default_root = start_ids[-1]
+
+    def __deepcopy__(self, memo):
+        memo[id(self)] = self
+        return self
 
 
 class topoFatTree(Topology):
@@ -24,7 +80,7 @@ class topoFatTree(Topology):
     def __init__(self):
         Topology.__init__(self)
         self._declareClassVariables(["link_latency","host_link_latency","bundleEndpoints","_ups","_downs","_routers_per_level","_groups_per_level","_start_ids",
-                                     "_total_hosts"])
+                                     "_total_hosts", "_connectivity"])
         self._declareParams("main",["shape","routing_alg","adaptive_threshold"])
         self._setCallbackOnWrite("shape",self._shape_callback)
         self._subscribeToPlatformParamSet("topology")
@@ -71,6 +127,10 @@ class topoFatTree(Topology):
         for i in range(1,len(self._downs)-1):
             self._groups_per_level[i] = self._groups_per_level[i-1] // self._downs[i]
 
+        self._connectivity = FatTreeConnectivity(
+            tuple(self._downs), tuple(self._ups), tuple(self._routers_per_level),
+            tuple(self._groups_per_level), tuple(self._start_ids))
+
 
 
     def getName(self):
@@ -80,6 +140,10 @@ class topoFatTree(Topology):
 
     def getNumNodes(self):
         return self._total_hosts
+
+    def getConnectivity(self):
+        """Return the immutable port description used to build this topology."""
+        return self._connectivity
 
 
     def getRouterNameForId(self,rtr_id):
@@ -118,112 +182,28 @@ class topoFatTree(Topology):
         if not self.host_link_latency:
             self.host_link_latency = self.link_latency
 
-        #Recursive function to build levels
-        def fattree_rb(self, level, group, links):
-            id = self._start_ids[level] + group * (self._routers_per_level[level]//self._groups_per_level[level])
+        connectivity = self.getConnectivity()
+        links_by_router = {router: [] for router in connectivity.routers}
+        for upper, down_port, lower, up_port in connectivity.router_links:
+            level, group, index = connectivity.routers[upper][0]
+            link = sst.Link("link_l%d_g%d_r%d_p%d" % (level, group, index, down_port))
+            links_by_router[upper].append((down_port, link))
+            links_by_router[lower].append((up_port, link))
 
+        for router_id, (location, radix) in connectivity.routers.items():
+            for node_id, _, host_port in connectivity.endpoint_links.get(router_id, ()):
+                ep, port_name = endpoint.build(node_id, {})
+                if ep:
+                    link = sst.Link("hostlink_%d" % node_id)
+                    if self.bundleEndpoints:
+                        link.setNoCut()
+                    ep.addLink(link, port_name, self.host_link_latency)
+                    # Preserve physical host port numbers when an endpoint is absent.
+                    links_by_router[router_id].append((host_port, link))
 
-            host_links = []
-            if level == 0:
-                # create all the nodes
-                for i in range(self._downs[0]):
-                    node_id = id * self._downs[0] + i
-                    #print("group: %d, id: %d, node_id: %d"%(group, id, node_id))
-                    (ep, port_name) = endpoint.build(node_id, {})
-                    if ep:
-                        hlink = sst.Link("hostlink_%d"%node_id)
-                        if self.bundleEndpoints:
-                           hlink.setNoCut()
-                        ep.addLink(hlink, port_name, self.host_link_latency)
-                        host_links.append(hlink)
-
-                # Create the edge router
-                rtr_id = id
-                rtr = self._instanceRouter(self._ups[0] + self._downs[0], rtr_id)
-
-                topology = rtr.setSubComponent(self.router.getTopologySlotName(),"merlin.fattree")
-                self._applyStatisticsSettings(topology)
-                topology.addParams(self._getGroupParams("main"))
-                # Add links
-                for l in range(len(host_links)):
-                    rtr.addLink(host_links[l],"port%d"%l, self.link_latency)
-                for l in range(len(links)):
-                    rtr.addLink(links[l],"port%d"%(l+self._downs[0]), self.link_latency)
-                return
-
-            rtrs_in_group = self._routers_per_level[level] // self._groups_per_level[level]
-            # Create the down links for the routers
-            rtr_links = [ [] for index in range(rtrs_in_group) ]
-            for i in range(rtrs_in_group):
-                for j in range(self._downs[level]):
-                    rtr_links[i].append(sst.Link("link_l%d_g%d_r%d_p%d"%(level,group,i,j)));
-
-            # Now create group links to pass to lower level groups from router down links
-            group_links = [ [] for index in range(self._downs[level]) ]
-            for i in range(self._downs[level]):
-                for j in range(rtrs_in_group):
-                    group_links[i].append(rtr_links[j][i])
-
-            for i in range(self._downs[level]):
-                fattree_rb(self,level-1,group*self._downs[level]+i,group_links[i])
-
-            # Create the routers in this level.
-            # Start by adding up links to rtr_links
-            for i in range(len(links)):
-                rtr_links[i % rtrs_in_group].append(links[i])
-
-            for i in range(rtrs_in_group):
-                rtr_id = id + i
-                rtr = self._instanceRouter(self._ups[level] + self._downs[level], rtr_id)
-
-                topology = rtr.setSubComponent(self.router.getTopologySlotName(),"merlin.fattree")
-                self._applyStatisticsSettings(topology)
-                topology.addParams(self._getGroupParams("main"))
-                # Add links
-                for l in range(len(rtr_links[i])):
-                    rtr.addLink(rtr_links[i][l],"port%d"%l, self.link_latency)
-        #  End recursive function
-
-        level = len(self._ups)
-        if self._ups: # True for all cases except for single level
-            #  Create the router links
-            rtrs_in_group = self._routers_per_level[level] // self._groups_per_level[level]
-
-            # Create the down links for the routers
-            rtr_links = [ [] for index in range(rtrs_in_group) ]
-            for i in range(rtrs_in_group):
-                for j in range(self._downs[level]):
-                    rtr_links[i].append(sst.Link("link_l%d_g0_r%d_p%d"%(level,i,j)));
-
-            # Now create group links to pass to lower level groups from router down links
-            group_links = [ [] for index in range(self._downs[level]) ]
-            for i in range(self._downs[level]):
-                for j in range(rtrs_in_group):
-                    group_links[i].append(rtr_links[j][i])
-
-
-            for i in range(self._downs[len(self._ups)]):
-                fattree_rb(self,level-1,i,group_links[i])
-
-            # Create the routers in this level
-            radix = self._downs[level]
-            for i in range(self._routers_per_level[level]):
-                rtr_id = self._start_ids[len(self._ups)] + i
-                rtr = self._instanceRouter(radix,rtr_id);
-
-                topology = rtr.setSubComponent(self.router.getTopologySlotName(),"merlin.fattree",0)
-                self._applyStatisticsSettings(topology)
-                topology.addParams(self._getGroupParams("main"))
-
-                for l in range(len(rtr_links[i])):
-                    rtr.addLink(rtr_links[i][l], "port%d"%l, self.link_latency)
-
-        else: # Single level case
-            # create all the nodes
-            for i in range(self._downs[0]):
-                node_id = i
-#                print("Instancing node " + str(node_id))
-        rtr_id = 0
-#        print("Instancing router " + str(rtr_id))
-
-
+            router = self._instanceRouter(radix, router_id)
+            topology = router.setSubComponent(self.router.getTopologySlotName(), "merlin.fattree")
+            self._applyStatisticsSettings(topology)
+            topology.addParams(self._getGroupParams("main"))
+            for port, link in sorted(links_by_router[router_id]):
+                router.addLink(link, "port%d" % port, self.link_latency)
