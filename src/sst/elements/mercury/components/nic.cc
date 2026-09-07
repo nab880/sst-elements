@@ -14,6 +14,7 @@
 // distribution.
 
 #include <mercury/components/nic.h>
+#include <mercury/components/collective_adapter.h>
 #include <sst/core/params.h>
 #include <mercury/common/util.h>
 #include <mercury/components/node_base.h>
@@ -21,6 +22,7 @@
 #include <mercury/hardware/network/network_message.h>
 
 #include <memory>
+#include <limits>
 #include <sstream>
 
 static std::string _tick_spacing_string_("1ps");
@@ -46,6 +48,36 @@ NIC::NIC(uint32_t id, SST::Params& params) : NicAPI(id, params)
   manager_vn_ = -1;
   reduce_vn_ = -1;
   result_vn_ = -1;
+  collective_poc_enabled_ =
+      params.find<bool>("enable_static_collective", false);
+  collective_job_namespace_ =
+      params.find<uint64_t>("job_namespace", 1);
+  collective_route_id_ = params.find<uint64_t>("route_id", 1);
+  collective_root_nid_ = params.find<int64_t>("root_nid", 0);
+  collective_root_logical_nid_ =
+      params.find<int64_t>("root_logical_nid", collective_root_nid_);
+  collective_physical_endpoint_id_ =
+      params.find<int64_t>("physical_endpoint_id", -1);
+  collective_logical_participant_id_ =
+      params.find<int64_t>("logical_participant_id", -1);
+  if (collective_poc_enabled_) {
+    const auto submit_delay = params.find<int64_t>("collective_submit_delay_ns", 0);
+    const auto completion_delay = params.find<int64_t>("collective_completion_delay_ns", 0);
+    const uint64_t max_delay = std::numeric_limits<TimeDelta::tick_t>::max() / TimeDelta::one_nanosecond;
+    if (submit_delay < 0 || completion_delay < 0 ||
+        static_cast<uint64_t>(submit_delay) > max_delay || static_cast<uint64_t>(completion_delay) > max_delay) {
+      out_->fatal(CALL_INFO, 1, "Mercury collective submit and completion delays must be nonnegative and fit the timebase\n");
+    }
+    collective_submit_delay_ns_ = static_cast<uint64_t>(submit_delay);
+    collective_completion_delay_ns_ = static_cast<uint64_t>(completion_delay);
+  }
+  if (collective_poc_enabled_ &&
+      (collective_job_namespace_ == 0 || collective_root_nid_ < 0 ||
+       collective_root_logical_nid_ < 0 ||
+       collective_physical_endpoint_id_ < 0 ||
+       collective_logical_participant_id_ < 0)) {
+    sst_hg_abort_printf("Mercury static collective has invalid route parameters\n");
+  }
   if (!configureVirtualNetworks(VirtualNetworkConfig{})) {
     sst_hg_abort_printf("Mercury failed to apply its legacy VN configuration\n");
   }
@@ -138,6 +170,33 @@ NIC::init(unsigned int phase) {
 void
 NIC::setup() {
   link_control_->setup();
+  if (collective_poc_enabled_) {
+    if (reduce_vn_ < 0 || result_vn_ < 0) {
+      sst_hg_abort_printf(
+          "Mercury static collective requires the node to configure reduce_vn and result_vn\n");
+    }
+    MercuryCollectiveAdapter::StaticConfig config;
+    config.job_namespace = collective_job_namespace_;
+    config.route_id = collective_route_id_;
+    config.root_physical_nid = collective_root_nid_;
+    config.root_logical_nid = collective_root_logical_nid_;
+    config.reduce_vn = reduce_vn_;
+    config.result_vn = result_vn_;
+    config.submit_delay_ns = collective_submit_delay_ns_;
+    config.completion_delay_ns = collective_completion_delay_ns_;
+    auto adapter = std::make_unique<MercuryCollectiveAdapter>(
+        *this, *link_control_, config);
+    if (!adapter->transportAvailable()) {
+      sst_hg_abort_printf(
+          "Mercury static collective was enabled but the network service is unavailable\n");
+    }
+    if (!adapter->installStaticRoute(
+            collective_physical_endpoint_id_, collective_logical_participant_id_)) {
+      sst_hg_abort_printf(
+          "Mercury failed to install its static collective endpoint route\n");
+    }
+    collective_adapter_ = std::move(adapter);
+  }
 #if MERLIN_DEBUG_PACKET
   if (test_size_ != 0 && addr() == 0){
     std::cout << "Injecting test messsage of size " << test_size_ << std::endl;
@@ -164,6 +223,9 @@ NIC::complete(unsigned int phase) {
 void
 NIC::finish() {
   link_control_->finish();
+  if (collective_adapter_ && !collective_adapter_->quiescent()) {
+    sst_hg_abort_printf("Mercury collective endpoint finished with an active invocation\n");
+  }
 }
 
 bool
@@ -175,10 +237,19 @@ NIC::incomingCredit(int vn){
   }
   NetworkMessage* injection_ack = ack_queue_[vn].front();
   ack_queue_[vn].pop();
-  if (injection_ack){
-    sendToNode(injection_ack);
+  if (vn == reduce_vn_) {
+    if (injection_ack != nullptr || !collective_adapter_) {
+      sst_hg_abort_printf(
+          "Mercury received an invalid collective send notification on VN %d\n", vn);
+    }
+    collective_adapter_->sendNotification(vn);
   }
-  sendWhatYouCan(vn);
+  else {
+    if (injection_ack){
+      sendToNode(injection_ack);
+    }
+    sendWhatYouCan(vn);
+  }
   return true; //keep me
 }
 
@@ -190,10 +261,21 @@ NIC::incomingPacket(int vn){
 
     if (req->hasService()) {
       const auto service_id = req->getServiceID();
+      if (service_id != SST::Collective::COLLECTIVE_SERVICE_ID ||
+          !collective_adapter_) {
+        delete req;
+        sst_hg_abort_printf(
+            "Mercury received unsupported network service %u on VN %d\n",
+            static_cast<unsigned>(service_id), vn);
+      }
+      const bool accepted = collective_adapter_->receiveResult(vn, *req);
       delete req;
-      sst_hg_abort_printf(
-          "Mercury received unsupported network service %u on VN %d\n",
-          static_cast<unsigned>(service_id), vn);
+      if (!accepted) {
+        sst_hg_abort_printf(
+            "Mercury received a malformed collective result on VN %d\n", vn);
+      }
+      req = link_control_->recv(vn);
+      continue;
     }
     if (vn == reduce_vn_ || vn == result_vn_) {
       delete req;
@@ -568,6 +650,34 @@ NIC::validateNativeVn(int vn, const char* operation) const {
 void
 NIC::recordNativeSend(int vn, NetworkMessage* injection_ack) {
   ack_queue_[vn].push(injection_ack);
+}
+
+bool
+NIC::trySendCollective(
+    SST::Interfaces::SimpleNetwork::Request* request, int vn)
+{
+  validateVn(vn, "collective injection");
+  if (request == nullptr || vn != reduce_vn_ || !collective_adapter_ ||
+      request->vn != vn || !request->hasService() ||
+      request->getServiceID() != SST::Collective::COLLECTIVE_SERVICE_ID) {
+    sst_hg_abort_printf("Mercury collective injection received an invalid request\n");
+  }
+  if (!link_control_->spaceToSend(vn, static_cast<int>(request->size_in_bits))) {
+    return false;
+  }
+  ack_queue_[vn].push(nullptr);
+  if (!link_control_->send(request, vn)) {
+    sst_hg_abort_printf(
+        "Mercury LinkControl rejected a preflight-approved collective packet on VN %d\n",
+        vn);
+  }
+  return true;
+}
+
+SST::Collective::CollectiveEndpoint*
+NIC::collectiveEndpoint() const
+{
+  return collective_adapter_.get();
 }
 
 } // end of namespace SST::Hg

@@ -75,5 +75,10 @@ NodeCL::NodeCL(ComponentId_t id, Params &params)
   out_->debug(CALL_INFO, 1, 0, "exiting constructor\n");
 }
 
+void NodeCL::accessHostMemory(uint64_t bytes, ExecutionEvent* callback)
+{
+  mem_->accessFlow(bytes, TimeDelta(), callback);
+}
+
 } // namespace Hg
 } // namespace SST

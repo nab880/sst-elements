@@ -43,11 +43,14 @@ Questions? Contact sst-macro-help@sandia.gov
 */
 
 #include <mpi_api.h>
+#include <mpi_collective_offload.h>
 #include <mpi_queue/mpi_queue.h>
 //#include <sumi-mpi/otf2_output_stat.h>
 #include <mercury/components/operating_system.h>
+#include <mercury/operating_system/process/app.h>
 #include <mercury/operating_system/process/thread.h>
 #//include <mercury/operating_system/process/ftq_scope.h>
+
 
 //#define do_coll(coll, fxn, ...) \
 //  StartMPICall(fxn); \
@@ -70,6 +73,7 @@ Questions? Contact sst-macro-help@sandia.gov
   addImmediateCollective(std::move(op), req);
 
 namespace SST::MASKMPI {
+
 
 MpiRequest*
 MpiApi::addImmediateCollective(CollectiveOpBase::ptr&& op)
@@ -423,9 +427,9 @@ MpiApi::startAllreduce(CollectiveOp* op)
                        fxn, queue_->collCqId(), op->comm);
 }
 
-CollectiveOpBase::ptr
-MpiApi::startAllreduce(MpiComm* commPtr, int count, MPI_Datatype type,
-                       MPI_Op mop, const void* src, void* dst)
+CollectiveOp::ptr
+MpiApi::prepareAllreduce(MpiComm* commPtr, int count, MPI_Datatype type,
+                         MPI_Op mop, const void* src, void* dst)
 {
   auto op = CollectiveOp::create(count, commPtr);
   if (src == MPI_IN_PLACE){
@@ -434,6 +438,14 @@ MpiApi::startAllreduce(MpiComm* commPtr, int count, MPI_Datatype type,
 
   op->op = mop;
   startMpiCollective(Iris::sumi::Collective::allreduce, src, dst, type, type, op.get());
+  return op;
+}
+
+CollectiveOpBase::ptr
+MpiApi::startAllreduce(MpiComm* commPtr, int count, MPI_Datatype type,
+                       MPI_Op mop, const void* src, void* dst)
+{
+  auto op = prepareAllreduce(commPtr, count, type, mop, src, dst);
   auto* msg = startAllreduce(op.get());
   if (msg){
     op->complete = true;
@@ -441,7 +453,6 @@ MpiApi::startAllreduce(MpiComm* commPtr, int count, MPI_Datatype type,
   }
   return std::move(op);
 }
-
 
 CollectiveOpBase::ptr
 MpiApi::startAllreduce(const char* name, MPI_Comm comm, int count, MPI_Datatype type,
@@ -463,8 +474,16 @@ MpiApi::allreduce(const void *src, void *dst, int count,
   auto start_clock = traceClock();
 #endif
 
-  do_coll(Allreduce, MPI_Allreduce, comm,
-           count, type, mop, src, dst);
+  auto op = prepareAllreduce(getComm(comm), count, type, mop, src, dst);
+  if (!collective_offload_->tryBlockingAllreduce(op, type, mop)) {
+    auto* msg = startAllreduce(op.get());
+    if (msg) {
+      op->complete = true;
+      delete msg;
+    }
+    waitCollective(std::move(op));
+  }
+  crossed_comm_world_barrier_ = (comm == MPI_COMM_WORLD) || crossed_comm_world_barrier_;
 
 #ifdef SST_HG_OTF2_ENABLED
   if (OTF2Writer_){
