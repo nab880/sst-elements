@@ -47,6 +47,14 @@ public:
       COMPONENT_CATEGORY_UNCATEGORIZED // Category
   )
 
+  SST_ELI_DOCUMENT_PARAMS(
+      {"num_vns", "Number of virtual networks requested from SimpleNetwork", "1"},
+      {"ordinary_vn", "VN used by ordinary Mercury messages", "0"},
+      {"manager_vn", "Optional manager VN", "ordinary_vn for one-VN legacy; otherwise -1"},
+      {"reduce_vn", "Optional collective reduce VN; configured with result_vn", "-1"},
+      {"result_vn", "Optional collective result VN; configured with reduce_vn", "-1"}
+  )
+
   NodeCL(SST::ComponentId_t id, SST::Params &params);
 
   ~NodeCL() {

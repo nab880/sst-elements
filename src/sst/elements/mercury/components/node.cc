@@ -33,12 +33,26 @@ Node::Node(ComponentId_t id, Params &params)
   assert(os_);
   os_->setParentNode(this);
 
+  const VirtualNetworkConfig vn_config = resolveVirtualNetworkConfig(params);
+  if (vn_config.count <= 0) {
+    out_->fatal(
+        CALL_INFO, -1, "Mercury num_vns must be positive (got %d)\n",
+        vn_config.count);
+  }
+
   link_control_ = loadUserSubComponent<SST::Interfaces::SimpleNetwork>(
-      "link_control_slot", SST::ComponentInfo::SHARE_NONE, 1);
+      "link_control_slot", SST::ComponentInfo::SHARE_NONE, vn_config.count);
   if (link_control_) {
     out_->debug(CALL_INFO, 1, 0, "loading hg.NIC\n");
     nic_ = loadUserSubComponent<NicAPI>("nic_slot", SST::ComponentInfo::SHARE_NONE);
     assert(nic_);
+    if (!nic_->configureVirtualNetworks(vn_config)) {
+      out_->fatal(
+          CALL_INFO, -1,
+          "Mercury rejected VN configuration count=%d ordinary=%d manager=%d reduce=%d result=%d\n",
+          vn_config.count, vn_config.ordinary, vn_config.manager,
+          vn_config.reduce, vn_config.result);
+    }
     nic_->set_parent(this);
     nic_->set_link_control(link_control_);
   }
