@@ -121,6 +121,8 @@ libember_la_SOURCES = \
 	mpi/motifs/emberallpingpong.h \
 	mpi/motifs/emberallreduce.cc \
 	mpi/motifs/emberallreduce.h \
+	mpi/motifs/emberaitraining.cc \
+	mpi/motifs/emberaitraining.h \
 	mpi/motifs/emberallgatherv.cc \
 	mpi/motifs/emberallgatherv.h \
 	mpi/motifs/emberallgather.cc \
@@ -315,10 +317,14 @@ EXTRA_DIST = \
 	tests/testsuite_default_ember_ESshmem.py \
 	tests/testsuite_default_ember_innetwork.py \
 	tests/testsuite_default_ember_sparse.py \
+	tests/testsuite_default_ember_ai.py \
 	tests/ember_allreduce_innetwork.py \
 	tests/ember_allreduce_multivc.py \
 	tests/ember_allreduce_sparse.py \
 	tests/ember_allreduce_disabled.py \
+	examples/ai/README.md \
+	examples/ai/compare.py \
+	examples/ai/data_parallel_training.py \
 	tests/ESshmem_List-of-Tests \
 	tests/qos-dragonfly.sh \
 	tests/qos-fattree.sh \
