@@ -829,7 +829,9 @@ class hr_router(RouterTemplate):
         RouterTemplate.__init__(self)
 
         self._declareParams("params",["link_bw","flit_size","xbar_bw","input_latency","output_latency","input_buf_size","output_buf_size",
-                                      "xbar_arb","network_inspectors","oql_track_port","oql_track_remote","num_vns","vn_remap","vn_remap_shm"])
+                                      "xbar_arb","network_inspectors","oql_track_port","oql_track_remote","num_vns","vn_remap","vn_remap_shm",
+                                      "network_service_output_queue_depth", "network_service_ingress_width",
+                                      "network_service_ingress_flits_per_cycle", "network_service_shared_ingress"])
 
         self._declareParams("params",["qos_settings"],"portcontrol.arbitration.")
         self._declareParams("params",["output_arb", "enable_congestion_management", "cm_outstanding_threshold", "cm_incast_threshold"],"portcontrol.")

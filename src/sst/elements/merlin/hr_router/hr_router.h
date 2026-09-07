@@ -28,8 +28,11 @@
 #include <sst/core/shared/sharedArray.h>
 
 #include <queue>
+#include <map>
+#include <memory>
+#include <vector>
 
-#include "sst/elements/merlin/router.h"
+#include "../router.h"
 
 using namespace SST;
 
@@ -38,7 +41,90 @@ namespace Merlin {
 
 class PortControlBase;
 
-class hr_router : public Router {
+class NetworkServiceSyntheticRequester : public XbarInput {
+public:
+    NetworkServiceSyntheticRequester(int num_vcs, uint32_t capacity);
+    ~NetworkServiceSyntheticRequester() override;
+
+    bool enqueue(std::unique_ptr<internal_router_event>& event, int vc);
+    bool canEnqueue(int vc) const;
+    bool hasWork() const { return size_ != 0; }
+    uint32_t size() const { return size_; }
+    void selectReadyHeads(PortInterface** outputs, const int* output_busy);
+
+    internal_router_event* recv(int vc) override;
+    internal_router_event** getVCHeads() override { return heads_.data(); }
+
+    void serialize_order(SST::Core::Serialization::serializer& ser);
+
+private:
+    int num_vcs_ = 0;
+    uint32_t capacity_ = 0;
+    uint32_t size_ = 0;
+    std::vector<std::map<int, std::queue<internal_router_event*>>> queues_;
+    std::vector<internal_router_event*> heads_;
+    std::vector<int> next_output_;
+};
+
+/** Enabled-only adapter; public PortInterface keeps its released object layout. */
+class NetworkServicePortXbarInput final : public XbarInput {
+public:
+    explicit NetworkServicePortXbarInput(PortInterface* port) : port_(port) {}
+
+    internal_router_event* recv(int vc) override { return port_->recv(vc); }
+    internal_router_event** getVCHeads() override { return port_->getVCHeads(); }
+
+private:
+    PortInterface* port_;
+};
+
+/** All state absent from routers without an installed network service. */
+struct NetworkServiceRouterContext {
+    NetworkServiceProcessor* processor = nullptr; // framework-owned
+    std::unique_ptr<NetworkServiceSyntheticRequester> requester;
+    uint32_t output_queue_depth = 0;
+    uint64_t scan_cursor = 0;
+    uint32_t ingress_width = 1;
+    uint32_t ingress_flits_per_cycle = 1;
+    bool shared_ingress = true;
+    std::vector<uint32_t> ingress_busy;
+    // A provisional transfer pins one owned VC head per physical port.
+    std::vector<int> ingress_vcs;
+    bool hasIngressWork() const
+    {
+        for ( int vc : ingress_vcs ) if ( vc >= 0 ) return true;
+        return false;
+    }
+
+    // VCs of the VNs the processor owns.  The arbiter never moves a head
+    // on one of them; the router offers every such head to the processor.
+    std::vector<uint8_t> owned_vc_mask;
+    std::vector<int> owned_vcs;
+
+    std::vector<std::unique_ptr<NetworkServicePortXbarInput>> port_inputs;
+    std::vector<XbarInput*> xbar_inputs;
+
+    Statistic<uint64_t>* accept = nullptr;
+    Statistic<uint64_t>* busy = nullptr;
+    Statistic<uint64_t>* reject = nullptr;
+    Statistic<uint64_t>* synthetic = nullptr;
+    Statistic<uint64_t>* synthetic_stall = nullptr;
+
+    void rebuildInputs(PortInterface** ports, int num_ports)
+    {
+        port_inputs.clear();
+        xbar_inputs.clear();
+        port_inputs.reserve(static_cast<size_t>(num_ports));
+        xbar_inputs.reserve(static_cast<size_t>(num_ports) + 1);
+        for ( int i = 0; i < num_ports; ++i ) {
+            port_inputs.emplace_back(new NetworkServicePortXbarInput(ports[i]));
+            xbar_inputs.push_back(port_inputs.back().get());
+        }
+        xbar_inputs.push_back(requester.get());
+    }
+};
+
+class hr_router : public Router, public NetworkServiceHost {
 
 public:
 
@@ -54,7 +140,7 @@ public:
         {"id",                 "ID of the router."},
         {"num_ports",          "Number of ports that the router has"},
         {"topology",           "Name of the topology subcomponent that should be loaded to control routing."},
-        {"xbar_arb",           "Arbitration unit to be used for crossbar.","merlin.xbar_arb_lru"},
+        {"xbar_arb",           "Crossbar arbitration unit. Active network services require LRU. Ordinary traffic and dormant/pass services retain RR support.","merlin.xbar_arb_lru"},
         {"link_bw",            "Bandwidth of the links specified in either b/s or B/s (can include SI prefix)."},
         {"flit_size",          "Flit size specified in either b or B (can include SI prefix)."},
         {"xbar_bw",            "Bandwidth of the crossbar specified in either b/s or B/s (can include SI prefix)."},
@@ -68,7 +154,11 @@ public:
         {"num_vns",            "Number of VNs.","2"},
         {"vn_remap",           "Array that specifies the vn remapping for each node in the systsm."},
         {"vn_remap_shm",       "Name of shared memory region for vn remapping.  If empty, no remapping is done", ""},
-        {"debug",              "Turn on debugging for router. Set to 1 for on, 0 for off.", "0"}
+        {"debug",              "Turn on debugging for router. Set to 1 for on, 0 for off.", "0"},
+        {"network_service_output_queue_depth", "Maximum synthetic packets retained across all output/VC queues.", "8"},
+        {"network_service_ingress_width", "Maximum service input transfers started and packets committed per router cycle.", "1"},
+        {"network_service_ingress_flits_per_cycle", "Service ingress transfer bandwidth per physical input, in flits per router cycle.", "1"},
+        {"network_service_shared_ingress", "Service transfers reserve the same physical input as ordinary crossbar traffic; false models a separate read path.", "true"}
     )
 
     SST_ELI_DOCUMENT_STATISTICS(
@@ -77,7 +167,12 @@ public:
         { "output_port_stalls", "Time output port is stalled (in units of core timebase)", "time in stalls", 1},
         { "xbar_stalls",        "Count number of cycles the xbar is stalled", "cycles", 1},
         { "idle_time",          "Amount of time spent idle for a given port", "units of core timebase", 1},
-        { "width_adj_count",    "Number of times that link width was increased or decreased", "width adjustment count", 1}
+        { "width_adj_count",    "Number of times that link width was increased or decreased", "width adjustment count", 1},
+        {"network_service_accept", "Heads on processor-owned VNs consumed by the service processor", "packets", 1},
+        {"network_service_busy", "Heads on processor-owned VNs held because the service processor was busy", "packets", 1},
+        {"network_service_reject", "Heads on processor-owned VNs rejected before terminal failure", "packets", 1},
+        {"network_service_synthetic", "Synthetic packets granted through the crossbar", "packets", 1},
+        {"network_service_synthetic_stall", "Cycles a synthetic head was unable to progress", "cycles", 1}
     )
 
     SST_ELI_DOCUMENT_PORTS(
@@ -87,8 +182,8 @@ public:
     SST_ELI_DOCUMENT_SUBCOMPONENT_SLOTS(
         {"topology", "Topology object to control routing", "SST::Merlin::Topology" },
         {"XbarArb", "Crossbar arbitration", "SST::Merlin::XbarArbitration" },
-        {"Accel", "Accelerator", "SST::Merlin::Accelerator" },
-        {"portcontrol", "PortControl blocks", "SST::Merlin::PortInterface" }
+        {"portcontrol", "PortControl blocks", "SST::Merlin::PortInterface" },
+        {"network_service", "Optional generic packet service processor", "SST::Merlin::NetworkServiceProcessor" }
     )
 
 private:
@@ -98,13 +193,13 @@ private:
     std::string vn_remap_shm;
     int vn_remap_shm_size;
     int num_vcs;
+    int flit_size_bits;
     std::vector<int> vcs_per_vn;
 
     Topology* topo;
     XbarArbitration* arb;
-    Accelerator** accels;
-
     PortInterface** ports;
+    std::unique_ptr<NetworkServiceRouterContext> network_service;
     internal_router_event** vc_heads;
     int* xbar_in_credits;
     int* output_queue_lengths;
@@ -128,6 +223,11 @@ private:
     std::vector<std::string> inspector_names;
 
     bool clock_handler(Cycle_t cycle);
+    void serviceOwnedHeads();
+    void resolveOwnedVNs();
+    int firstVCForVN(int vn) const;
+    int networkServiceFlits(size_t bits) const;
+    int numXbarInputs() const { return num_ports + (network_service ? 1 : 0); }
     static void sigHandler(int signal);
 
     void init_vcs();
@@ -160,17 +260,17 @@ public:
     void printStatus(Output& out) override;
 
     void reportIncomingEvent(internal_router_event* ev) override;
+    NetworkServiceID getNetworkServiceID() const override;
+    NetworkServiceRequestContract getNetworkServiceRequestContract() const override;
 
     void serialize_order(SST::Core::Serialization::serializer& ser) override;
     ImplementSerializable(SST::Merlin::hr_router)
 
-    bool startINC(int port_number, internal_router_event* ire) override;
-    bool sendINC(int port_number, internal_router_event* ire) override;
-    int getNumPorts() override;
-    int getLevel() override;
-    int getID() override;
-    bool xbarINC(int port_number, Event* ev) override;
-    int getInAccelBusy(int port_number) override;
+    bool supportsNetworkServiceOutput(const NetworkServiceOutputSpec& spec) const override;
+    bool canEnqueueNetworkServiceOutput(const NetworkServiceOutputSpec& spec) const override;
+    bool tryEnqueueNetworkServiceOutput(
+        NetworkServiceID service_id, NetworkServiceSyntheticPacket& packet) override;
+    void wakeNetworkServiceProcessor() override;
 };
 
 }

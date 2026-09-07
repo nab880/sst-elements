@@ -3,6 +3,9 @@
 from sst_unittest import *
 from sst_unittest_support import *
 
+from pathlib import Path
+import re
+
 try:
     from sympy.polys.domains import ZZ
 except:
@@ -65,9 +68,94 @@ class testcase_merlin_Component(SSTTestCase):
     def test_merlin_dragon_128_deferred(self):
         self.merlin_test_template("dragon_128_test_deferred")
 
-    def test_merlin_fattree_inc(self):
-        self.merlin_test_template("fattree_inc_test")
+    def test_merlin_network_service_contract(self):
+        self.merlin_test_template("network_service_contract", exact=True)
 
+    def test_merlin_network_service_missing_processor(self):
+        test_path = self.get_testsuite_dir()
+        outdir = self.get_test_output_run_dir()
+        outfile = "{}/test_merlin_network_service_missing_processor.out".format(outdir)
+        errfile = "{}/test_merlin_network_service_missing_processor.err".format(outdir)
+        self.run_sst("{}/network_service_missing_processor.py".format(test_path), outfile, errfile,
+            expected_rc=1, timeout_sec=5)
+        combined = Path(outfile).read_text(encoding="utf-8") + Path(errfile).read_text(encoding="utf-8")
+        self.assertIn("has no matching attached router processor", combined)
+
+    def test_merlin_network_service_pass_tagged(self):
+        self.merlin_test_template("network_service_pass_tagged", exact=True, strict_stderr=True)
+
+    def test_merlin_network_service_pr2_integration(self):
+        self.merlin_test_template("network_service_pr2_integration", exact=True, strict_stderr=True)
+
+    def test_merlin_network_service_rejects_active_rr(self):
+        test_path = self.get_testsuite_dir()
+        outdir = self.get_test_output_run_dir()
+        output = f"{outdir}/network_service_active_rr.out"
+        error = f"{outdir}/network_service_active_rr.err"
+        self.run_sst(f"{test_path}/network_service_pr2_integration.py", output, error,
+                     other_args='--model-options="rr"', expected_rc=1, timeout_sec=5)
+        combined = Path(output).read_text() + Path(error).read_text()
+        self.assertIn("does not support active network services; use merlin.xbar_arb_lru", combined)
+        self.assertNotIn("Simulation is complete", combined)
+
+    def test_merlin_network_service_vn_remap(self):
+        test_path = self.get_testsuite_dir()
+        outdir = self.get_test_output_run_dir()
+        outfile = f"{outdir}/test_merlin_network_service_vn_remap.out"
+        errfile = f"{outdir}/test_merlin_network_service_vn_remap.err"
+        self.run_sst(f"{test_path}/network_service_vn_remap.py", outfile, errfile,
+                     timeout_sec=30)
+        self.assertFalse(os_test_file(errfile, "-s"))
+        text = Path(outfile).read_text(encoding="utf-8")
+        self.assertEqual(1, text.count("Simulation is complete"))
+        for scenario in ("permutation", "alias", "negotiated", "no_identity"):
+            self.assertEqual(1, text.count(f"Merlin VN remap {scenario}: PASS"))
+
+    def test_merlin_network_service_pass_baseline(self):
+        test_path = self.get_testsuite_dir()
+        outdir = self.get_test_output_run_dir()
+        sdlfile = "{}/network_service_pass_baseline.py".format(test_path)
+        disabled_out = "{}/test_merlin_network_service_pass_baseline_disabled.out".format(outdir)
+        disabled_err = "{}/test_merlin_network_service_pass_baseline_disabled.err".format(outdir)
+        enabled_out = "{}/test_merlin_network_service_pass_baseline_enabled.out".format(outdir)
+        enabled_err = "{}/test_merlin_network_service_pass_baseline_enabled.err".format(outdir)
+
+        self.run_sst(sdlfile, disabled_out, disabled_err)
+        self.run_sst(sdlfile, enabled_out, enabled_err, other_args='--model-options="pass"')
+        self.assertFalse(os_test_file(disabled_err, "-s"), "disabled baseline produced stderr")
+        self.assertFalse(os_test_file(enabled_err, "-s"), "PASS baseline produced stderr")
+        self.assertEqual(Path(disabled_out).read_bytes(), Path(enabled_out).read_bytes(),
+            "installing the PASS processor changed ordinary traffic output or timing")
+
+    def test_merlin_network_service_source_boundary(self):
+        # The generic service path must not include the collective contract.
+        # Embedded Python module sources (*.inc) are data, not code.
+        source = Path(self.get_testsuite_dir()).parent
+        include = re.compile(r'^\s*#include\s+[<"]([^>"]+)[>"]')
+        generic_files = [
+            source / "networkService.h",
+            source / "networkService.cc",
+            source / "router.h",
+            source / "hr_router" / "hr_router.h",
+            source / "hr_router" / "hr_router.cc",
+            source / "hr_router" / "xbar_arb_rr.h",
+            source / "interfaces" / "portControl.h",
+            source / "interfaces" / "portControl.cc",
+            source / "interfaces" / "linkControl.h",
+            source / "interfaces" / "linkControl.cc",
+            source / "interfaces" / "reorderLinkControl.h",
+            source / "interfaces" / "reorderLinkControl.cc",
+            source / "interfaces" / "ExtendedRequest.h",
+            source / "interfaces" / "endpointNIC" / "endpointNIC.h",
+            source / "interfaces" / "endpointNIC" / "endpointNIC.cc",
+            source / "merlin.cc",
+        ]
+        for path in generic_files:
+            for line in path.read_text(encoding="utf-8").splitlines():
+                match = include.match(line)
+                if match and not match.group(1).endswith(".inc"):
+                    self.assertNotIn("collective", match.group(1).lower(),
+                        "{} includes collective code: {}".format(path, line.strip()))
 
     @unittest.skipIf(not(('sympy.polys.galoistools' in sys.modules) and ('sympy.polys.domains' in sys.modules)), "Polarfly construction requires sympy")
     def test_merlin_polarfly_455(self):
@@ -108,7 +196,7 @@ class testcase_merlin_Component(SSTTestCase):
 
 #####
 
-    def merlin_test_template(self, testcase, cwd=False):
+    def merlin_test_template(self, testcase, cwd=False, exact=False, strict_stderr=False):
         # Get the path to the test files
         test_path = self.get_testsuite_dir()
         outdir = self.get_test_output_run_dir()
@@ -142,14 +230,17 @@ class testcase_merlin_Component(SSTTestCase):
                     testDataFileName, errfile
                 )
             )
+            if strict_stderr:
+                self.fail("merlin test {} produced stderr: {}".format(testDataFileName, errfile))
 
-        cmp_result = testing_compare_sorted_diff(testcase, outfile, reffile)
+        cmp_result = testing_compare_diff(testcase, outfile, reffile) if exact else \
+            testing_compare_sorted_diff(testcase, outfile, reffile)
         if cmp_result == False:
             diffdata = testing_get_diff_data(testcase)
             log_failure(diffdata)
         self.assertTrue(
             cmp_result,
-            "Sorted Output file {0} does not match sorted Reference File {1}".format(
+            "Output file {0} does not match Reference File {1}".format(
                 outfile, reffile
             ),
         )

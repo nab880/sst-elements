@@ -25,13 +25,10 @@
 #include "bridge.h"
 
 #include "hr_router/xbar_arb_rr.h"
-#include "hr_router/xbar_arb_rr_chiplets.h"
 #include "hr_router/xbar_arb_lru.h"
 #include "hr_router/xbar_arb_age.h"
 #include "hr_router/xbar_arb_rand.h"
 #include "hr_router/xbar_arb_lru_infx.h"
-
-#include "hr_router/collective_accel.h"
 
 #include "arbitration/single_arb_rr.h"
 #include "arbitration/single_arb_lru.h"
@@ -148,4 +145,3 @@ public:
 //         NULL // generators,
 //     };
 // }
-

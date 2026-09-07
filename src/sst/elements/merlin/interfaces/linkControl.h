@@ -27,9 +27,10 @@
 #include <sst/core/statapi/statbase.h>
 #include <sst/core/shared/sharedArray.h>
 
-#include "sst/elements/merlin/router.h"
+#include "../router.h"
 
 #include <queue>
+#include <memory>
 
 namespace SST {
 
@@ -68,7 +69,8 @@ public:
         {"logical_nid",        "My logical NID", "" },
         {"use_nid_remap",      "If true, will remap logical nids in job to physical ids", "false" },
         {"nid_map_name",       "Base name of shared region where my NID map will be located.  If empty, no NID map will be used.",""},
-        {"vn_remap",           "Remap VNs onto/off of the network.  If empty, no vn remapping is done", "" },
+        {"vn_remap",           "Remap VNs onto/off of the network. If empty, no remapping is done. Network-service VNs require identity mappings.", "" },
+        {"network_service_id", "Nonzero generic network-service ID this Merlin path preserves; 0 disables services", "0" },
 
     )
 
@@ -164,6 +166,13 @@ private:
     int job_id;
     Shared::SharedArray<nid_t> nid_map;
     bool use_nid_map;
+    struct NetworkServiceLinkContext {
+        NetworkServiceID configured_id = SST::Interfaces::SimpleNetwork::NETWORK_SERVICE_NONE;
+        NetworkServiceID router_id = SST::Interfaces::SimpleNetwork::NETWORK_SERVICE_NONE;
+        NetworkServiceRequestContract router_contract;
+        std::vector<int> router_credit_capacity;
+    };
+    std::unique_ptr<NetworkServiceLinkContext> network_service;
 
     // Doing a round robin on the output.  Need to keep track of the
     // current virtual channel.
@@ -278,6 +287,7 @@ public:
         }
     }
     inline const UnitAlgebra& getLinkBW() const override { return link_bw; }
+    bool queryServiceCapability(NetworkServiceID id, NetworkServiceCapability& out) const override;
 
 private:
     bool network_initialized;

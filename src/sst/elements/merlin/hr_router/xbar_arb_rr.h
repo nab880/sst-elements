@@ -22,6 +22,7 @@
 #include <sst/core/link.h>
 #include <sst/core/timeConverter.h>
 
+#include <algorithm>
 #include <vector>
 
 #include "sst/elements/merlin/router.h"
@@ -83,12 +84,10 @@ public:
         SST_SER(rr_port_shadow);
 #endif
 
-        SST_SER(SST::Core::Serialization::array(rr_vcs, num_vcs));
+        SST_SER(SST::Core::Serialization::array(rr_vcs, num_ports));
 
-        // vc_heads is a non-owning scratch buffer, re-allocated on UNPACK
-        if ( ser.mode() == SST::Core::Serialization::serializer::UNPACK ) {
-            vc_heads = new internal_router_event*[num_vcs];
-        }
+        // vc_heads is a non-owning scratch alias set during arbitration.
+        if ( ser.mode() == SST::Core::Serialization::serializer::UNPACK ) vc_heads = nullptr;
     }
     ImplementSerializable(SST::Merlin::xbar_arb_rr)
 
@@ -106,7 +105,38 @@ public:
 #if VERIFY_DECLOCKING
         rr_port_shadow = 0;
 #endif
-        vc_heads = new internal_router_event*[num_vcs];
+        vc_heads = nullptr;
+    }
+
+    // A processor that owns no VNs can advertise transparent carriage without
+    // changing ordinary RR arbitration. Active services require LRU.
+    bool setNetworkServiceInputs(int num_inputs, int num_outputs, int num_vcs_s,
+        const std::vector<uint8_t>& owned_vcs) override
+    {
+        if ( num_inputs != num_outputs + 1 || num_outputs <= 0 || num_vcs_s <= 0 ||
+             owned_vcs.size() != static_cast<size_t>(num_vcs_s) ||
+             std::any_of(owned_vcs.begin(), owned_vcs.end(), [](uint8_t owned) { return owned != 0; }) ) return false;
+        setPorts(num_outputs, num_vcs_s);
+        return true;
+    }
+
+#if VERIFY_DECLOCKING
+    bool arbitrateNetworkService(XbarInput** inputs, PortInterface** outputs, int* input_busy,
+        int* output_busy, int* progress_vc, bool clocking) override
+#else
+    bool arbitrateNetworkService(XbarInput** inputs, PortInterface** outputs, int* input_busy,
+        int* output_busy, int* progress_vc) override
+#endif
+    {
+        auto** synthetic_heads = inputs[num_ports]->getVCHeads();
+        for ( int vc = 0; vc < num_vcs; ++vc ) if ( synthetic_heads[vc] != nullptr ) return false;
+        progress_vc[num_ports] = -1;
+#if VERIFY_DECLOCKING
+        arbitrate(outputs, input_busy, output_busy, progress_vc, clocking);
+#else
+        arbitrate(outputs, input_busy, output_busy, progress_vc);
+#endif
+        return true;
     }
 
     // Naming convention is from point of view of the xbar.  So,
