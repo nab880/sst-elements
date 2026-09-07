@@ -30,7 +30,11 @@ class NicInitEvent : public Event {
     int num_vNics;
 
     NicInitEvent() :
-        Event() {}
+        Event(),
+        node(-1),
+        vNic(-1),
+        num_vNics(0)
+    {}
 
     NicInitEvent( int _node, int _vNic, int _num_vNics ) :
         Event(),
@@ -51,10 +55,27 @@ public:
     ImplementSerializable(SST::Firefly::NicInitEvent);
 };
 
+class NicCollectiveInitEvent : public Event {
+  public:
+    SST::Collective::CollectiveParticipant participant;
+
+    NicCollectiveInitEvent() = default;
+    explicit NicCollectiveInitEvent(
+            const SST::Collective::CollectiveParticipant& participant ) :
+        Event(), participant(participant) {}
+
+    void serialize_order(SST::Core::Serialization::serializer& ser) override {
+        Event::serialize_order(ser);
+        SST_SER(participant);
+    }
+
+    ImplementSerializable(SST::Firefly::NicCollectiveInitEvent);
+};
+
 class NicCmdBaseEvent : public Event {
 
   public:
-    enum Type { Shmem, Msg, NetworkIO } base_type;
+    enum Type { Shmem, Msg, NetworkIO, Collective } base_type;
 
     NicCmdBaseEvent( Type type ) : Event(), base_type(type) {}
 
@@ -402,12 +423,55 @@ class NicCmdEvent : public NicCmdBaseEvent {
     NotSerializable(NicCmdEvent)
 };
 
+class NicCollectiveSubmitCmdEvent : public NicCmdBaseEvent {
+  public:
+    explicit NicCollectiveSubmitCmdEvent(
+            SST::Collective::StaticCollectiveContribution contribution,
+            Hermes::Vaddr source_address = 0, Hermes::Vaddr result_address = 0 ) :
+        NicCmdBaseEvent(Collective),
+        contribution(std::move(contribution)), source_address(source_address), result_address(result_address)
+    {}
+
+    SST::Collective::StaticCollectiveContribution contribution;
+    // Timing addresses only: contribution already owns the functional source bytes.
+    Hermes::Vaddr source_address;
+    Hermes::Vaddr result_address;
+
+    NotSerializable(NicCollectiveSubmitCmdEvent)
+};
+
 class NicRespBaseEvent : public Event {
   public:
-    enum Type { Shmem, Msg, NetworkIO } base_type;
+    enum Type { Shmem, Msg, NetworkIO, Collective } base_type;
     NicRespBaseEvent( Type type ) : Event(), base_type(type) {}
 
     NotSerializable(NicCmdEvent)
+};
+
+class NicCollectiveRespBaseEvent : public NicRespBaseEvent {
+  public:
+    enum Type { Result, SubmitAccepted } type;
+
+    explicit NicCollectiveRespBaseEvent( Type type ) : NicRespBaseEvent(Collective), type(type) {}
+    NotSerializable(NicCollectiveRespBaseEvent)
+};
+
+class NicCollectiveResultEvent : public NicCollectiveRespBaseEvent {
+  public:
+    explicit NicCollectiveResultEvent(SST::Collective::StaticCollectiveResult result) :
+        NicCollectiveRespBaseEvent(Result), result(std::move(result)) {}
+
+    SST::Collective::StaticCollectiveResult result;
+    NotSerializable(NicCollectiveResultEvent)
+};
+
+class NicCollectiveSubmitAcceptedEvent : public NicCollectiveRespBaseEvent {
+  public:
+    explicit NicCollectiveSubmitAcceptedEvent(uint64_t invocation_id) :
+        NicCollectiveRespBaseEvent(SubmitAccepted), invocation_id(invocation_id) {}
+
+    uint64_t invocation_id;
+    NotSerializable(NicCollectiveSubmitAcceptedEvent)
 };
 
 class NicShmemRespBaseEvent : public NicCmdBaseEvent {
