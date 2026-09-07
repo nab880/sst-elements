@@ -36,6 +36,7 @@
 #include <functional>
 
 namespace SST::Collective {
+struct CollectiveParticipant;
 class CollectiveEndpoint;
 }
 
@@ -70,6 +71,7 @@ public:
   virtual ~CollectiveEndpointProvider();
 
   virtual SST::Collective::CollectiveEndpoint* collectiveEndpoint() const = 0;
+
 };
 
 class NicEvent :
