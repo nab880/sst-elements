@@ -4,6 +4,15 @@ name: sst-core build/install/test
 # yamllint disable-line rule:truthy
 on:
   workflow_call:
+    inputs:
+      core_ref:
+        default: devel
+        required: false
+        type: string
+      core_repository:
+        default: sstsimulator/sst-core
+        required: false
+        type: string
 
 concurrency:
   group: build-and-test-${{github.ref}}-${{github.event.pull_request.number || github.run_number}}
@@ -31,8 +40,14 @@ jobs:
     if: ${{ needs.pre-checks.outputs.should_skip != 'true' }}
     uses:
       ./.github/workflows/free-macos-14.yml
+    with:
+      core_ref: ${{ inputs.core_ref }}
+      core_repository: ${{ inputs.core_repository }}
   macos-15:
     needs: pre-checks
     if: ${{ needs.pre-checks.outputs.should_skip != 'true' }}
     uses:
       ./.github/workflows/free-macos-15.yml
+    with:
+      core_ref: ${{ inputs.core_ref }}
+      core_repository: ${{ inputs.core_repository }}

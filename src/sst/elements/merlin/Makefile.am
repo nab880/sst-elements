@@ -2,8 +2,10 @@
 #
 #
 
-AM_CPPFLAGS += \
+# Prefer this source tree to headers from an earlier Elements installation.
+AM_CPPFLAGS = \
 	-I$(top_srcdir)/src \
+	@AM_CPPFLAGS@ \
 	$(MPI_CPPFLAGS) \
 	$(PYTHON_CPPFLAGS)
 
@@ -14,6 +16,10 @@ libmerlin_la_SOURCES = \
 	merlin.h \
 	merlin.cc \
 	router.h \
+	services/collective/collectiveTypes.h \
+	services/collective/collectiveServiceData.h \
+	services/collective/collectiveEndpoint.h \
+	services/collective/staticCollectiveEndpoint.h \
 	bridge.h \
 	background_traffic/background_traffic.h \
 	background_traffic/background_traffic.cc \
@@ -26,6 +32,7 @@ libmerlin_la_SOURCES = \
 	target_generator/uniform.h \
 	test/nic.h \
 	test/nic.cc \
+	test/collective/contractTest.cc \
 	test/inc_nic.h \
 	test/inc_nic.cc \
 	test/route_test/route_test.h \
@@ -107,6 +114,9 @@ libmerlin_la_SOURCES = \
 	topology/pymerlin-topo-mesh.py
 
 EXTRA_DIST = \
+	tests/testsuite_default_collective.py \
+	tests/collective_contract.py \
+	tests/refFiles/collective_contract.out \
 	tests/testsuite_default_merlin.py \
 	tests/hyperx_128_test.py \
 	tests/dragon_128_test.py \
@@ -142,7 +152,11 @@ EXTRA_DIST = \
 
 sstdir = $(includedir)/sst/elements/merlin
 nobase_sst_HEADERS = \
-	router.h
+	router.h \
+	services/collective/collectiveTypes.h \
+	services/collective/collectiveServiceData.h \
+	services/collective/collectiveEndpoint.h \
+	services/collective/staticCollectiveEndpoint.h
 
 libmerlin_la_LDFLAGS = -module -avoid-version $(PYTHON_LDFLAGS)
 
