@@ -63,8 +63,12 @@ nic::nic(ComponentId_t cid, Params& params) :
     msg_size = message_size.getRoundedValue();
 
     // First see if it is defined in the python
+    const int num_vns = params.find<int>("num_vns", 1);
+    if ( num_vns <= 0 ) {
+        merlin_abort.fatal(CALL_INFO, 1, "Error: num_vns must be positive\n");
+    }
     link_control = loadUserSubComponent<SST::Interfaces::SimpleNetwork>
-        ("networkIF", ComponentInfo::SHARE_NONE, 1 /* vns */);
+        ("networkIF", ComponentInfo::SHARE_NONE, num_vns);
 
     if ( !link_control ) {
         merlin_abort.fatal(CALL_INFO,1,"Error: no LinkControl object loaded into test_nic\n");
@@ -453,4 +457,3 @@ nic::clock_handler(Cycle_t cycle)
 
 } // namespace Merlin
 } // namespace SST
-

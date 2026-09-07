@@ -16,6 +16,9 @@ libmerlin_la_SOURCES = \
 	merlin.h \
 	merlin.cc \
 	router.h \
+	networkService.h \
+	networkService.cc \
+	networkServicePass.h \
 	services/collective/collectiveTypes.h \
 	services/collective/collectiveServiceData.h \
 	services/collective/collectiveEndpoint.h \
@@ -32,9 +35,11 @@ libmerlin_la_SOURCES = \
 	target_generator/uniform.h \
 	test/nic.h \
 	test/nic.cc \
+	test/network_service/networkServiceTest.h \
+	test/network_service/networkServiceTest.cc \
+	test/network_service/pr2IntegrationFixture.h \
+	test/network_service/pr2IntegrationFixture.cc \
 	test/collective/contractTest.cc \
-	test/inc_nic.h \
-	test/inc_nic.cc \
 	test/route_test/route_test.h \
 	test/route_test/route_test.cc \
 	test/pt2pt/pt2pt_test.h \
@@ -47,8 +52,8 @@ libmerlin_la_SOURCES = \
 	test/simple_patterns/shift.cc \
 	test/simple_patterns/incast.h \
 	test/simple_patterns/incast.cc \
-	topology/anytopo.h\
-	topology/anytopo.cc\
+	topology/anytopo.h \
+	topology/anytopo.cc \
 	topology/torus.h \
 	topology/torus.cc \
 	topology/mesh.h \
@@ -72,8 +77,6 @@ libmerlin_la_SOURCES = \
 	hr_router/xbar_arb_lru_infx.h \
 	hr_router/xbar_arb_rand.h \
 	hr_router/xbar_arb_rr.h \
-	hr_router/xbar_arb_rr_chiplets.h \
-	hr_router/collective_accel.h \
 	trafficgen/trafficgen.h \
 	trafficgen/trafficgen.cc \
 	inspectors/circuitCounter.h \
@@ -89,11 +92,11 @@ libmerlin_la_SOURCES = \
 	interfaces/reorderLinkControl.cc \
 	interfaces/output_arb_basic.h \
 	interfaces/output_arb_qos_multi.h \
-    interfaces/endpointNIC/endpointNIC.h \
-    interfaces/endpointNIC/endpointNIC.cc \
-    interfaces/endpointNIC/NICPlugin.h \
-    interfaces/endpointNIC/sourceRouting.h \
-    interfaces/endpointNIC/sourceRouting.cc \
+	interfaces/endpointNIC/endpointNIC.h \
+	interfaces/endpointNIC/endpointNIC.cc \
+	interfaces/endpointNIC/NICPlugin.h \
+	interfaces/endpointNIC/sourceRouting.h \
+	interfaces/endpointNIC/sourceRouting.cc \
 	arbitration/single_arb.h \
 	arbitration/single_arb_lru.h \
 	arbitration/single_arb_rr.h \
@@ -114,9 +117,6 @@ libmerlin_la_SOURCES = \
 	topology/pymerlin-topo-mesh.py
 
 EXTRA_DIST = \
-	tests/testsuite_default_collective.py \
-	tests/collective_contract.py \
-	tests/refFiles/collective_contract.out \
 	tests/testsuite_default_merlin.py \
 	tests/hyperx_128_test.py \
 	tests/dragon_128_test.py \
@@ -133,7 +133,15 @@ EXTRA_DIST = \
 	tests/dragon_128_test_deferred.py \
 	tests/polarfly_455_test.py \
 	tests/polarstar_504_test.py \
-	tests/fattree_inc_test.py \
+	tests/network_service_contract.py \
+	tests/network_service_model.py \
+	tests/network_service_missing_processor.py \
+	tests/network_service_pass_tagged.py \
+	tests/network_service_pr2_integration.py \
+	tests/network_service_pass_baseline.py \
+	tests/network_service_vn_remap.py \
+	tests/testsuite_default_collective.py \
+	tests/collective_contract.py \
 	tests/refFiles/test_merlin_dragon_128_platform_test.out \
 	tests/refFiles/test_merlin_dragon_128_platform_test_cm.out \
 	tests/refFiles/test_merlin_dragon_128_test.out \
@@ -147,12 +155,17 @@ EXTRA_DIST = \
 	tests/refFiles/test_merlin_torus_5_trafficgen.out \
 	tests/refFiles/test_merlin_torus_64_test.out \
 	tests/refFiles/test_merlin_polarfly_455_test.out \
-	tests/refFiles/test_merlin_polarstar_504_test.out \
-	tests/refFiles/test_merlin_fattree_inc_test.out
+	tests/refFiles/test_merlin_network_service_contract.out \
+	tests/refFiles/test_merlin_network_service_missing_processor.out \
+	tests/refFiles/test_merlin_network_service_pass_tagged.out \
+	tests/refFiles/test_merlin_network_service_pr2_integration.out \
+	tests/refFiles/collective_contract.out \
+	tests/refFiles/test_merlin_polarstar_504_test.out
 
 sstdir = $(includedir)/sst/elements/merlin
 nobase_sst_HEADERS = \
 	router.h \
+	networkService.h \
 	services/collective/collectiveTypes.h \
 	services/collective/collectiveServiceData.h \
 	services/collective/collectiveEndpoint.h \

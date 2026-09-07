@@ -17,6 +17,9 @@
 #include "endpointNIC.h"
 #include "../ExtendedRequest.h"
 
+#include <limits>
+#include <utility>
+
 namespace SST {
 namespace Merlin {
 
@@ -37,7 +40,7 @@ EndpointNIC::EndpointNIC(ComponentId_t cid, Params& params, int vns) :
     loadPlugins(params);
 
     link_control = loadUserSubComponent<SST::Interfaces::SimpleNetwork>
-    ("networkIF", ComponentInfo::SHARE_NONE, 1 /* vns */);
+    ("networkIF", ComponentInfo::SHARE_NONE, 1 /* legacy EndpointNIC contract */);
 
     if (!link_control) {
         out.fatal(CALL_INFO, -1, "Failed to load LinkControl subcomponent\n");
@@ -112,7 +115,18 @@ void EndpointNIC::finish()
 
 bool EndpointNIC::send(Request* req, int vn)
 {
-    // Process through outgoing pipeline
+    if ( req == nullptr ) return false;
+    if ( req->hasService() ) {
+        NetworkServiceCapability capability;
+        if ( !queryServiceCapability(req->getServiceID(), capability) ||
+             !(capability.features & SERVICE_FEATURE_INTERMEDIATE_TERMINATION_SAFE) ) {
+            return false;
+        }
+        return link_control->send(req, vn);
+    }
+
+    // Preserve the released ordinary pipeline contract, including wrapping
+    // through ExtendedRequest even when the configured pipeline is empty.
     Request* processed_req = processThroughPipeline(req, vn, true);
     if (!processed_req) {
         return false;
@@ -132,6 +146,8 @@ SST::Interfaces::SimpleNetwork::Request* EndpointNIC::recv(int vn)
     if (!req) {
         return nullptr;
     }
+
+    if ( req->hasService() ) return req;
 
     // Process through incoming pipeline
     return processThroughPipeline(req, vn, false);
@@ -176,6 +192,20 @@ SST::Interfaces::SimpleNetwork::nid_t EndpointNIC::getEndpointID() const
 const UnitAlgebra& EndpointNIC::getLinkBW() const
 {
     return link_control->getLinkBW();
+}
+
+bool
+EndpointNIC::queryServiceCapability(NetworkServiceID service_id, NetworkServiceCapability& out) const
+{
+    if ( !plugin_pipeline.empty() ) return false;
+    NetworkServiceCapability capability;
+    if ( !link_control->queryServiceCapability(service_id, capability) ) return false;
+    constexpr NetworkServiceFeatureMask required =
+        SERVICE_FEATURE_FRESH_BASE_REQUEST_TAG_FIRST_RECEIVE |
+        SERVICE_FEATURE_INTERMEDIATE_TERMINATION_SAFE;
+    if ( (capability.features & required) != required ) return false;
+    out = std::move(capability);
+    return true;
 }
 
 // Base implementations for child classes to override

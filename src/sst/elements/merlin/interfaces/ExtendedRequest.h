@@ -20,9 +20,11 @@
 #include <map>
 #include <string>
 #include <memory>
+#include <stdexcept>
 #include <vector>
 #include <variant>
 #include <deque>
+#include <utility>
 
 namespace SST {
 namespace Merlin {
@@ -77,23 +79,62 @@ public:
                     bool head, bool tail, Event* payload = nullptr) :
         Request(dest, src, size_in_bits, head, tail, payload) {}
 
-    // Create ExtendedRequest from a base Request
+    // Deep-copy a base request without slicing its owned payload or service sidecar.
+    explicit ExtendedRequest(const Request& req) :
+        Request(req)
+    {
+        // Request's released copy contract aliases the native payload.  Detach
+        // it before anything below can throw, then install an owned clone only
+        // after all potentially-throwing copies have completed.
+        takePayload();
+        std::unique_ptr<Event> payload_clone;
+        if ( const auto* original_payload = req.inspectPayload() ) {
+            payload_clone.reset(const_cast<Event*>(original_payload)->clone());
+            if ( payload_clone == nullptr ) {
+                throw std::runtime_error("ExtendedRequest native payload clone returned null");
+            }
+        }
+        const auto* ext_req = dynamic_cast<const ExtendedRequest*>(&req);
+        if (ext_req) {
+            metadata = ext_req->metadata;
+        }
+        givePayload(payload_clone.release());
+    }
+
+    // Released wrapper contract: transfer the native payload, copy trace and
+    // plugin metadata, and retain Request's defaults for vn/allow_adaptive.
     ExtendedRequest(Request* req) :
         Request(req->dest, req->src, req->size_in_bits, req->head, req->tail)
     {
         givePayload(req->takePayload());
         trace = req->getTraceType();
         traceID = req->getTraceID();
-
-        // If req is already an ExtendedRequest, copy its metadata
-        ExtendedRequest* ext_req = dynamic_cast<ExtendedRequest*>(req);
+        auto* ext_req = dynamic_cast<ExtendedRequest*>(req);
         if (ext_req) {
-            // Copy metadata (variant handles copying automatically)
             metadata = ext_req->metadata;
         }
     }
 
-    ~ExtendedRequest() {}
+    ExtendedRequest(const ExtendedRequest& other) :
+        ExtendedRequest(static_cast<const Request&>(other))
+    {}
+    ExtendedRequest(ExtendedRequest&&) noexcept = default;
+    ExtendedRequest& operator=(const ExtendedRequest& other)
+    {
+        if ( this != &other ) {
+            ExtendedRequest copy(other);
+            Request::swap(copy);
+            metadata.swap(copy.metadata);
+        }
+        return *this;
+    }
+    ExtendedRequest& operator=(ExtendedRequest&&) noexcept = default;
+    ~ExtendedRequest() override = default;
+
+    ExtendedRequest* clone() override
+    {
+        return new ExtendedRequest(*this);
+    }
 
     // Set plugin-specific metadata
     template<typename T>

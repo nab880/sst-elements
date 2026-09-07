@@ -44,21 +44,23 @@ public:
 
 
 private:
-    int num_ports;
-    int num_vcs;
+    int num_ports = 0;
+    int num_output_ports = 0;
+    int num_vcs = 0;
+    std::vector<uint8_t> owned_vcs;
 
 #if VERIFY_DECLOCKING
     int rr_port_shadow;
 #endif
 
     typedef std::pair<uint16_t,uint16_t> priority_entry_t;
-    priority_entry_t* priority[2];
-    priority_entry_t* cur_list;
-    priority_entry_t* next_list;
+    priority_entry_t* priority[2] = { nullptr, nullptr };
+    priority_entry_t* cur_list = nullptr;
+    priority_entry_t* next_list = nullptr;
 
-    int total_entries;
+    int total_entries = 0;
 
-    internal_router_event** vc_heads;
+
 
     // PortControl** ports;
 
@@ -72,11 +74,15 @@ public:
     }
 
     ~xbar_arb_lru() {
+        delete[] priority[0];
+        delete[] priority[1];
     }
 
     void serialize_order(SST::Core::Serialization::serializer& ser) override {
         XbarArbitration::serialize_order(ser);
         SST_SER(num_ports);
+        SST_SER(num_output_ports);
+        SST_SER(owned_vcs);
         SST_SER(num_vcs);
         SST_SER(total_entries);
 
@@ -92,16 +98,16 @@ public:
             cur_list = priority[cur_idx];
             next_list = priority[1 - cur_idx];
         }
-        // vc_heads is a non-owning scratch buffer, re-allocated on UNPACK
-        if ( ser.mode() == SST::Core::Serialization::serializer::UNPACK ) {
-            vc_heads = new internal_router_event*[num_vcs];
-        }
     }
     ImplementSerializable(SST::Merlin::xbar_arb_lru)
 
     void setPorts(int num_ports_s, int num_vcs_s) override
     {
         num_ports = num_ports_s;
+        num_output_ports = num_ports_s;
+        owned_vcs.clear();
+        delete[] priority[0];
+        delete[] priority[1];
         num_vcs = num_vcs_s;
 
         total_entries = num_ports * num_vcs;
@@ -114,114 +120,85 @@ public:
         int index = 0;
         for ( int i = 0; i < num_ports; i++ ) {
             for ( int j = 0; j < num_vcs; j++ ) {
-                cur_list[index++] = priority_entry_t(i,j);
+                cur_list[index] = next_list[index] = priority_entry_t(i,j);
+                ++index;
             }
         }
 
 
-        vc_heads = new internal_router_event*[num_vcs];
+
     }
 
-    // Naming convention is from point of view of the xbar.  So,
-    // in_port_busy is >0 if someone is writing to that xbar port and
-    // out_port_busy is >0 if that xbar port being read.
+    bool setNetworkServiceInputs(int num_inputs, int num_outputs, int vc_count,
+        const std::vector<uint8_t>& owned) override
+    {
+        if ( num_inputs != num_outputs + 1 || num_outputs <= 0 || vc_count <= 0 ||
+             owned.size() != static_cast<size_t>(vc_count) ) return false;
+        setPorts(num_inputs, vc_count);
+        num_output_ports = num_outputs;
+        owned_vcs = owned;
+        return true;
+    }
+
+#if VERIFY_DECLOCKING
+    bool arbitrateNetworkService(XbarInput** inputs, PortInterface** outputs, int* input_busy,
+        int* output_busy, int* progress_vc, bool clocking) override
+#else
+    bool arbitrateNetworkService(XbarInput** inputs, PortInterface** outputs, int* input_busy,
+        int* output_busy, int* progress_vc) override
+#endif
+    {
+        return arbitrateInputs(inputs, outputs, input_busy, output_busy, progress_vc);
+    }
+
     void arbitrate(
 #if VERIFY_DECLOCKING
-                   PortInterface** ports, int* in_port_busy, int* out_port_busy, int* progress_vc, bool clocking
+        PortInterface** ports, int* input_busy, int* output_busy, int* progress_vc, bool clocking
 #else
-                   PortInterface** ports, int* in_port_busy, int* out_port_busy, int* progress_vc
+        PortInterface** ports, int* input_busy, int* output_busy, int* progress_vc
 #endif
-                   ) override
+    ) override
     {
-
-        for ( int i = 0; i < num_ports; i++ ) progress_vc[i] = -1;
-
-        // std::cout << "---------" << std::endl;
-        // for ( int i = 0; i < total_entries; i++ ) {
-        //     std::cout << priority[cur_list][i].first << ", " << priority[cur_list][i].second << std::endl;
-        // }
-        // std::cout << "---------" << std::endl;
-
-        // Run through the priority list
-        // for ( priority_list_t::iterator it = priority.begin(); it != priority.end(); ) {
-        // int sat_index = total_entries - 1;
-        // int unsat_index = 0;
-
-        priority_entry_t* sat_list = &next_list[total_entries-1];
-        priority_entry_t* unsat_list = next_list;
-
-        for ( int i = 0; i < total_entries; i++ ) {
-
-            // const priority_entry_t& check = priority[cur_list][i];
-            const priority_entry_t& check = cur_list[i];
-
-            /* std::cout << check.first << ", " << check.second << std::endl; */
-
-            int port = check.first;
-            int vc = check.second;
-
-            // std::cout << check.first << ", " << check.second << std::endl;
-
-            vc_heads = ports[port]->getVCHeads();
-
-            // if the output of this port is busy or if there is no
-            // event to be processed, nothing to do.
-            internal_router_event* src_event = vc_heads[vc];
-            if ( in_port_busy[port] <= 0 && src_event != NULL) {
-                // Have an event, see if it can be progressed
-                int next_port = src_event->getNextPort();
-                int next_vc = src_event->getVC();
-
-                // We can progress if the next port's input is not
-                // busy and there are enough credits.
-                if ( out_port_busy[next_port] <= 0 &&
-                     ports[next_port]->spaceToSend(next_vc, src_event->getFlitCount()) ) {
-
-                    // Tell the router what to move
-                    progress_vc[port] = vc;
-
-                    // Need to set the busy values
-                    in_port_busy[port] = src_event->getFlitCount();
-                    out_port_busy[next_port] = src_event->getFlitCount();
-
-
-                    // Copy data to new list
-                    // std::cout << "putting at bottom of list" << std::endl;
-                    // next_list[sat_index--] = check;
-                    *sat_list = check;
-                    --sat_list;
-                }
-                else {
-                    // std::cout << "putting at top of list" << std::endl;
-                    // next_list[unsat_index++] = check;
-                    *unsat_list = check;
-                    ++unsat_list;
-                    progress_vc[port] = -2;
-                }
-            }
-            else {
-                // std::cout << "putting at top of list" << std::endl;
-                // next_list[unsat_index++] = check;
-                *unsat_list = check;
-                ++unsat_list;
-            }
-        }
-
-        // std::cout << "+++++++++" << std::endl;
-        // for ( int i = 0; i < total_entries; i++ ) {
-        //     std::cout << priority[next_list][i].first << ", " << priority[cur_list][i].second << std::endl;
-        // }
-        // std::cout << "+++++++++" << std::endl;
-
-        // cur_list ^= next_list;
-        // next_list ^= cur_list;
-        // cur_list ^= next_list;
-        priority_entry_t* tmp = cur_list;
-        cur_list = next_list;
-        next_list = tmp;
-        return;
+        arbitrateInputs(ports, ports, input_busy, output_busy, progress_vc);
     }
 
+private:
+    // One LRU policy for physical and synthetic inputs.  Empty synthetic
+    // entries never change the relative priority of ordinary requests.
+    template <class Input>
+    bool arbitrateInputs(Input** inputs, PortInterface** outputs, int* input_busy,
+        int* output_busy, int* progress_vc)
+    {
+        for ( int port = 0; port < num_ports; ++port ) progress_vc[port] = -1;
+        priority_entry_t* satisfied = &next_list[total_entries - 1];
+        priority_entry_t* waiting = next_list;
+        for ( int i = 0; i < total_entries; ++i ) {
+            const priority_entry_t entry = cur_list[i];
+            const int port = entry.first;
+            const int vc = entry.second;
+            auto* event = inputs[port]->getVCHeads()[vc];
+            const bool processor_owned = !owned_vcs.empty() && port < num_output_ports && owned_vcs[vc];
+            if ( input_busy[port] <= 0 && event != nullptr && !processor_owned ) {
+                const int output = event->getNextPort();
+                const int output_vc = event->getVC();
+                if ( output < 0 || output >= num_output_ports || output_vc < 0 || output_vc >= num_vcs ) {
+                    return false;
+                }
+                if ( output_busy[output] <= 0 && outputs[output]->spaceToSend(output_vc, event->getFlitCount()) ) {
+                    progress_vc[port] = vc;
+                    input_busy[port] = output_busy[output] = event->getFlitCount();
+                    *satisfied-- = entry;
+                    continue;
+                }
+                progress_vc[port] = -2;
+            }
+            *waiting++ = entry;
+        }
+        std::swap(cur_list, next_list);
+        return true;
+    }
+
+public:
     void reportSkippedCycles(Cycle_t cycles) override
     {}
 
