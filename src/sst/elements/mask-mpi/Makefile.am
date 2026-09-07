@@ -5,6 +5,12 @@
 ext_LTLIBRARIES = libmask_mpi.la libsendrecv.la libreduce.la liballtoall.la liballgather.la libhalo3d26.la liballreduce_innetwork.la
 extdir = $(pkglibdir)/ext
 
+ext_LTLIBRARIES += libmercury_ai_training.la
+
+libmercury_ai_training_la_SOURCES = \
+  examples/ai/data_parallel_training.cc
+
+libmercury_ai_training_la_LDFLAGS = -module -avoid-version
 
 AM_CPPFLAGS += -I$(top_srcdir)/src/sst/elements
 
@@ -105,6 +111,11 @@ EXTRA_DIST = \
  tests/refFiles/test_allreduce_innetwork_supported.out \
  tests/refFiles/test_allreduce_innetwork_fallback.out
 
+EXTRA_DIST += \
+ examples/ai/README.md \
+ examples/ai/compare.py \
+ examples/ai/data_parallel_training.py \
+ tests/testsuite_default_mask_mpi_ai.py
 
 libmask_mpi_la_LDFLAGS = -module -avoid-version
 libsendrecv_la_LDFLAGS = -module -avoid-version
