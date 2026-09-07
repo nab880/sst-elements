@@ -18,18 +18,21 @@
 import sst
 from sst.merlin.base import *
 
+
 class TestJob(Job):
-    def __init__(self,job_id,size):
-        Job.__init__(self,job_id,size)
-        self._declareParams("main",["num_peers","num_messages","message_size","send_untimed_bcast"])
+    def __init__(self, job_id, size):
+        Job.__init__(self, job_id, size)
+        self._declareParams(
+            "main", ["num_peers", "num_messages", "message_size", "send_untimed_bcast"]
+        )
         self.num_peers = size
         self._lockVariable("num_peers")
 
     def getName(self):
         return "TestJob"
 
-    def build(self, nID, extraKeys, link = None):
-        nic = sst.Component("testNic_%d"%nID, "merlin.test_nic")
+    def build(self, nID, extraKeys, link=None):
+        nic = sst.Component("testNic_%d" % nID, "merlin.test_nic")
         self._applyStatisticsSettings(nic)
         nic.addParams(self._getGroupParams("main"))
         nic.addParams(extraKeys)
@@ -39,13 +42,33 @@ class TestJob(Job):
 
         #  Add the linkcontrol
         return NetworkInterface._instanceNetworkInterfaceBackCompat(
-            self.network_interface,nic,"networkIF",0,self.job_id,self.size,id,True,link)
+            self.network_interface,
+            nic,
+            "networkIF",
+            0,
+            self.job_id,
+            self.size,
+            id,
+            True,
+            link,
+        )
 
 
 class OfferedLoadJob(Job):
-    def __init__(self,job_id,size):
-        Job.__init__(self,job_id,size)
-        self._declareParams("main",["offered_load","num_peers","message_size","link_bw","warmup_time","collect_time","drain_time"])
+    def __init__(self, job_id, size):
+        Job.__init__(self, job_id, size)
+        self._declareParams(
+            "main",
+            [
+                "offered_load",
+                "num_peers",
+                "message_size",
+                "link_bw",
+                "warmup_time",
+                "collect_time",
+                "drain_time",
+            ],
+        )
         self._declareClassVariables(["pattern"])
         self.num_peers = size
         self._lockVariable("num_peers")
@@ -54,7 +77,7 @@ class OfferedLoadJob(Job):
         return "Offered Load Job"
 
     def build(self, nID, extraKeys):
-        nic = sst.Component("offered_load_%d"%nID, "merlin.offered_load")
+        nic = sst.Component("offered_load_%d" % nID, "merlin.offered_load")
         self._applyStatisticsSettings(nic)
         nic.addParams(self._getGroupParams("main"))
         nic.addParams(extraKeys)
@@ -65,15 +88,26 @@ class OfferedLoadJob(Job):
         self.pattern.addAsAnonymous(nic, "pattern", "pattern.")
 
         #  Add the linkcontrol
-        networkif, port_name = self.network_interface.build(nic,"networkIF",0,self.job_id,self.size,id,True)
+        networkif, port_name = self.network_interface.build(
+            nic, "networkIF", 0, self.job_id, self.size, id, True
+        )
 
         return (networkif, port_name)
 
 
 class IncastJob(Job):
-    def __init__(self,job_id,size):
-        Job.__init__(self,job_id,size)
-        self._declareParams("main",["num_peers","target_nids","packets_to_send","packet_size","delay_start"])
+    def __init__(self, job_id, size):
+        Job.__init__(self, job_id, size)
+        self._declareParams(
+            "main",
+            [
+                "num_peers",
+                "target_nids",
+                "packets_to_send",
+                "packet_size",
+                "delay_start",
+            ],
+        )
         self.num_peers = size
         self._lockVariable("num_peers")
 
@@ -81,12 +115,14 @@ class IncastJob(Job):
         return "Incast Job"
 
     def build(self, nID, extraKeys):
-        nic = sst.Component("incast_%d"%nID, "merlin.simple_patterns.incast")
+        nic = sst.Component("incast_%d" % nID, "merlin.simple_patterns.incast")
         self._applyStatisticsSettings(nic)
         nic.addParams(self._getGroupParams("main"))
         nic.addParams(extraKeys)
         id = self._nid_map[nID]
 
         #  Add the linkcontrol
-        networkif, port_name = self.network_interface.build(nic,"networkIF",0,self.job_id,self.size,id,True)
+        networkif, port_name = self.network_interface.build(
+            nic, "networkIF", 0, self.job_id, self.size, id, True
+        )
         return (networkif, port_name)

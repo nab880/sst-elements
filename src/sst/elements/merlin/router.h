@@ -27,7 +27,13 @@
 #include <sst/core/unitAlgebra.h>
 #include <sst/core/interfaces/simpleNetwork.h>
 
+#include "networkService.h"
+
+#include <cstdint>
+#include <limits>
+#include <memory>
 #include <queue>
+#include <vector>
 
 namespace SST {
 namespace Merlin {
@@ -84,6 +90,7 @@ public:
         SST_SER(vcs_with_data);
     }
     ImplementVirtualSerializable(SST::Merlin::Router)
+
 };
 
 #define MERLIN_ENABLE_TRACE
@@ -124,7 +131,11 @@ public:
 
     RtrEvent() :
         BaseRtrEvent(BaseRtrEvent::PACKET),
-        injectionTime(0)
+        request(nullptr),
+        trusted_src(-1),
+        route_vn(-1),
+        injectionTime(0),
+        size_in_flits(-1)
     {}
 
     RtrEvent(SST::Interfaces::SimpleNetwork::Request* req, SST::Interfaces::SimpleNetwork::nid_t trusted_src, int route_vn) :
@@ -132,8 +143,34 @@ public:
         request(req),
         trusted_src(trusted_src),
         route_vn(route_vn),
-        injectionTime(0)
+        injectionTime(0),
+        size_in_flits(-1)
     {}
+
+    RtrEvent(const RtrEvent& other) :
+        BaseRtrEvent(other),
+        request(other.request ? other.request->clone() : nullptr),
+        trusted_src(other.trusted_src),
+        route_vn(other.route_vn),
+        injectionTime(other.injectionTime),
+        size_in_flits(other.size_in_flits)
+    {}
+
+    RtrEvent& operator=(const RtrEvent& other)
+    {
+        if ( this != &other ) {
+            std::unique_ptr<SST::Interfaces::SimpleNetwork::Request> request_copy(
+                other.request ? other.request->clone() : nullptr);
+            BaseRtrEvent::operator=(other);
+            delete request;
+            request       = request_copy.release();
+            trusted_src   = other.trusted_src;
+            route_vn      = other.route_vn;
+            injectionTime = other.injectionTime;
+            size_in_flits = other.size_in_flits;
+        }
+        return *this;
+    }
 
 
     ~RtrEvent()
@@ -144,17 +181,37 @@ public:
     inline void setInjectionTime(SimTime_t time) {injectionTime = time;}
     // inline void setTraceID(int id) {traceID = id;}
     // inline void setTraceType(TraceType type) {trace = type;}
-    virtual RtrEvent* clone(void)  override {
-        RtrEvent *ret = new RtrEvent(*this);
-        ret->request = this->request->clone();
-        return ret;
-    }
+    virtual RtrEvent* clone(void) override { return new RtrEvent(*this); }
 
     inline SimTime_t getInjectionTime(void) const { return injectionTime; }
     inline SST::Interfaces::SimpleNetwork::Request::TraceType getTraceType() const {return request->getTraceType();}
     inline int getTraceID() const {return request->getTraceID();}
 
-    inline void computeSizeInFlits(int flit_size ) {size_in_flits = (request->size_in_bits + flit_size - 1) / flit_size; }
+    inline bool computeSizeInFlits(int flit_size ) {
+        if ( request == nullptr || flit_size <= 0 ||
+             request->size_in_bits > std::numeric_limits<size_t>::max() - static_cast<size_t>(flit_size - 1) ) {
+            return false;
+        }
+        const size_t flits = (request->size_in_bits + static_cast<size_t>(flit_size - 1)) /
+                             static_cast<size_t>(flit_size);
+        if ( flits > static_cast<size_t>(std::numeric_limits<int>::max()) ) return false;
+        size_in_flits = static_cast<int>(flits);
+        return true;
+    }
+    inline bool setSyntheticTransportMetadata(int flits, SimTime_t time) {
+        if ( request == nullptr || route_vn < 0 || flits <= 0 ) return false;
+        size_in_flits = flits;
+        injectionTime = time;
+        return true;
+    }
+    // Compatibility no-op: successful computeSizeInFlits() already establishes
+    // the complete transport metadata required by legacy senders.
+    inline bool markTransportMetadataValid() {
+        return hasValidTransportMetadata();
+    }
+    inline bool hasValidTransportMetadata() const {
+        return request != nullptr && route_vn >= 0 && size_in_flits >= 0;
+    }
     inline int getSizeInFlits() { return size_in_flits; }
     inline int getSizeInBits() { return request->size_in_bits; }
 
@@ -383,7 +440,14 @@ private:
 class RtrInitEvent : public BaseRtrEvent {
 public:
 
-    enum Commands { REQUEST_VNS, SET_VNS, REPORT_ID, REPORT_BW, REPORT_FLIT_SIZE, REPORT_PORT };
+    enum Commands {
+        REQUEST_VNS,
+        SET_VNS,
+        REPORT_ID,
+        REPORT_BW,
+        REPORT_FLIT_SIZE,
+        REPORT_PORT
+    };
 
     // int num_vns;
     // int id;
@@ -391,6 +455,7 @@ public:
     Commands command;
     int int_value;
     UnitAlgebra ua_value;
+    NetworkServiceRequestContract network_service_contract;
 
     RtrInitEvent() :
         BaseRtrEvent(BaseRtrEvent::INITIALIZATION)
@@ -408,6 +473,12 @@ public:
         SST_SER(command);
         SST_SER(int_value);
         SST_SER(ua_value);
+        if ( command == REPORT_ID ) {
+            SST_SER(network_service_contract);
+        }
+        else if ( ser.mode() == SST::Core::Serialization::serializer::UNPACK ) {
+            network_service_contract = {};
+        }
     }
 
 
@@ -424,13 +495,47 @@ class internal_router_event : public BaseRtrEvent {
 
 public:
     internal_router_event() :
-        BaseRtrEvent(BaseRtrEvent::INTERNAL)
+        BaseRtrEvent(BaseRtrEvent::INTERNAL),
+        next_port(-1),
+        next_vc(-1),
+        vc(-1),
+        credit_return_vc(-1),
+        encap_ev(nullptr)
     {
-        encap_ev = NULL;
     }
     internal_router_event(RtrEvent* ev) :
-        BaseRtrEvent(BaseRtrEvent::INTERNAL)
-    {encap_ev = ev;}
+        BaseRtrEvent(BaseRtrEvent::INTERNAL),
+        next_port(-1),
+        next_vc(-1),
+        vc(-1),
+        credit_return_vc(-1),
+        encap_ev(ev)
+    {}
+
+    internal_router_event(const internal_router_event& other) :
+        BaseRtrEvent(other),
+        next_port(other.next_port),
+        next_vc(other.next_vc),
+        vc(other.vc),
+        credit_return_vc(other.credit_return_vc),
+        encap_ev(other.encap_ev ? other.encap_ev->clone() : nullptr)
+    {}
+
+    internal_router_event& operator=(const internal_router_event& other)
+    {
+        if ( this != &other ) {
+            std::unique_ptr<RtrEvent> envelope_copy(
+                other.encap_ev ? other.encap_ev->clone() : nullptr);
+            BaseRtrEvent::operator=(other);
+            delete encap_ev;
+            next_port        = other.next_port;
+            next_vc          = other.next_vc;
+            vc               = other.vc;
+            credit_return_vc = other.credit_return_vc;
+            encap_ev         = envelope_copy.release();
+        }
+        return *this;
+    }
 
     virtual ~internal_router_event() {
         if ( encap_ev != NULL ) delete encap_ev;
@@ -458,10 +563,21 @@ public:
 
     inline int getFlitCount() {return encap_ev->getSizeInFlits();}
 
-    inline void setEncapsulatedEvent(RtrEvent* ev) {encap_ev = ev;}
+    // Released assignment contract: this does not destroy the old pointer.
+    inline void setEncapsulatedEvent(RtrEvent* ev) { encap_ev = ev; }
+    inline RtrEvent* takeEncapsulatedEvent() {
+        RtrEvent* ret = encap_ev;
+        encap_ev = nullptr;
+        return ret;
+    }
     inline RtrEvent* getEncapsulatedEvent() {return encap_ev;}
+    inline const RtrEvent* getEncapsulatedEvent() const {return encap_ev;}
+    inline bool hasValidTransportMetadata() const {
+        return encap_ev != nullptr && encap_ev->hasValidTransportMetadata();
+    }
 
     inline SST::Interfaces::SimpleNetwork::Request* inspectRequest() { return encap_ev->request; }
+    inline const SST::Interfaces::SimpleNetwork::Request* inspectRequest() const { return encap_ev->request; }
 
     inline int getDest() const {return encap_ev->request->dest;}
     inline int getSrc() const {return encap_ev->getTrustedSrc();}
@@ -573,9 +689,17 @@ protected:
 };
 
 
+/** Input-only seam used by physical ports and bounded synthetic requesters. */
+class XbarInput {
+public:
+    virtual ~XbarInput() = default;
+    virtual internal_router_event* recv(int vc) = 0;
+    virtual internal_router_event** getVCHeads() = 0;
+};
+
 // Class to manage link between NIC and router.  A single NIC can have
 // more than one link_control (and thus link to router).
-class PortInterface : public SubComponent{
+class PortInterface : public SubComponent {
 
 public:
 
@@ -632,6 +756,14 @@ public:
     }
     ImplementVirtualSerializable(SST::Merlin::PortInterface)
 
+    // Keep optional extensions after every released virtual so existing
+    // external PortInterface vtable slots retain their positions.
+    /** Construction-time facts used to reject static service routes that can never progress. */
+    virtual bool isConnected() const { return true; }
+    virtual int getFixedOutputCapacityInFlits() const { return std::numeric_limits<int>::max(); }
+    /** -1 before initialization; otherwise the immutable initial downstream credits for this VC. */
+    virtual int getFixedDownstreamCapacityInFlits(int) const { return -1; }
+
     class OutputArbitration : public SubComponent {
     public:
 
@@ -681,7 +813,26 @@ public:
         SST::SubComponent::serialize_order(ser);
     }
     ImplementVirtualSerializable(SST::Merlin::XbarArbitration)
+
+    // Keep optional extensions after every released virtual so existing
+    // external XbarArbitration vtable slots retain their positions.
+    /**
+     * Optional input/output split for a bounded synthetic requester.  Heads
+     * on VCs flagged in owned_vcs belong to the service processor and must
+     * never be granted for a physical input.  The default preserves
+     * compatibility and refuses service enablement.
+     */
+    virtual bool setNetworkServiceInputs(int num_inputs, int num_outputs, int num_vcs,
+        const std::vector<uint8_t>& owned_vcs) { return false; }
+#if VERIFY_DECLOCKING
+    virtual bool arbitrateNetworkService(XbarInput** inputs, PortInterface** outputs, int* input_busy,
+        int* output_busy, int* progress_vc, bool clocking) { return false; }
+#else
+    virtual bool arbitrateNetworkService(XbarInput** inputs, PortInterface** outputs, int* input_busy,
+        int* output_busy, int* progress_vc) { return false; }
+#endif
 };
+
 
 }
 }
