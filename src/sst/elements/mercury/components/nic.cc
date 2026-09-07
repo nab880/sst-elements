@@ -41,11 +41,66 @@ NIC::NIC(uint32_t id, SST::Params& params) : NicAPI(id, params)
   out_ = std::make_unique<SST::Output>(
       toString(), verbose, 0, Output::STDOUT);
 
-  pending_.resize(1);
-  ack_queue_.resize(1);
+  vns_ = 0;
+  ordinary_vn_ = -1;
+  manager_vn_ = -1;
+  reduce_vn_ = -1;
+  result_vn_ = -1;
+  if (!configureVirtualNetworks(VirtualNetworkConfig{})) {
+    sst_hg_abort_printf("Mercury failed to apply its legacy VN configuration\n");
+  }
 
   mtu_ = params.find<unsigned int>("mtu", 4096);
+  if (mtu_ == 0) {
+    sst_hg_abort_printf("Mercury mtu must be positive\n");
+  }
   out_->debug(CALL_INFO, 1, 0, "setting mtu to %d\n", mtu_);
+}
+
+bool
+NIC::configureVirtualNetworks(const VirtualNetworkConfig& config)
+{
+  auto valid_required = [&config](int vn) {
+    return vn >= 0 && vn < config.count;
+  };
+  auto valid_optional = [&valid_required](int vn) {
+    return vn == -1 || valid_required(vn);
+  };
+
+  if (config.count <= 0 || !valid_required(config.ordinary) ||
+      !valid_optional(config.manager) || !valid_optional(config.reduce) ||
+      !valid_optional(config.result)) {
+    return false;
+  }
+  if ((config.reduce == -1) != (config.result == -1)) return false;
+
+  if (config.reduce >= 0 &&
+      (config.reduce == config.ordinary || config.reduce == config.manager)) {
+    return false;
+  }
+  if (config.result >= 0 &&
+      (config.result == config.ordinary || config.result == config.manager ||
+       config.result == config.reduce)) {
+    return false;
+  }
+
+  for (const auto& queue : pending_) {
+    if (!queue.empty()) return false;
+  }
+  for (const auto& queue : ack_queue_) {
+    if (!queue.empty()) return false;
+  }
+
+  vns_ = config.count;
+  ordinary_vn_ = config.ordinary;
+  manager_vn_ = config.manager;
+  reduce_vn_ = config.reduce;
+  result_vn_ = config.result;
+  pending_.clear();
+  pending_.resize(vns_);
+  ack_queue_.clear();
+  ack_queue_.resize(vns_);
+  return true;
 }
 
 NodeId
@@ -60,7 +115,10 @@ NIC::toString() {
 
 void
 NIC::sendManagerMsg(NetworkMessage *msg) {
-  inject(1, msg);
+  if (manager_vn_ < 0) {
+    sst_hg_abort_printf("Mercury manager traffic requires a configured manager_vn\n");
+  }
+  inject(manager_vn_, msg);
 }
 
 void
@@ -90,8 +148,10 @@ NIC::setup() {
     req->flow_id = -1;
     req->src = 0;
     req->dest = 1;
-    link_control_->send(req,0);
-    ack_queue_[0].push(nullptr);
+    recordNativeSend(ordinary_vn_, nullptr);
+    if (!link_control_->send(req, ordinary_vn_)) {
+      sst_hg_abort_printf("Mercury LinkControl rejected a preflight-approved test packet\n");
+    }
   }
 #endif
 }
@@ -108,10 +168,15 @@ NIC::finish() {
 
 bool
 NIC::incomingCredit(int vn){
-  auto* ack = ack_queue_[vn].front();
+  validateVn(vn, "send notification");
+  if (ack_queue_[vn].empty()) {
+    sst_hg_abort_printf(
+        "Mercury received a send notification without an owner on VN %d\n", vn);
+  }
+  NetworkMessage* injection_ack = ack_queue_[vn].front();
   ack_queue_[vn].pop();
-  if (ack){
-    sendToNode(ack);
+  if (injection_ack){
+    sendToNode(injection_ack);
   }
   sendWhatYouCan(vn);
   return true; //keep me
@@ -119,33 +184,67 @@ NIC::incomingCredit(int vn){
 
 bool
 NIC::incomingPacket(int vn){
+  validateVn(vn, "receive notification");
   auto* req = link_control_->recv(vn);
   while (req){
 
+    if (req->hasService()) {
+      const auto service_id = req->getServiceID();
+      delete req;
+      sst_hg_abort_printf(
+          "Mercury received unsupported network service %u on VN %d\n",
+          static_cast<unsigned>(service_id), vn);
+    }
+    if (vn == reduce_vn_ || vn == result_vn_) {
+      delete req;
+      sst_hg_abort_printf("Mercury received an untagged packet on service VN %d\n", vn);
+    }
+
+    const bool tail = req->tail;
     auto bytes = req->size_in_bits/8;
     auto* payload = req->takePayload();
 
     // Key reassembly by (source, flowId): flowId is only unique per sender.
     uint64_t src = uint64_t(req->src);
 
-    uint64_t flow_id = 0;
     auto* tracker = dynamic_cast<FlowTracker*>(payload);
     if (tracker != nullptr) {
-      flow_id = tracker->id();
-      Flow* flow = cq_.recv(src, flow_id, bytes, nullptr);
+      if (tail) {
+        delete tracker;
+        delete req;
+        sst_hg_abort_printf("Mercury tail fragment carried a FlowTracker\n");
+      }
+      cq_.recv(src, tracker->id(), bytes, nullptr);
+      delete tracker;
     }
-
-    if (req->tail) {
+    else if (tail) {
       auto* incoming_msg = payload ? dynamic_cast<NetworkMessage*>(payload) : nullptr;
-      if (incoming_msg == nullptr) sst_hg_abort_printf("couldn't cast event to NetworkMessage\n");
+      if (incoming_msg == nullptr) {
+        delete payload;
+        delete req;
+        sst_hg_abort_printf("couldn't cast event to NetworkMessage\n");
+      }
       Flow* flow = cq_.recv(src, incoming_msg->flowId(), bytes, incoming_msg);
-      if (flow == nullptr) sst_hg_abort_printf("couldn't get a flow\n");
+      if (flow == nullptr) {
+        delete req;
+        sst_hg_abort_printf("couldn't get a flow\n");
+      }
       auto* msg = dynamic_cast<NetworkMessage*>(flow);
-      if (msg == nullptr) sst_hg_abort_printf("couldn't cast flow to message\n");
+      if (msg == nullptr) {
+        delete req;
+        sst_hg_abort_printf("couldn't cast flow to message\n");
+      }
+      delete req;
       out_->debug(CALL_INFO, 1, 0, "fully received message %s\n",
                   msg->toString().c_str());
       recvMessage(msg);
     }
+    else {
+      delete payload;
+      delete req;
+      sst_hg_abort_printf("Mercury non-tail fragment did not carry a FlowTracker\n");
+    }
+    if (!tail) delete req;
     req = link_control_->recv(vn);
   }
   return true; //keep me active
@@ -175,6 +274,10 @@ NIC::payloadHandler(int  /*port*/) {
 
 void
 NIC::inject(int vn, NetworkMessage* payload){
+  validateNativeVn(vn, "injection");
+  if (payload == nullptr) {
+    sst_hg_abort_printf("Mercury cannot inject a null NetworkMessage on VN %d\n", vn);
+  }
   pending_[vn].emplace(payload);
   out_->debug(CALL_INFO, 1, 0, "sending message on vn %d: %s\n", vn, payload->toString().c_str());
   sendWhatYouCan(vn);
@@ -208,26 +311,29 @@ NIC::sendWhatYouCan(int vn, Pending& p) {
 
     if (req->tail){
       if (p.payload->needsAck()){
-        ack_queue_[vn].push(p.payload->cloneInjectionAck());
+        recordNativeSend(vn, p.payload->cloneInjectionAck());
       } else {
-        ack_queue_[vn].push(nullptr);
+        recordNativeSend(vn, nullptr);
       }
       req->givePayload(p.payload);
     } else {
       // Use a lightweight event to track flows
       FlowTracker* flow_tracker = new FlowTracker(p.payload->flowId());
       req->givePayload(flow_tracker);
-      ack_queue_[vn].push(nullptr);
+      recordNativeSend(vn, nullptr);
     }
     req->src = my_addr_;
     req->dest = p.payload->toaddr() / os_->ranksPerNode();
     req->size_in_bits = next_bits;
-    req->vn = 0;
+    req->vn = vn;
 
    out_->debug(CALL_INFO, 1, 0, "injecting request of size %" PRIu64 " on vn %d: head? %d tail? %d -> %s\n",
               next_bytes, vn, req->head, req->tail,
               p.payload->toString().c_str());
-    link_control_->send(req, vn);
+    if (!link_control_->send(req, vn)) {
+      sst_hg_abort_printf(
+          "Mercury LinkControl rejected a preflight-approved native fragment on VN %d\n", vn);
+    }
 
     next_bytes = std::min(uint64_t(mtu_), p.bytesLeft);
     next_bits = next_bytes * 8; //this is fine for 32-bits
@@ -423,7 +529,7 @@ NIC::set_parent(NodeBase *parent) {
 
 void
 NIC::doSend(NetworkMessage *payload) {
-  inject(0, payload);
+  inject(ordinary_vn_, payload);
 }
 
 void
@@ -439,6 +545,29 @@ NIC::parent() const {
 bool
 NIC::negligibleSize(int bytes) const {
   return bytes <= negligibleSize_;
+}
+
+void
+NIC::validateVn(int vn, const char* operation) const {
+  if (vn < 0 || vn >= vns_) {
+    sst_hg_abort_printf(
+        "Mercury %s used VN %d outside configured range [0,%d)\n",
+        operation, vn, vns_);
+  }
+}
+
+void
+NIC::validateNativeVn(int vn, const char* operation) const {
+  validateVn(vn, operation);
+  if (vn == reduce_vn_ || vn == result_vn_) {
+    sst_hg_abort_printf(
+        "Mercury native %s cannot use configured service VN %d\n", operation, vn);
+  }
+}
+
+void
+NIC::recordNativeSend(int vn, NetworkMessage* injection_ack) {
+  ack_queue_[vn].push(injection_ack);
 }
 
 } // end of namespace SST::Hg

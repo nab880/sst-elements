@@ -1,5 +1,20 @@
+import sys
+
 import sst
 from sst.merlin.base import *
+
+MODE = sys.argv[1] if len(sys.argv) > 1 else ""
+VN_CONFIGS = {
+    "multi-vn": (4, 3, 0, 2, 1),
+    "bad-vn-count": (0, 0, 0, -1, -1),
+    "bad-vn-range": (4, 4, 0, 2, 1),
+    "bad-vn-partial-service": (4, 3, 0, 2, -1),
+    "bad-vn-duplicate-service": (4, 3, 0, 2, 2),
+    "bad-vn-native-alias": (4, 3, 0, 3, 1),
+    "bad-vn-manager-service-alias": (4, 3, 2, 2, 1),
+}
+num_vns, ordinary_vn, manager_vn, reduce_vn, result_vn = \
+    VN_CONFIGS.get(MODE, (1, 0, 0, -1, -1))
 
 platdef = PlatformDefinition("platform_mask_mpi_test")
 PlatformDefinition.registerPlatformDefinition(platdef)
@@ -13,11 +28,16 @@ platdef.addParamSet("node",{
     "flow_mtu"                 : "512",
     "channel_bandwidth"        : "11.2 GB/s",
     "num_channels"             : "4",
+    "num_vns"                  : num_vns,
+    "ordinary_vn"              : ordinary_vn,
+    "manager_vn"               : manager_vn,
+    "reduce_vn"                : reduce_vn,
+    "result_vn"                : result_vn,
 })
 
 platdef.addParamSet("nic",{
     "verbose" : "0",
-    "mtu"     : "4096 B",
+    "mtu"     : "16 B" if MODE == "multi-vn" else "4096 B",
 })
 
 platdef.addParamSet("operating_system",{
@@ -30,11 +50,16 @@ platdef.addParamSet("topology",{
     "num_ports" : "32"
 })
 
-platdef.addParamSet("network_interface",{
+network_interface_params = {
     "link_bw" : "11.25 GB/s",
     "input_buf_size" : "32kB",
     "output_buf_size" : "32kB"
-})
+}
+if MODE == "multi-vn":
+    # Leave only the configured ordinary role routable.  This makes a stale
+    # hard-coded VN 0 send fail instead of passing through an equivalent lane.
+    network_interface_params["vn_remap"] = [-1, -1, -1, 3]
+platdef.addParamSet("network_interface", network_interface_params)
 
 platdef.addClassType("network_interface","sst.merlin.interface.ReorderLinkControl")
 
@@ -46,7 +71,7 @@ platdef.addParamSet("router",{
     "output_latency" : "20ns",
     "input_buf_size" : "32kB",
     "output_buf_size" : "32kB",
-    "num_vns" : 1,
+    "num_vns" : max(1, num_vns),
     "xbar_arb" : "merlin.xbar_arb_lru",
 })
 
