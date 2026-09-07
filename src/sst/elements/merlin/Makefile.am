@@ -221,3 +221,10 @@ clean-local: clean-local-check
 .PHONY: clean-local-check
 clean-local-check:
 	-rm -rf $(BUILT_SOURCES)
+
+# Reproducible mixed-traffic experiments (require Ember and Firefly).
+EXTRA_DIST += \
+	tests/merlin_mixed_collective.py \
+	tests/run_mixed_collective.py \
+	tests/test_mixed_collective_metrics.py \
+	tests/mixed_collective_experiments.md
