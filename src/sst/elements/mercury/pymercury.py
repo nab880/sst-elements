@@ -57,6 +57,11 @@ class HgNode(TemplateBase):
                                       "flow_mtu",
                                       "channel_bandwidth",
                                       "num_channels",
+                                      "num_vns",
+                                      "ordinary_vn",
+                                      "manager_vn",
+                                      "reduce_vn",
+                                      "result_vn",
                                      ])
         self._subscribeToPlatformParamSet("node")
 

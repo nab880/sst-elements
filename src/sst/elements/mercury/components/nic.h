@@ -37,6 +37,7 @@
 #include <vector>
 #include <queue>
 #include <functional>
+#include <cstdint>
 
 
 namespace SST::Hg {
@@ -46,7 +47,7 @@ namespace SST::Hg {
  * This object helps ornament network operations with information about
  * the process (ppid) involved.
  */
-class NIC : public NicAPI
+class NIC : public NicAPI, public VirtualNetworkConfigProvider
 {
  public:
 
@@ -62,6 +63,8 @@ class NIC : public NicAPI
   NIC(uint32_t id, SST::Params& params);
 
   virtual ~NIC();
+
+  bool configureVirtualNetworks(const VirtualNetworkConfig& config) override;
 
   NodeId addr() const override;
 
@@ -148,8 +151,18 @@ private:
   uint32_t mtu_;
   RecvCQ cq_;
   int vns_;
+  int ordinary_vn_;
+  int manager_vn_;
+  int reduce_vn_;
+  int result_vn_;
   int test_size_;
   std::unique_ptr<SST::Output> out_;
+
+  void validateVn(int vn, const char* operation) const;
+
+  void validateNativeVn(int vn, const char* operation) const;
+
+  void recordNativeSend(int vn, NetworkMessage* injection_ack);
 
   /**
    For messages requiring an NIC ACK to signal that the message

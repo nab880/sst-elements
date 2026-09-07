@@ -14,11 +14,16 @@
 // distribution.
 
 #define ssthg_app_name ostest
+#include <cstdlib>
 #include <iostream>
+#include <mercury/components/operating_system_impl.h>
 #include <mercury/common/skeleton.h>
 using namespace SST::Hg;
 
 int main(int argc, char** argv) {
+  if (OperatingSystemImpl::currentOs()->collectiveEndpoint() != nullptr) {
+    std::abort();
+  }
   for (int i = 0; i < argc; i++) {
     std::cout << argv[i] << "\n";
   }
