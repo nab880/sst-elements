@@ -55,8 +55,8 @@ libmerlin_la_SOURCES = \
 	test/simple_patterns/shift.cc \
 	test/simple_patterns/incast.h \
 	test/simple_patterns/incast.cc \
-	topology/anytopo.h \
-	topology/anytopo.cc \
+	topology/anytopo.h\
+	topology/anytopo.cc\
 	topology/torus.h \
 	topology/torus.cc \
 	topology/mesh.h \
@@ -95,11 +95,11 @@ libmerlin_la_SOURCES = \
 	interfaces/reorderLinkControl.cc \
 	interfaces/output_arb_basic.h \
 	interfaces/output_arb_qos_multi.h \
-	interfaces/endpointNIC/endpointNIC.h \
-	interfaces/endpointNIC/endpointNIC.cc \
-	interfaces/endpointNIC/NICPlugin.h \
-	interfaces/endpointNIC/sourceRouting.h \
-	interfaces/endpointNIC/sourceRouting.cc \
+    interfaces/endpointNIC/endpointNIC.h \
+    interfaces/endpointNIC/endpointNIC.cc \
+    interfaces/endpointNIC/NICPlugin.h \
+    interfaces/endpointNIC/sourceRouting.h \
+    interfaces/endpointNIC/sourceRouting.cc \
 	arbitration/single_arb.h \
 	arbitration/single_arb_lru.h \
 	arbitration/single_arb_rr.h \
@@ -109,6 +109,7 @@ libmerlin_la_SOURCES = \
 	pymerlin-base.py \
 	pymerlin-endpoint.py \
 	pymerlin-router.py \
+	pymerlin-collective.py \
 	interfaces/pymerlin-interface.py \
 	target_generator/pymerlin-targetgen.py \
 	topology/pymerlin-topo-any.py \
@@ -145,6 +146,10 @@ EXTRA_DIST = \
 	tests/network_service_vn_remap.py \
 	tests/testsuite_default_collective.py \
 	tests/collective_contract.py \
+	tests/collective_test_stats.py \
+	tests/merlin_static_plan_contract.py \
+	tests/merlin_static_invalid_plan.py \
+	tests/merlin_static_ordinary_baseline.py \
 	tests/merlin_static_processor_contract.py \
 	services/collective/README.md \
 	tests/refFiles/test_merlin_dragon_128_platform_test.out \
@@ -184,6 +189,7 @@ BUILT_SOURCES = \
 	pymerlin-base.inc \
 	pymerlin-endpoint.inc \
 	pymerlin-router.inc \
+	pymerlin-collective.inc \
 	interfaces/pymerlin-interface.inc \
 	target_generator/pymerlin-targetgen.inc \
 	topology/pymerlin-topo-dragonfly.inc \
