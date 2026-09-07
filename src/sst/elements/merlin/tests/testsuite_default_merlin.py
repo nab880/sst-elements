@@ -4,6 +4,7 @@ from sst_unittest import *
 from sst_unittest_support import *
 
 from pathlib import Path
+import re
 
 try:
     from sympy.polys.domains import ZZ
@@ -128,6 +129,36 @@ class testcase_merlin_Component(SSTTestCase):
         self.assertFalse(os_test_file(enabled_err, "-s"), "PASS baseline produced stderr")
         self.assertEqual(Path(disabled_out).read_bytes(), Path(enabled_out).read_bytes(),
             "installing the PASS processor changed ordinary traffic output or timing")
+
+    def test_merlin_network_service_source_boundary(self):
+        # The generic service path must not include the collective contract.
+        # Embedded Python module sources (*.inc) are data, not code.
+        source = Path(self.get_testsuite_dir()).parent
+        include = re.compile(r'^\s*#include\s+[<"]([^>"]+)[>"]')
+        generic_files = [
+            source / "networkService.h",
+            source / "networkService.cc",
+            source / "router.h",
+            source / "hr_router" / "hr_router.h",
+            source / "hr_router" / "hr_router.cc",
+            source / "hr_router" / "xbar_arb_rr.h",
+            source / "interfaces" / "portControl.h",
+            source / "interfaces" / "portControl.cc",
+            source / "interfaces" / "linkControl.h",
+            source / "interfaces" / "linkControl.cc",
+            source / "interfaces" / "reorderLinkControl.h",
+            source / "interfaces" / "reorderLinkControl.cc",
+            source / "interfaces" / "ExtendedRequest.h",
+            source / "interfaces" / "endpointNIC" / "endpointNIC.h",
+            source / "interfaces" / "endpointNIC" / "endpointNIC.cc",
+            source / "merlin.cc",
+        ]
+        for path in generic_files:
+            for line in path.read_text(encoding="utf-8").splitlines():
+                match = include.match(line)
+                if match and not match.group(1).endswith(".inc"):
+                    self.assertNotIn("collective", match.group(1).lower(),
+                        "{} includes collective code: {}".format(path, line.strip()))
 
     @unittest.skipIf(not(('sympy.polys.galoistools' in sys.modules) and ('sympy.polys.domains' in sys.modules)), "Polarfly construction requires sympy")
     def test_merlin_polarfly_455(self):

@@ -21,6 +21,8 @@ libmerlin_la_SOURCES = \
 	services/collective/collectiveServiceData.h \
 	services/collective/collectiveEndpoint.h \
 	services/collective/staticCollectiveEndpoint.h \
+	services/collective/merlinStaticCollectiveProcessor.h \
+	services/collective/merlinStaticCollectiveProcessor.cc \
 	bridge.h \
 	background_traffic/background_traffic.h \
 	background_traffic/background_traffic.cc \
@@ -40,6 +42,7 @@ libmerlin_la_SOURCES = \
 	test/request_ownership/cloneTrackingEvent.h \
 	test/request_ownership/requestOwnershipTest.cc \
 	test/collective/contractTest.cc \
+	test/collective/merlinStaticCollectiveProcessorTest.cc \
 	test/route_test/route_test.h \
 	test/route_test/route_test.cc \
 	test/pt2pt/pt2pt_test.h \
@@ -119,7 +122,10 @@ libmerlin_la_SOURCES = \
 EXTRA_DIST = \
 	tests/testsuite_default_collective.py \
 	tests/collective_contract.py \
+	tests/merlin_static_processor_contract.py \
+	services/collective/README.md \
 	tests/refFiles/collective_contract.out \
+	tests/refFiles/merlin_static_processor_contract.out \
 	tests/testsuite_default_merlin.py \
 	tests/hyperx_128_test.py \
 	tests/dragon_128_test.py \
