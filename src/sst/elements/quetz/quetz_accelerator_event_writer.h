@@ -19,7 +19,7 @@
 namespace SST {
 namespace Quetz {
 
-// Durable-at-the-C++-stream-boundary JSONL writer for the accelerator lifecycle contract.
+// Flush lifecycle events and observed guest checkpoints before acknowledging MMIO. Restricted identifiers keep JSON emission unambiguous.
 class AcceleratorEventWriter {
 public:
     AcceleratorEventWriter() : sequence_(0), enabled_(false) {}
@@ -86,6 +86,13 @@ public:
         return emit("accelerator-error", sim_time_ns, operation_id, code, error);
     }
 
+    bool emitCpuCheckpoint(uint64_t sim_time_ns, uint64_t operation_id,
+                           uint32_t value, bool busy, std::string& error)
+    {
+        return emit("cpu-checkpoint", sim_time_ns, operation_id, "", error,
+                    true, value, busy);
+    }
+
 private:
     static bool isLowerOrDigit(char c)
     {
@@ -93,7 +100,8 @@ private:
     }
 
     bool emit(const char* kind, uint64_t sim_time_ns, uint64_t operation_id,
-              const std::string& code, std::string& error)
+              const std::string& code, std::string& error,
+              bool checkpoint = false, uint32_t value = 0, bool busy = false)
     {
         error.clear();
         if (!enabled_)
@@ -107,6 +115,9 @@ private:
                 << ",\"operation\":\"" << operation_ << "\"";
         if (!code.empty())
             stream_ << ",\"code\":\"" << code << "\"";
+        if (checkpoint)
+            stream_ << ",\"value\":" << value
+                    << ",\"busy\":" << (busy ? "true" : "false");
         stream_ << "}}\n";
         stream_.flush();
         if (!stream_) {

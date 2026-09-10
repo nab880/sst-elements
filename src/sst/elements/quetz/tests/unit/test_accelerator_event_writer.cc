@@ -66,3 +66,19 @@ TEST_CASE("invalid configured identifiers fail closed") {
     CHECK(disabled.configure("", "unused", "unused", error));
     CHECK(disabled.emitRequested(1, 1, error));
 }
+
+TEST_CASE("CPU checkpoints record observed busy state in lifecycle order") {
+    const char* path = "/tmp/quetz-test-cpu-checkpoints.jsonl";
+    AcceleratorEventWriter writer;
+    std::string error;
+    REQUIRE(writer.configure(path, "accelerator.fft", "fft", error));
+    REQUIRE(writer.emitRequested(10, 1, error));
+    REQUIRE(writer.emitCpuCheckpoint(11, 1, 2166136261u, true, error));
+    CHECK(readFile(path).find("\"value\":2166136261,\"busy\":true") != std::string::npos);
+    REQUIRE(writer.emitCompleted(20, 1, error));
+    REQUIRE(writer.emitCpuCheckpoint(21, 1, 2677368773u, false, error));
+    const std::string text = readFile(path);
+    CHECK(text.find("\"sequence\":3,\"sim_time_ns\":21") != std::string::npos);
+    CHECK(text.find("\"value\":2677368773,\"busy\":false") != std::string::npos);
+    CHECK(text.find("\"kind\":\"cpu-checkpoint\"") != std::string::npos);
+}
