@@ -93,6 +93,10 @@ if os.environ.get("QUETZ_BSP_PROFILE") or os.environ.get("QUETZ_BSP_DISCOVER") =
 if os.environ.get("QUETZ_MMIO_PAYLOAD", "1") != "1":
     raise RuntimeError("Raptor FFT reference requires QUETZ_MMIO_PAYLOAD=1")
 os.environ["QUETZ_MMIO_PAYLOAD"] = "1"
+if globals().get("FFT_INTERRUPT", False):
+    os.environ["QUETZ_IRQ_LINES"] = "64"
+    os.environ["QUETZ_IRQ_POLL_NS"] = "10000"
+    os.environ["QUETZ_IRQ_INTC_TYPE"] = "mcf-intc"
 
 if FFT_INPUT_ADDRESS % 64 or FFT_OUTPUT_ADDRESS % 64:
     raise RuntimeError("FFT buffers must be 64-byte aligned")
@@ -176,8 +180,13 @@ gpu.addParams(
         "event_source": "accelerator.fft",
         "event_operation": "fft",
         "cpu_checkpoints": int(globals().get("FFT_OVERLAP", False)),
+        "irq_witnesses": int(globals().get("FFT_INTERRUPT", False)),
+        "irq_line": 30 if globals().get("FFT_INTERRUPT", False) else -1,
+        "irq_vcpu": 0,
     }
 )
+if globals().get("FFT_INTERRUPT", False):
+    sst.Link("fft_completion_irq").connect((gpu, "irq", "1ns"), (cpu, "irq_link_0", "1ns"))
 gpu.enableAllStatistics()
 gpu_kernel = gpu.setSubComponent("kernel", "quetz.FFTKernel")
 # Long enough to make BUSY observable; this is functional latency, not timing.

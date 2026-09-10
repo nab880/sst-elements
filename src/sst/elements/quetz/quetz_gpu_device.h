@@ -85,6 +85,7 @@ public:
           "of their own. Set alongside the QuetzCPU's window_big_endian=1 "
           "when the buffers live in a BE-packed SST window. Default 0 (LE).",
           "0" },
+        { "irq_witnesses", "Enable IRQ lifecycle and guest ISR witnesses at 0x68/0x70.", "0" },
         { "cpu_checkpoints", "Enable simulator-only 32-bit CPU checkpoint writes at 0x60.", "0" },
         { "event_file",
           "(string) Optional accelerator lifecycle JSONL output. Empty disables "
@@ -193,6 +194,7 @@ protected:
     void opReject(const char* why);  // abandon the op non-fatally
     void emitOpRequested();
     void emitOpCompleted();
+    void emitIrqEvent(const char* kind, uint32_t value, const char* observer = "device");
     void emitOpError();
     bool dmaRangeOk(uint64_t addr, uint64_t len) const;
     Output out;
@@ -209,6 +211,7 @@ protected:
     bool holding_sim_;
     bool doorbell_blocking_;
     bool cpu_checkpoints_;
+    bool irq_witnesses_;
     // Held doorbell write response (doorbell_blocking_ mode): sent when the
     // kernel it launched retires, so the requester sees completion only then.
     Interfaces::StandardMem::Request* deferred_doorbell_resp_;
@@ -284,6 +287,8 @@ protected:
     // W nonzero = ack (lowers the line). See SIMULATING-YOUR-SYSTEM.md.
     static constexpr uint64_t REG_IRQ_ACK          = 0x50;
     static constexpr uint64_t REG_CPU_CHECKPOINT   = 0x60;
+    static constexpr uint64_t REG_ISR_ENTRY        = 0x68;
+    static constexpr uint64_t REG_IRQ_SETTLED      = 0x70;
 };
 
 } // namespace Quetz

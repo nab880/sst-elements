@@ -94,6 +94,21 @@ public:
                     true, value, busy);
     }
 
+    bool emitIrq(const std::string& kind, uint64_t sim_time_ns,
+                 uint64_t operation_id, uint32_t line, uint32_t vcpu,
+                 uint32_t value, bool pending, const std::string& observer,
+                 std::string& error)
+    {
+        if ((kind != "irq-asserted" && kind != "irq-delivered" &&
+             kind != "irq-acknowledged" && kind != "irq-deasserted" &&
+             kind != "irq-settled") || !isIdentifier(observer)) {
+            error = "invalid IRQ event kind or observer";
+            return false;
+        }
+        return emit(kind.c_str(), sim_time_ns, operation_id, "", error,
+                    false, value, pending, observer, line, vcpu);
+    }
+
 private:
     static bool isLowerOrDigit(char c)
     {
@@ -102,7 +117,8 @@ private:
 
     bool emit(const char* kind, uint64_t sim_time_ns, uint64_t operation_id,
               const std::string& code, std::string& error,
-              bool checkpoint = false, uint32_t value = 0, bool busy = false)
+              bool checkpoint = false, uint32_t value = 0, bool busy = false,
+              const std::string& observer = "", uint32_t line = 0, uint32_t vcpu = 0)
     {
         error.clear();
         if (!enabled_)
@@ -119,6 +135,10 @@ private:
         if (checkpoint)
             stream_ << ",\"value\":" << value
                     << ",\"busy\":" << (busy ? "true" : "false");
+        if (!observer.empty())
+            stream_ << ",\"line\":" << line << ",\"vcpu\":" << vcpu
+                    << ",\"value\":" << value << ",\"pending\":" << (busy ? "true" : "false")
+                    << ",\"observer\":\"" << observer << "\"";
         stream_ << "}}\n";
         stream_.flush();
         if (!stream_) {

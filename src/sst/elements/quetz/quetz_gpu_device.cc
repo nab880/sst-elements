@@ -36,6 +36,7 @@ QuetzGpuDevice::QuetzGpuDevice(ComponentId_t id, Params& params)
       holding_sim_(false),
       doorbell_blocking_(params.find<bool>("doorbell_blocking", false)),
       cpu_checkpoints_(params.find<bool>("cpu_checkpoints", false)),
+      irq_witnesses_(params.find<bool>("irq_witnesses", false)),
       deferred_doorbell_resp_(nullptr),
       handlers(nullptr),
       iface(nullptr),
@@ -157,6 +158,11 @@ QuetzGpuDevice::QuetzGpuDevice(ComponentId_t id, Params& params)
             getName().c_str(), event_error.c_str());
     }
 
+    if (irq_witnesses_ && (irq_line_ < 0 || !kernel_ || !event_writer_.enabled())) {
+        out.fatal(CALL_INFO, -1, "%s: IRQ witnesses require a kernel, IRQ line and event file.\n",
+                  getName().c_str());
+    }
+
     // Completion IRQ: raise irq_line on op retire, lower on REG_IRQ_ACK.
     // The link is send-only (device -> CPU), so no receive handler.
     if (irq_line_ >= 0) {
@@ -259,6 +265,7 @@ void QuetzGpuDevice::raiseIrqOnRetire() {
     if (irq_pending_)
         return;
     irq_pending_ = true;
+    emitIrqEvent("irq-asserted", 1);
     stat_irqs_raised_->addData(1);
     irq_link_->send(new QuetzIrqEvent(irq_vcpu_, (uint32_t)irq_line_, 1));
     out.verbose(CALL_INFO, 2, 0,
@@ -273,6 +280,7 @@ void QuetzGpuDevice::raiseIrqOnRetire() {
 void QuetzGpuDevice::ackIrq(uint64_t consume) {
     if (irq_line_ < 0 || !irq_pending_)
         return;
+    emitIrqEvent("irq-acknowledged", static_cast<uint32_t>(consume));
     irq_events_ -= (consume < irq_events_) ? consume : irq_events_;
     if (irq_events_ > 0) {
         out.verbose(CALL_INFO, 2, 0,
@@ -282,6 +290,7 @@ void QuetzGpuDevice::ackIrq(uint64_t consume) {
         return;
     }
     irq_pending_ = false;
+    emitIrqEvent("irq-deasserted", 0);
     irq_link_->send(new QuetzIrqEvent(irq_vcpu_, (uint32_t)irq_line_, 0));
     out.verbose(CALL_INFO, 2, 0,
         "%s: IRQ line %" PRId64 " acked/lowered\n", getName().c_str(), irq_line_);
@@ -419,6 +428,14 @@ void QuetzGpuDevice::mmioHandlers::handle(StandardMem::Write* write) {
                 gpu->getName().c_str());
         }
         gpu->stat_doorbell_writes_->addData(1);
+    } else if ((offset == REG_ISR_ENTRY || offset == REG_IRQ_SETTLED) && gpu->irq_witnesses_) {
+        if (write->size != 4 || write->data.size() != 4) {
+            out->fatal(CALL_INFO, -1, "%s: IRQ witness must be a 32-bit write.\n",
+                       gpu->getName().c_str());
+        }
+        gpu->emitIrqEvent(offset == REG_ISR_ENTRY ? "irq-delivered" : "irq-settled",
+                          static_cast<uint32_t>(dataToU64(&write->data)),
+                          offset == REG_ISR_ENTRY ? "guest-isr-entry" : "guest-intc-clear");
     } else if (offset == REG_CPU_CHECKPOINT && gpu->cpu_checkpoints_) {
         if (write->size != 4 || write->data.size() != 4 ||
             !gpu->kernel_ || !gpu->event_writer_.enabled()) {
@@ -560,6 +577,18 @@ void QuetzGpuDevice::emitOpCompleted() {
         out.fatal(CALL_INFO, -1,
             "%s: accelerator-completed event was not durable: %s.\n",
             getName().c_str(), error.c_str());
+    }
+}
+
+void QuetzGpuDevice::emitIrqEvent(const char* kind, uint32_t value, const char* observer) {
+    if (!irq_witnesses_)
+        return;
+    std::string error;
+    if (!event_writer_.emitIrq(kind, getCurrentSimTimeNano(), submit_id_,
+                               static_cast<uint32_t>(irq_line_), irq_vcpu_, value,
+                               irq_pending_, observer, error)) {
+        out.fatal(CALL_INFO, -1, "%s: IRQ event was not durable: %s.\n",
+                  getName().c_str(), error.c_str());
     }
 }
 
