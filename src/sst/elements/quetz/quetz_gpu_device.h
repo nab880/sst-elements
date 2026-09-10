@@ -85,6 +85,7 @@ public:
           "of their own. Set alongside the QuetzCPU's window_big_endian=1 "
           "when the buffers live in a BE-packed SST window. Default 0 (LE).",
           "0" },
+        { "cpu_checkpoints", "Enable simulator-only 32-bit CPU checkpoint writes at 0x60.", "0" },
         { "event_file",
           "(string) Optional accelerator lifecycle JSONL output. Empty disables "
           "event production. A configured file is truncated at construction; "
@@ -207,6 +208,7 @@ protected:
     uint64_t latency_override_;
     bool holding_sim_;
     bool doorbell_blocking_;
+    bool cpu_checkpoints_;
     // Held doorbell write response (doorbell_blocking_ mode): sent when the
     // kernel it launched retires, so the requester sees completion only then.
     Interfaces::StandardMem::Request* deferred_doorbell_resp_;
@@ -281,6 +283,7 @@ protected:
     // Completion IRQ (irq_line >= 0): R = 1 while the line is raised;
     // W nonzero = ack (lowers the line). See SIMULATING-YOUR-SYSTEM.md.
     static constexpr uint64_t REG_IRQ_ACK          = 0x50;
+    static constexpr uint64_t REG_CPU_CHECKPOINT   = 0x60;
 };
 
 } // namespace Quetz

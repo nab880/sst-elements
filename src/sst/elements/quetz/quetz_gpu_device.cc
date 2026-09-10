@@ -35,6 +35,7 @@ QuetzGpuDevice::QuetzGpuDevice(ComponentId_t id, Params& params)
       latency_override_(0),
       holding_sim_(false),
       doorbell_blocking_(params.find<bool>("doorbell_blocking", false)),
+      cpu_checkpoints_(params.find<bool>("cpu_checkpoints", false)),
       deferred_doorbell_resp_(nullptr),
       handlers(nullptr),
       iface(nullptr),
@@ -418,6 +419,20 @@ void QuetzGpuDevice::mmioHandlers::handle(StandardMem::Write* write) {
                 gpu->getName().c_str());
         }
         gpu->stat_doorbell_writes_->addData(1);
+    } else if (offset == REG_CPU_CHECKPOINT && gpu->cpu_checkpoints_) {
+        if (write->size != 4 || write->data.size() != 4 ||
+            !gpu->kernel_ || !gpu->event_writer_.enabled()) {
+            out->fatal(CALL_INFO, -1, "%s: invalid CPU checkpoint configuration or width.\n",
+                       gpu->getName().c_str());
+        }
+        const bool busy = gpu->op_phase_ != QuetzGpuDevice::OpPhase::IDLE;
+        std::string error;
+        if (!gpu->event_writer_.emitCpuCheckpoint(
+                gpu->getCurrentSimTimeNano(), gpu->submit_id_,
+                static_cast<uint32_t>(dataToU64(&write->data)), busy, error)) {
+            out->fatal(CALL_INFO, -1, "%s: CPU checkpoint was not durable: %s.\n",
+                       gpu->getName().c_str(), error.c_str());
+        }
     } else if (offset == REG_LATENCY_OVERRIDE) {
         gpu->latency_override_ = dataToU64(&write->data);
         gpu->stat_latency_overrides_->addData(1);

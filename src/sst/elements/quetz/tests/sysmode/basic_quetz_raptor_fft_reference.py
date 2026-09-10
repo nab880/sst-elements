@@ -175,12 +175,13 @@ gpu.addParams(
         "event_file": event_file,
         "event_source": "accelerator.fft",
         "event_operation": "fft",
+        "cpu_checkpoints": int(globals().get("FFT_OVERLAP", False)),
     }
 )
 gpu.enableAllStatistics()
 gpu_kernel = gpu.setSubComponent("kernel", "quetz.FFTKernel")
 # Long enough to make BUSY observable; this is functional latency, not timing.
-gpu_kernel.addParams({"fft_latency_coeff": 100})
+gpu_kernel.addParams({"fft_latency_coeff": 10000 if globals().get("FFT_OVERLAP", False) else 100})
 gpu_mmio_if = gpu.setSubComponent("iface", "memHierarchy.standardInterface")
 gpu_mmio_nic = gpu_mmio_if.setSubComponent("lowlink", "memHierarchy.MemNIC")
 gpu_mmio_nic.addParams(
