@@ -82,3 +82,21 @@ TEST_CASE("CPU checkpoints record observed busy state in lifecycle order") {
     CHECK(text.find("\"value\":2677368773,\"busy\":false") != std::string::npos);
     CHECK(text.find("\"kind\":\"cpu-checkpoint\"") != std::string::npos);
 }
+
+TEST_CASE("IRQ witnesses distinguish device state from guest ISR observations") {
+    const char* path = "/tmp/quetz-test-irq-events.jsonl";
+    AcceleratorEventWriter writer;
+    std::string error;
+    REQUIRE(writer.configure(path, "accelerator.fft", "fft", error));
+    REQUIRE(writer.emitIrq("irq-asserted", 10, 1, 30, 0, 1, true, "device", error));
+    REQUIRE(writer.emitIrq("irq-delivered", 11, 1, 30, 0, 94, true, "guest-isr-entry", error));
+    CHECK(readFile(path).find("\"value\":94,\"pending\":true,\"observer\":\"guest-isr-entry\"") != std::string::npos);
+    REQUIRE(writer.emitIrq("irq-acknowledged", 12, 1, 30, 0, 1, true, "device", error));
+    REQUIRE(writer.emitIrq("irq-deasserted", 12, 1, 30, 0, 0, false, "device", error));
+    REQUIRE(writer.emitIrq("irq-settled", 13, 1, 30, 0, 0, false, "guest-intc-clear", error));
+    const std::string text = readFile(path);
+    CHECK(text.find("\"sequence\":4") != std::string::npos);
+    CHECK(text.find("\"line\":30,\"vcpu\":0") != std::string::npos);
+    CHECK(text.find("\"pending\":false,\"observer\":\"guest-intc-clear\"") != std::string::npos);
+    CHECK_FALSE(writer.emitIrq("invented", 14, 1, 30, 0, 0, false, "device", error));
+}
