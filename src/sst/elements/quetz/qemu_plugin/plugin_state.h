@@ -31,6 +31,7 @@ extern std::string          g_shmem_name;
 extern bool                 g_detailed;
 extern bool                 g_system_mode;
 extern bool                 g_cache_ops;
+extern unsigned             g_configured_vcpus;
 extern std::atomic<bool>    g_mem_seen[PLUGIN_MAX_VCPUS];
 extern QuetzInsnClass       g_prev_cls[PLUGIN_MAX_VCPUS];
 extern InsnClassifier*      g_insn_classifier;
@@ -62,6 +63,7 @@ void accumulate_compute(unsigned vcpu, uint64_t pc, QuetzInsnClass cls);
 // Emit the vCPU's pending run (if any) to the ring. Call before any memory /
 // MMIO / EXIT command so program order on the ring is preserved.
 void flush_run(unsigned vcpu);
+void require_vcpu(unsigned vcpu);
 
 } // namespace Quetz
 } // namespace SST

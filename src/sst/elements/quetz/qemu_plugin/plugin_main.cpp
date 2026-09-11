@@ -37,7 +37,8 @@ static void cb_atexit(qemu_plugin_id_t , void* )
     QuetzCommand exit_cmd{};
     exit_cmd.cmd = QUETZ_CMD_EXIT;
 
-    for (int v = 0; v < num_vcpus && v < (int)PLUGIN_MAX_VCPUS; v++) {
+    for (int v = 0; v < num_vcpus; v++) {
+        require_vcpu((unsigned)v);
         flush_run((unsigned)v);    // drain the tail compute run before EXIT
         g_tunnel->writeMessage((size_t)v, exit_cmd);
     }
@@ -130,8 +131,17 @@ int qemu_plugin_install(qemu_plugin_id_t id,
         return 1;
     }
 
+    g_configured_vcpus = g_tunnel->getSharedData()->numCores;
+    if (!g_configured_vcpus || g_configured_vcpus > PLUGIN_MAX_VCPUS ||
+        (g_system_mode && info->system.smp_vcpus != (int)g_configured_vcpus)) {
+        fprintf(stderr, "[qemu_sst_plugin] ERROR: configured trace-ring count %u "
+                        "does not match the QEMU vCPU topology.\n", g_configured_vcpus);
+        return 1;
+    }
+
     register_plugin_callbacks(id);
     qemu_plugin_register_atexit_cb(id, cb_atexit, nullptr);
+    g_tunnel->sync().announceAttach();
 
     fprintf(stderr,
         "[qemu_sst_plugin] Attached to SST via shmem region '%s'%s.\n",

@@ -8,6 +8,8 @@
 #include "plugin_state.h"
 
 #include <cstring>
+#include <cstdio>
+#include <cstdlib>
 
 namespace SST {
 namespace Quetz {
@@ -18,6 +20,7 @@ std::string         g_shmem_name;
 bool                g_detailed         = false;
 bool                g_system_mode      = false;
 bool                g_cache_ops        = false;
+unsigned            g_configured_vcpus = 0;
 std::atomic<bool>   g_mem_seen[PLUGIN_MAX_VCPUS];
 QuetzInsnClass      g_prev_cls[PLUGIN_MAX_VCPUS];
 InsnClassifier*     g_insn_classifier  = nullptr;
@@ -30,9 +33,19 @@ QuetzInsnClass      g_run_cls[PLUGIN_MAX_VCPUS];
 uint32_t            g_run_count[PLUGIN_MAX_VCPUS]  = {0};
 uint64_t            g_run_pc[PLUGIN_MAX_VCPUS];
 
+void require_vcpu(unsigned vcpu)
+{
+    if (vcpu >= g_configured_vcpus || vcpu >= PLUGIN_MAX_VCPUS) {
+        fprintf(stderr, "[qemu_sst_plugin] ERROR: vCPU %u exceeds %u configured trace rings.\n",
+                vcpu, g_configured_vcpus);
+        std::abort();
+    }
+}
+
 void flush_run(unsigned vcpu)
 {
-    if (vcpu >= PLUGIN_MAX_VCPUS || g_run_count[vcpu] == 0)
+    require_vcpu(vcpu);
+    if (g_run_count[vcpu] == 0)
         return;
     QuetzCommand cmd{};
     cmd.cmd        = QUETZ_CMD_COMPUTE_RUN;
@@ -45,8 +58,7 @@ void flush_run(unsigned vcpu)
 
 void accumulate_compute(unsigned vcpu, uint64_t pc, QuetzInsnClass cls)
 {
-    if (vcpu >= PLUGIN_MAX_VCPUS)
-        return;
+    require_vcpu(vcpu);
     if (g_run_count[vcpu] > 0 && g_run_cls[vcpu] != cls)
         flush_run(vcpu);                       // class changed: close the old run
     g_run_cls[vcpu] = cls;
@@ -60,6 +72,7 @@ void write_cmd(unsigned vcpu, QuetzShmemCmd type,
                QuetzInsnClass cls,
                const uint8_t* store_data)
 {
+    require_vcpu(vcpu);
     QuetzCommand cmd;
     cmd.cmd        = type;
     cmd.size       = size;

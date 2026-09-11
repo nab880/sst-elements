@@ -65,9 +65,8 @@ public:
             // after this constructor-time init, so no ordering stronger
             // than the store is needed.
             sharedData->magic = QUETZ_SHM_MAGIC;
-        } else {
-            sync_.announceAttach();
         }
+        // Publish readiness after topology validation and callback registration to avoid stranding SST.
         return childnum;
     }
 

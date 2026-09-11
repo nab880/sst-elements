@@ -42,6 +42,7 @@ libquetz_la_SOURCES = \
     quetz_launcher.cc \
     quetz_launcher.h \
     quetz_cache_launch.h \
+    quetz_multicore_launch.h \
     quetz_region_handler.h \
     quetz_region_table.cc \
     quetz_region_table.h \
@@ -189,6 +190,8 @@ EXTRA_DIST =	GETTING-STARTED.md \
 	qemu-overlay/linux-user/sst_mmio.c \
 	qemu-overlay/linux-user/sst_mmio.h \
 	qemu-overlay/quetz_ipc_client.c \
+	qemu-overlay/hw/m68k/raptor_multicore.c \
+	qemu-overlay/hw/m68k/raptor_multicore.h \
 	SIMULATING-YOUR-SYSTEM.md \
 	TESTING.md \
 	tests/.gitignore \
@@ -225,6 +228,7 @@ EXTRA_DIST =	GETTING-STARTED.md \
 	tests/sysmode/basic_quetz_balar_coldfire.py \
 	tests/sysmode/basic_quetz_balar.py \
 	tests/sysmode/basic_quetz_coldfire_system.py \
+	tests/sysmode/basic_quetz_raptor_multicore.py \
 	tests/sysmode/data/gps_nmea.txt \
 	tests/sysmode/data/sensor_stream.bin \
 	tests/sysmode/basic_quetz_gpu_coldfire.py \
@@ -268,6 +272,10 @@ EXTRA_DIST =	GETTING-STARTED.md \
 	tests/sysmode/firmware/coldfire_uart.h \
 	tests/sysmode/firmware/coldfire_v4_fpu \
 	tests/sysmode/firmware/coldfire_v4_fpu.c \
+	tests/sysmode/firmware/raptor_dual_core0.S \
+	tests/sysmode/firmware/raptor_dual_core1.S \
+	tests/sysmode/firmware/raptor_dual_sst0.S \
+	tests/sysmode/firmware/raptor_dual_sst1.S \
 	tests/sysmode/firmware/expanded/build.sh \
 	tests/sysmode/firmware/expanded/coldfire_xt_be_alias.c \
 	tests/sysmode/firmware/expanded/coldfire_xt_dma_escape.c \
@@ -334,6 +342,7 @@ EXTRA_DIST =	GETTING-STARTED.md \
 	tests/unit/test_decoder_generic.cc \
 	tests/unit/test_coldfire_cache_ops.cc \
 	tests/unit/test_cache_launch.cc \
+	tests/unit/test_multicore_launch.cc \
 	tests/unit/test_window_cache.cc \
 	tests/unit/test_decoder_riscv.cc \
 	tests/unit/test_fft_compute.cc \
