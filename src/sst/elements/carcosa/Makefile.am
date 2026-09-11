@@ -178,3 +178,16 @@ EXTRA_DIST += \
     tests/testEccResidentPayloadAddress.py \
     tests/testEccRuntimeCorrectable.py \
     tests/testEccRuntimeEscape.py
+
+# Add kernel and region predicates for port-module faults
+libcarcosa_la_SOURCES += \
+    examples/SimplePipeline/simplePipelineExample.cc \
+    examples/SimplePipeline/simplePipelineExample.h \
+    injectors/portModuleStateGate.cc \
+    injectors/portModuleStateGate.h
+EXTRA_DIST += \
+    examples/SimplePipeline/tests/testPortModuleStateGate.py \
+    examples/SimplePipeline/tests/testSimplePipeline.py
+nobase_sst_HEADERS += \
+    examples/SimplePipeline/simplePipelineExample.h \
+    injectors/portModuleStateGate.h
