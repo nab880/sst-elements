@@ -14,18 +14,27 @@ EccModelTest::EccModelTest(ComponentId_t id, Params&) : Component(id) {
     auto require = [&](bool ok, const char* what) {
         if (!ok) out.fatal(CALL_INFO, -1, "EccModelTest: FAIL %s\n", what);
     };
+    // 100 FIT/Mbit/h * 1024 MiB * 8 Mbit/MiB * 100 ns/event / 3.6e12 ns/h.
+    const double want_fit = 100.0 * 1e-9 * 1024.0 * 8.0 * 100.0 / 3.6e12;
+    require(std::fabs(EccModelMath::fitEventRate(100, 1024, 100) - want_fit) < 1e-30,
+            "FIT conversion (including byte-to-bit x8)");
     require(EccModelMath::wordCount(10, EccScheme::SECDED_64) == 2 &&
             EccModelMath::wordBits(10, EccScheme::SECDED_64, 0) == 64 &&
             EccModelMath::wordBits(10, EccScheme::SECDED_64, 1) == 16,
             "partial SECDED word sizing");
-    require(classifyEccWord(1, EccScheme::SECDED_64) == EccOutcome::Correctable,
-            "SECDED corrects a single bit");
-    require(classifyEccWord(2, EccScheme::SECDED_64) == EccOutcome::DetectableUncorrectable,
-            "SECDED detects a double-bit error");
-    require(classifyEccWord(3, EccScheme::SECDED_64) == EccOutcome::SilentEscape &&
-            classifyEccWord(1, EccScheme::NONE) == EccOutcome::SilentEscape,
-            "uncorrected errors escape");
-    out.output("EccModelTest: PASS deterministic ECC word sizing and classification.\n");
+    require(EccModelMath::jedecEventRate(0.25, 0.9, 64) == 0.25,
+            "explicit fault_event_rate precedence");
+    require(EccModelMath::jedecEventRate(0.0, 0.001, 10) == 0.08,
+            "BER payload-bit fallback");
+    std::string prior = "TARGET"; uint64_t count = 2;
+    require(!EccModelMath::resetCampaignEntry("TARGET", prior, count) && count == 2,
+            "same campaign entry preserves count");
+    require(EccModelMath::resetCampaignEntry("OTHER", prior, count) && count == 0,
+            "off-target transition resets count");
+    count = 1;
+    require(EccModelMath::resetCampaignEntry("TARGET", prior, count) && count == 0,
+            "target re-entry resets count");
+    out.output("EccModelTest: PASS deterministic ECC math and campaign reset.\n");
 }
 
 EccRuntimeTestDriver::EccRuntimeTestDriver(ComponentId_t id, Params& params)

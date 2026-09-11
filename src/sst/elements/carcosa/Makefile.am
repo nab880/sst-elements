@@ -165,3 +165,16 @@ nobase_sst_HEADERS += \
     components/eccScheme.h \
     components/memEventPayload.h \
     components/pipelineStateRegistry.h
+
+# Add correlated, campaign, and resident ECC fault models
+EXTRA_DIST += \
+    tests/testEccCampaignFilterLength.py \
+    tests/testEccCampaignPayloadlessRead.py \
+    tests/testEccCampaignReentry.py \
+    tests/testEccGuardJedecMix.py \
+    tests/testEccGuardResident.py \
+    tests/testEccJedecDistribution.py \
+    tests/testEccResidentDistribution.py \
+    tests/testEccResidentPayloadAddress.py \
+    tests/testEccRuntimeCorrectable.py \
+    tests/testEccRuntimeEscape.py
