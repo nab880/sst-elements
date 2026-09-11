@@ -41,6 +41,9 @@ compile test_ipc_layout.cc test_ipc_layout
 compile test_decoder_riscv.cc test_decoder_riscv
 compile test_decoder_aarch64.cc test_decoder_aarch64
 compile test_decoder_generic.cc test_decoder_generic
+compile test_coldfire_cache_ops.cc test_coldfire_cache_ops
+compile test_cache_launch.cc test_cache_launch
+compile test_window_cache.cc test_window_cache
 compile test_region_table.cc test_region_table
 compile test_mem_issue_split.cc test_mem_issue_split
 compile test_balar_flush_range.cc test_balar_flush_range
@@ -58,6 +61,9 @@ TESTS=(
     test_decoder_riscv
     test_decoder_aarch64
     test_decoder_generic
+    test_coldfire_cache_ops
+    test_cache_launch
+    test_window_cache
     test_region_table
     test_mem_issue_split
     test_balar_flush_range

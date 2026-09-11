@@ -1,0 +1,29 @@
+.section .text
+.global _start
+_start:
+ move.l #0x40010000,%sp
+ move.w #0x2700,%sr
+ move.l #0x01000000,%d0
+ movec %d0,%cacr
+ move.l #0x1000c020,%d1
+ movec %d1,%acr0
+ move.l #0x2000c040,%d7
+ movec %d7,%acr1
+ move.l #0x3000c000,%a0
+ movec %a0,%acr2
+ move.l #0x4000c000,%a6
+ movec %a6,%acr3
+ move.l #0,%a0
+ cpushl %dc,(%a0)
+ cpushl %ic,(%a0)
+ cpushl %bc,(%a0)
+ move.l #0xfc060000,%a1
+ moveq #5,%d0
+ move.b %d0,8(%a1)
+ moveq #0x4f,%d0
+ move.b %d0,12(%a1)
+ moveq #0x4b,%d0
+ move.b %d0,12(%a1)
+ moveq #10,%d0
+ move.b %d0,12(%a1)
+1: bra 1b

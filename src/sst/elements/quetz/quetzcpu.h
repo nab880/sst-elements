@@ -27,6 +27,7 @@
 
 #include "quetz_accelerator_port.h"
 #include "quetz_config.h"
+#include "quetz_window_cache.h"
 #include "quetz_qemu_frontend.h"
 #include "quetz_region_handler.h"
 #include "quetz_region_table.h"
@@ -108,6 +109,10 @@ public:
           "Maximum number of in-flight async offloads per vCPU (1 = single "
           "outstanding op, CUDA single-stream semantics).",
           "1" },
+        { "sst_window_cache",
+          "Opt-in functional ColdFire supervisor data cache for the SST window only. "
+          "Requires single-vCPU system mode and big-endian window; actual guest "
+          "MOVEC/CPUSHL maintenance controls DMA visibility. Default coherent.", "0" },
         { "window_big_endian",
           "Set to 1 when the guest is big-endian (e.g. ColdFire/m68k) to pack "
           "SST-window accesses MSB-first, so the window's byte layout in SST "
@@ -432,6 +437,7 @@ private:
     void configureIrqLinks();
     void handleIrqEvent(SST::Event* ev);
     void pollMmioSyncMailbox();
+    void serviceWindowCache();
     bool handleMmioSyncCommand(uint32_t vcpu, const QuetzCommand& cmd);
     AcceleratorPort* portForAddr(uint64_t addr) const;
     // True when `addr` lies in the SST-backed window AND window_big_endian is
@@ -447,6 +453,11 @@ private:
     // Generic (non-accelerator) synchronous MMIO requests awaiting a response.
     struct GenericPending { uint32_t vcpu; bool is_read; bool win_be; };
     std::unordered_map<uint64_t, GenericPending> generic_pending_;
+
+    WindowDataCache window_cache_;
+    bool cache_request_outstanding_ = false;
+    bool cache_response_read_ = false;
+    uint64_t cache_request_id_ = 0;
 
     QuetzConfig cfg_;
     SST::Output* output_;

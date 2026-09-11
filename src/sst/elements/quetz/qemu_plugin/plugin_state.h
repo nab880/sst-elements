@@ -30,6 +30,7 @@ extern QuetzTunnel*         g_tunnel;
 extern std::string          g_shmem_name;
 extern bool                 g_detailed;
 extern bool                 g_system_mode;
+extern bool                 g_cache_ops;
 extern std::atomic<bool>    g_mem_seen[PLUGIN_MAX_VCPUS];
 extern QuetzInsnClass       g_prev_cls[PLUGIN_MAX_VCPUS];
 extern InsnClassifier*      g_insn_classifier;

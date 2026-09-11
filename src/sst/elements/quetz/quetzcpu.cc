@@ -32,6 +32,16 @@ QuetzCPU::QuetzCPU(ComponentId_t id, Params& params)
 {
     cfg_ = QuetzConfigManager::fromParams(params, output_).config();
     output_->setVerboseLevel(cfg_.verbosity);
+    if (cfg_.sst_window_cache) {
+        if (!cfg_.system_mode || cfg_.vcpu_count != 1 || !cfg_.window_big_endian)
+            output_->fatal(CALL_INFO, -1,
+                "sst_window_cache=1 requires single-vCPU big-endian system mode.\n");
+        try {
+            window_cache_.configure(cfg_.sst_window_base, cfg_.sst_window_size);
+        } catch (const std::exception& e) {
+            output_->fatal(CALL_INFO, -1, "%s\n", e.what());
+        }
+    }
 
     // The system-mode sync-MMIO path is single-vCPU only: the launcher
     // instantiates every sst-mmio-bridge aperture with vcpu_id=0, so two MTTCG
@@ -298,7 +308,7 @@ bool QuetzCPU::tick(SST::Cycle_t ) {
 
     // Keep the simulation alive while a posted (async) offload is outstanding,
     // even if every vCPU has halted — its completion still has to be delivered.
-    if (hasAsyncInFlight())
+    if (window_cache_.active() || cache_request_outstanding_ || hasAsyncInFlight())
         return false;
 
     if (!stop_ticking_) {

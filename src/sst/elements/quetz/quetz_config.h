@@ -63,6 +63,7 @@ struct QuetzConfig {
     // launcher and mailbox both consume these fields — fromParams is the
     // single owner); device-register apertures keep value semantics
     // regardless.
+    bool     sst_window_cache = false;
     bool     window_big_endian = false;
     uint64_t sst_window_base   = 0;
     uint64_t sst_window_size   = 0;
