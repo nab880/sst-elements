@@ -120,6 +120,7 @@ cpu_params = {
     "system_mode_loader": loader,
     "qemu_args": QEMU_ARGS,
     "window_big_endian": 1,
+    "sst_window_cache": int(globals().get("WINDOW_CACHE", False)),
 }
 if stdout_file:
     cpu_params["appstdout"] = stdout_file

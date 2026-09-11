@@ -77,6 +77,8 @@ int qemu_plugin_install(qemu_plugin_id_t id,
     for (int i = 0; i < argc; i++) {
         if (strncmp(argv[i], "shmname=", 8) == 0)
             g_shmem_name = std::string(argv[i] + 8);
+        else if (strcmp(argv[i], "cache_ops=1") == 0)
+            g_cache_ops = true;
         else if (strncmp(argv[i], "detailed=", 9) == 0)
             g_detailed = (argv[i][9] == '1');
         else if (strncmp(argv[i], "mmio_base=", 10) == 0)
@@ -88,6 +90,20 @@ int qemu_plugin_install(qemu_plugin_id_t id,
         else if (strncmp(argv[i], "win_size=", 9) == 0)
             g_sst_win_size = strtoull(argv[i] + 9, nullptr, 0);
     }
+
+    if (g_cache_ops && (strcmp(target, "m68k") != 0 || !g_system_mode ||
+                        g_sst_win_size == 0)) {
+        fprintf(stderr, "[qemu_sst_plugin] ERROR: cache_ops=1 requires "
+                        "ColdFire system mode and an SST-backed window.\n");
+        return 1;
+    }
+#if QEMU_PLUGIN_VERSION < 3
+    if (g_cache_ops) {
+        fprintf(stderr, "[qemu_sst_plugin] ERROR: cache_ops=1 requires "
+                        "QEMU plugin API version 3 or newer.\n");
+        return 1;
+    }
+#endif
 
     if (g_detailed && !g_insn_classifier->usesPreciseMemCallbacks()) {
         fprintf(stderr,

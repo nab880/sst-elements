@@ -30,6 +30,7 @@ libquetz_la_SOURCES = \
     quetz_core_backend.cc \
     quetz_core_backend.h \
     quetzcpu_mmio_sync.cc \
+    quetz_window_cache.h \
     quetz_mmio_sync.h \
     quetz_accelerator_port.h \
     quetz_balar_accelerator_port.cc \
@@ -40,6 +41,7 @@ libquetz_la_SOURCES = \
     quetz_qemu_frontend.h \
     quetz_launcher.cc \
     quetz_launcher.h \
+    quetz_cache_launch.h \
     quetz_region_handler.h \
     quetz_region_table.cc \
     quetz_region_table.h \
@@ -101,6 +103,7 @@ libqemu_sst_plugin_la_SOURCES = \
     qemu_plugin/plugin_state.h \
     qemu_plugin/instrument.cpp \
     qemu_plugin/instrument.h \
+    qemu_plugin/coldfire_cache_ops.h \
     qemu_plugin/insn_classifier.cpp \
     qemu_plugin/insn_classifier.h \
     qemu_plugin/mem_access_handler.cpp \
@@ -214,6 +217,9 @@ EXTRA_DIST =	GETTING-STARTED.md \
 	tests/binaries/stride_read_1 \
 	tests/binaries/stride_read_64 \
 	tests/binaries/write_burst \
+	tests/manual/coldfire_cache_api_probe.S \
+	tests/manual/coldfire_cache_api_probe.cpp \
+	tests/manual/run_coldfire_cache_api_probe.py \
 	tests/manual/validate_against_libmem.py \
 	tests/quetz_test_helpers.py \
 	tests/sysmode/basic_quetz_balar_coldfire.py \
@@ -227,6 +233,7 @@ EXTRA_DIST =	GETTING-STARTED.md \
 	tests/sysmode/basic_quetz_gpu.py \
 	tests/sysmode/basic_quetz_mmio.py \
 	tests/sysmode/basic_quetz_raptor_fft_reference.py \
+	tests/sysmode/basic_quetz_raptor_cache_dma.py \
 	tests/sysmode/basic_quetz_sysmode.py \
 	tests/sysmode/firmware/arm_m7_hello \
 	tests/sysmode/firmware/bsp_torture \
@@ -325,6 +332,9 @@ EXTRA_DIST =	GETTING-STARTED.md \
 	tests/unit/test_config_manager.cc \
 	tests/unit/test_decoder_aarch64.cc \
 	tests/unit/test_decoder_generic.cc \
+	tests/unit/test_coldfire_cache_ops.cc \
+	tests/unit/test_cache_launch.cc \
+	tests/unit/test_window_cache.cc \
 	tests/unit/test_decoder_riscv.cc \
 	tests/unit/test_fft_compute.cc \
 	tests/unit/test_scale_offset.cc \

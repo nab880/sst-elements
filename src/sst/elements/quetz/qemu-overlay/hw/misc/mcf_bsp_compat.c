@@ -13,6 +13,7 @@
 
 #include "qemu/osdep.h"
 #include "hw/core/cpu.h"
+#include "hw/boards.h"
 #include "hw/qdev-core.h"
 #include "hw/qdev-properties.h"
 #include "exec/address-spaces.h"
@@ -30,6 +31,7 @@
 #include "raptor_bsp_blocks.h"
 
 #define TYPE_MCF_BSP_COMPAT "mcf-bsp-compat"
+#define LEGACY_BSP_COMPAT_TARGET "mcf5208-legacy"
 OBJECT_DECLARE_SIMPLE_TYPE(McfBspCompatState, MCF_BSP_COMPAT)
 
 typedef struct McfBspTrigger {
@@ -80,6 +82,19 @@ struct McfBspCompatState {
 /* The overlayable-block allowlist (raptor_bsp_blocks[], RaptorBspBlockDesc)
  * and the RAPTOR_BSP_COMPAT_TARGET token are generated from the board
  * contract; see raptor_bsp_blocks.h. */
+
+/* Historical raptor-hello is a hybrid MCF5208 diagnostic, not Raptor BSP
+ * acceptance firmware. Its immutable ELF probes a synthetic PLL lock and
+ * PODR latch at addresses that belong to GPIO/unmapped space on Raptor.
+ * Keep that old fixture isolated from the generated Raptor ownership map.
+ * This target may only be used with mcf5208evb and an explicit profile. */
+static const RaptorBspBlockDesc legacy_bsp_blocks[] = {
+    { "fbcs",  0xfc008000, 0x4000 },
+    { "scm2",  0xfc040000, 0x4000 },
+    { "eport", 0xfc088000, 0x4000 },
+    { "pll",   0xfc090000, 0x4000 },
+    { "gpio",  0xfc0a4000, 0x4000 },
+};
 
 static uint64_t width_mask(unsigned width)
 {
@@ -139,13 +154,18 @@ static bool dict_u64(QDict *dict, const char *key, uint64_t def,
     return true;
 }
 
-static const RaptorBspBlockDesc *target_block(const char *name, uint64_t base,
+static const RaptorBspBlockDesc *target_block(McfBspCompatState *s,
+                                              const char *name, uint64_t base,
                                               uint64_t size)
 {
+    bool legacy = !strcmp(s->target, LEGACY_BSP_COMPAT_TARGET);
+    const RaptorBspBlockDesc *blocks = legacy ? legacy_bsp_blocks : raptor_bsp_blocks;
+    size_t count = legacy ? G_N_ELEMENTS(legacy_bsp_blocks) :
+                            G_N_ELEMENTS(raptor_bsp_blocks);
     size_t i;
 
-    for (i = 0; i < G_N_ELEMENTS(raptor_bsp_blocks); i++) {
-        const RaptorBspBlockDesc *d = &raptor_bsp_blocks[i];
+    for (i = 0; i < count; i++) {
+        const RaptorBspBlockDesc *d = &blocks[i];
         if (!strcmp(name, d->name) && base == d->base && size <= d->size) {
             return d;
         }
@@ -435,10 +455,10 @@ static bool parse_block(McfBspCompatState *s, QDict *dict, Error **errp)
         }
         return false;
     }
-    if (!size || !target_block(name, base, size)) {
+    if (!size || !target_block(s, name, base, size)) {
         error_setg(errp, "mcf-bsp-compat: block '%s' is not an allowlisted "
-                   "Raptor range (base=0x%" PRIx64 ", size=0x%" PRIx64 ")",
-                   name, base, size);
+                   "%s range (base=0x%" PRIx64 ", size=0x%" PRIx64 ")",
+                   name, s->target, base, size);
         return false;
     }
     for (guint i = 0; i < s->blocks->len; i++) {
@@ -501,10 +521,10 @@ static bool load_profile(McfBspCompatState *s, Error **errp)
     version = qdict_get_try_int(root, "version", 0);
     target = qdict_get_try_str(root, "target");
     blocks = qdict_get_qlist(root, "blocks");
-    if (version != 1 || !target || strcmp(target, RAPTOR_BSP_COMPAT_TARGET) ||
+    if (version != 1 || !target || strcmp(target, s->target) ||
         !blocks) {
         error_setg(errp, "mcf-bsp-compat: profile requires version=1, "
-                   "target='" RAPTOR_BSP_COMPAT_TARGET "', and a blocks array");
+                   "target='%s', and a blocks array", s->target);
         qobject_unref(root_obj);
         return false;
     }
@@ -538,9 +558,18 @@ static void mcf_bsp_compat_realize(DeviceState *dev, Error **errp)
     guint i;
 
     s->blocks = g_ptr_array_new_with_free_func(bsp_block_free);
-    if (!s->target || strcmp(s->target, RAPTOR_BSP_COMPAT_TARGET)) {
-        error_setg(errp, "mcf-bsp-compat: only target="
-                   RAPTOR_BSP_COMPAT_TARGET " is supported");
+    if (!s->target || (strcmp(s->target, RAPTOR_BSP_COMPAT_TARGET) &&
+                       strcmp(s->target, LEGACY_BSP_COMPAT_TARGET))) {
+        error_setg(errp, "mcf-bsp-compat: supported targets are "
+                   RAPTOR_BSP_COMPAT_TARGET " and " LEGACY_BSP_COMPAT_TARGET);
+        return;
+    }
+    if (!strcmp(s->target, LEGACY_BSP_COMPAT_TARGET) &&
+        (strcmp(MACHINE_GET_CLASS(qdev_get_machine())->name, "mcf5208evb") ||
+         s->discover || !s->profile || !s->profile[0])) {
+        error_setg(errp, "mcf-bsp-compat: " LEGACY_BSP_COMPAT_TARGET
+                   " requires the mcf5208evb diagnostic machine and an "
+                   "explicit profile; discovery is unsupported");
         return;
     }
     if (s->profile && s->profile[0]) {

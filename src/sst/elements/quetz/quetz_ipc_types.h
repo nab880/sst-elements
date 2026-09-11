@@ -27,6 +27,9 @@ enum QuetzShmemCmd : uint32_t {
     QUETZ_CMD_EXIT           = 3,
     QUETZ_CMD_MMIO_READ_REQ  = 4,
     QUETZ_CMD_MMIO_WRITE_REQ = 5,
+    // Synchronous cache operation: addr=control register, size=0 MOVEC /
+    // 1 CPUSHL, write_val=register value / instruction word. No layout change.
+    QUETZ_CMD_CACHE_OP       = 7,
     // A run of `size` consecutive non-memory insns of one `insn_class`; the SST
     // input stage re-expands it into `size` NOP events (P2 ring-traffic cut).
     QUETZ_CMD_COMPUTE_RUN    = 6,

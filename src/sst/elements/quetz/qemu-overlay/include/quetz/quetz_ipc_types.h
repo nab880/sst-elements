@@ -16,6 +16,9 @@ enum QuetzShmemCmd {
     QUETZ_CMD_EXIT           = 3,
     QUETZ_CMD_MMIO_READ_REQ  = 4,
     QUETZ_CMD_MMIO_WRITE_REQ = 5,
+    // Synchronous cache operation: addr=control register, size=0 MOVEC /
+    // 1 CPUSHL, write_val=register value / instruction word. No layout change.
+    QUETZ_CMD_CACHE_OP       = 7,
 };
 
 typedef struct QuetzMmioResponseSlot {

@@ -53,6 +53,7 @@ QuetzConfig QuetzConfig::fromParams(Params& params, SST::Output* out) {
     if (cfg.async_completion_depth == 0)
         cfg.async_completion_depth = 1;
 
+    cfg.sst_window_cache = params.find<bool>("sst_window_cache", false);
     cfg.window_big_endian = params.find<bool>("window_big_endian", false);
     {
         // SINGLE owner of the SST-window range: the deck exports

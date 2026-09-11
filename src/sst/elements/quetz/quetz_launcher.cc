@@ -11,6 +11,7 @@
 
 #include <sst_config.h>
 #include "quetz_launcher.h"
+#include "quetz_cache_launch.h"
 
 #include <cstdlib>
 #include <inttypes.h>
@@ -63,6 +64,10 @@ QemuLauncher::QemuLauncher(SST::Output* out)
 pid_t QemuLauncher::spawn(const QuetzConfig& cfg,
                           const std::string& shmem_region_name,
                           bool detailed_tracking) {
+    if (cfg.sst_window_cache) {
+        if (const char* error = windowCacheLaunchError(cfg.qemu_extra_args))
+            output_->fatal(CALL_INFO, -1, "sst_window_cache=1: %s.\n", error);
+    }
     std::string resolved_plugin = cfg.qemu_plugin;
     if (resolved_plugin.empty()) {
         std::string libexec =
@@ -79,6 +84,8 @@ pid_t QemuLauncher::spawn(const QuetzConfig& cfg,
     std::string plugin_arg = resolved_plugin + ",shmname=" + shmem_region_name;
     if (detailed_tracking)
         plugin_arg += ",detailed=1";
+    if (cfg.sst_window_cache)
+        plugin_arg += ",cache_ops=1";
 
     const char* mmio_start_env = getenv("QUETZ_MMIO_START");
     const char* mmio_end_env   = getenv("QUETZ_MMIO_END");
@@ -185,6 +192,7 @@ pid_t QemuLauncher::spawn(const QuetzConfig& cfg,
     bool use_bsp = (bsp_profile && bsp_profile[0]) ||
                    (bsp_discover && bsp_discover[0] == '1');
     bool native_raptor = qemuMachineIs(cfg.qemu_extra_args, "raptor-core2");
+    bool legacy_bsp = bsp_target && !strcmp(bsp_target, "mcf5208-legacy");
     if (use_bsp) {
         if (!cfg.system_mode)
             output_->fatal(CALL_INFO, -1,
@@ -203,6 +211,10 @@ pid_t QemuLauncher::spawn(const QuetzConfig& cfg,
                 "raptor-core2 owns its reviewed BSP devices; compatibility "
                 "profiles/discovery may only overlay the legacy mcf5208evb "
                 "diagnostic machine.\n");
+        if (legacy_bsp && !qemuMachineIs(cfg.qemu_extra_args, "mcf5208evb"))
+            output_->fatal(CALL_INFO, -1,
+                "mcf5208-legacy compatibility requires the mcf5208evb "
+                "diagnostic machine.\n");
 
         std::string dev = "mcf-bsp-compat,target=";
         dev += (bsp_target && bsp_target[0]) ? bsp_target : "raptor";
@@ -219,28 +231,32 @@ pid_t QemuLauncher::spawn(const QuetzConfig& cfg,
         argv_strs.push_back("-device");
         argv_strs.push_back(dev);
 
-        // The DMA timers (DTIM0-3) are a dedicated device rather than compat
-        // register storage: DTCN must advance with virtual time so BSP
-        // busy-wait sleeps terminate. It owns 0xFC070000-0xFC07FFFF (the
-        // dtimer-model blocks generated into raptor_dtimer_blocks.h) and is
-        // therefore excluded from the mcf-bsp-compat allowlist. Enabled on the
-        // same gate: whenever BSP compatibility is active, the real Raptor
-        // always has these timers.
-        std::string dtimer_dev = "mcf-dtimer,target=";
-        dtimer_dev += (bsp_target && bsp_target[0]) ? bsp_target : "raptor";
-        argv_strs.push_back("-device");
-        argv_strs.push_back(dtimer_dev);
+        // The historical hybrid fixture has its own synthetic PLL/GPIO
+        // profile. Raptor peripherals must not overlap that legacy map.
+        if (!legacy_bsp) {
+            // The DMA timers (DTIM0-3) are a dedicated device rather than compat
+            // register storage: DTCN must advance with virtual time so BSP
+            // busy-wait sleeps terminate. It owns 0xFC070000-0xFC07FFFF (the
+            // dtimer-model blocks generated into raptor_dtimer_blocks.h) and is
+            // therefore excluded from the mcf-bsp-compat allowlist. Enabled on the
+            // same gate: whenever BSP compatibility is active, the real Raptor
+            // always has these timers.
+            std::string dtimer_dev = "mcf-dtimer,target=";
+            dtimer_dev += (bsp_target && bsp_target[0]) ? bsp_target : "raptor";
+            argv_strs.push_back("-device");
+            argv_strs.push_back(dtimer_dev);
 
-        // GPIO banks (GPIOB0-3) are likewise a dedicated device rather than
-        // compat register storage: value writes use mask-in-high-byte and
-        // direction writes are read-modify-write, semantics the generic compat
-        // register model does not implement. It owns 0xFC084000-0xFC093FFF (the
-        // gpio-model blocks in raptor_gpio_blocks.h), excluded from the compat
-        // allowlist. Same use_bsp activation gate.
-        std::string gpio_dev = "mcf-gpio,target=";
-        gpio_dev += (bsp_target && bsp_target[0]) ? bsp_target : "raptor";
-        argv_strs.push_back("-device");
-        argv_strs.push_back(gpio_dev);
+            // GPIO banks (GPIOB0-3) are likewise a dedicated device rather than
+            // compat register storage: value writes use mask-in-high-byte and
+            // direction writes are read-modify-write, semantics the generic compat
+            // register model does not implement. It owns 0xFC084000-0xFC093FFF (the
+            // gpio-model blocks in raptor_gpio_blocks.h), excluded from the compat
+            // allowlist. Same use_bsp activation gate.
+            std::string gpio_dev = "mcf-gpio,target=";
+            gpio_dev += (bsp_target && bsp_target[0]) ? bsp_target : "raptor";
+            argv_strs.push_back("-device");
+            argv_strs.push_back(gpio_dev);
+        }
     }
 
     if (cfg.system_mode && !cfg.system_mode_loader.empty())

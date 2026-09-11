@@ -17,6 +17,7 @@ QuetzTunnel*        g_tunnel           = nullptr;
 std::string         g_shmem_name;
 bool                g_detailed         = false;
 bool                g_system_mode      = false;
+bool                g_cache_ops        = false;
 std::atomic<bool>   g_mem_seen[PLUGIN_MAX_VCPUS];
 QuetzInsnClass      g_prev_cls[PLUGIN_MAX_VCPUS];
 InsnClassifier*     g_insn_classifier  = nullptr;
