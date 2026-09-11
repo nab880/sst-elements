@@ -4,4 +4,4 @@ build({"fault_model": "campaign", "ecc_scheme": "secded",
        "campaign_mode": "cell", "campaign_errors_fixed": 1,
        "test_total_min": 1, "test_total_max": 1,
        "test_correctable_min": 1, "test_correctable_max": 1},
-      {"expect_mutated": 0, "expect_escapes": 0})
+      {"expect_mutated": 0, "expect_abort": 0, "expect_escapes": 0})

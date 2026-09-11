@@ -11,5 +11,5 @@ for name, virtual_offset in (("physical", 0), ("virtual", 0x1000)):
           {"requests": 3, "payload_size": 64,
            "request_addresses": "0x4000,0x4010,0x4008",
            "virtual_offset": virtual_offset, "expect_same_payload": True,
-           "expect_mutated": 3, "expect_escapes": 3},
+           "expect_mutated": 3, "expect_abort": 0, "expect_escapes": 3},
           name=name)

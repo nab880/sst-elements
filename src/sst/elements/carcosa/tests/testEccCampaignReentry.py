@@ -7,4 +7,4 @@ build({"fault_model": "campaign", "ecc_scheme": "secded",
        "test_clean_min": 2, "test_clean_max": 2,
        "test_escape_min": 2, "test_escape_max": 2},
       {"requests": 4, "kernel_sequence": "TARGET,TARGET,OTHER,TARGET",
-       "expect_mutated": 2, "expect_escapes": 2})
+       "expect_mutated": 2, "expect_abort": 0, "expect_escapes": 2})

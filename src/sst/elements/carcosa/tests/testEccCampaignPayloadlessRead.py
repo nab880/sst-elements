@@ -11,5 +11,5 @@ for responses_only in (True, False):
            "test_total_max": 1 if responses_only else 2,
            "test_escape_min": 1, "test_escape_max": 1},
           {"region_name": "action_queue", "payload_size": 64,
-           "expect_mutated": 1, "expect_escapes": 1},
+           "expect_mutated": 1, "expect_abort": 0, "expect_escapes": 1},
           name="responses" if responses_only else "all_events")

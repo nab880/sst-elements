@@ -9,4 +9,4 @@ build({"fault_model": "campaign", "ecc_scheme": "none",
       {"requests": 2, "payload_size": 64, "region_name": "action_queue",
        "request_addresses": "0x4080,0x4000",
        "expect_mutated_sequence": "0,1",
-       "expect_mutated": 1, "expect_escapes": 1})
+       "expect_mutated": 1, "expect_abort": 0, "expect_escapes": 1})

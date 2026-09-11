@@ -42,7 +42,7 @@ public:
         {"test_mutated_max", "Maximum number of changed response payloads (-1 disables).", "-1"},
         {"test_min_changed_bits", "Minimum bit differences in every changed response (0 disables).", "0"},
         {"expect_mutated", "Expected mutated responses (-1 disables).", "-1"},
-        {"expect_abort", "Unsupported until frame integration; omit this parameter.", "-1"},
+        {"expect_abort", "Expected frameAbortRequested (-1 disables).", "-1"},
         {"expect_escapes", "Expected cumulative escapes (-1 disables).", "-1"})
     SST_ELI_DOCUMENT_PORTS(
         {"cpu_side", "Connect to EccGuard highlink.", {"memHierarchy.MemEventBase"}},
@@ -65,7 +65,7 @@ private:
     uint64_t virtual_offset_ = 0;
     bool expect_same_payload_ = false;
     int requests_ = 1, payload_size_ = 8, issued_ = 0, completed_ = 0;
-    int mutated_ = 0, expect_mutated_ = -1;
+    int mutated_ = 0, expect_mutated_ = -1, expect_abort_ = -1;
     int64_t expect_escapes_ = -1;
     int64_t elapsed_min_ps_ = -1, elapsed_max_ps_ = -1;
     int mutated_min_ = -1, mutated_max_ = -1;

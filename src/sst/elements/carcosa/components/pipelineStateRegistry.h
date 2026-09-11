@@ -45,6 +45,7 @@ struct MemoryRegion {
 struct PipelineStateBase {
     int         currentKernel     = -1;
     std::string currentKernelName;
+    std::string actuationKernelName = "ACTUATE";
     int         pipelineCycle     = 0;
 
     uint64_t stagedBase = 0;
@@ -52,9 +53,71 @@ struct PipelineStateBase {
 
     std::vector<MemoryRegion> regions;
 
-    /** Generic cumulative flip/escape counters from EccGuard. */
+/**
+ * EccGuard DUE+drop_frame flag; agents fast-forward FSM then clear.
+ */
+    bool     frameAbortRequested = false;
+
+    /** Cumulative count of pipeline cycles that were aborted due to DUE. */
+    int      framesDropped = 0;
+
+/**
+ * Per-frame record for ActionScorer (checksum + escape snapshot at close).
+ */
+    struct FrameRecord {
+        int         pipelineCycle      = 0;
+        int         kernelAtClose      = -1;
+        std::string kernelAtCloseName;
+        // Kernel with the most EccGuard escapes this frame (else kernelAtClose).
+        int         attributingKernel  = -1;
+        std::string attributingKernelName;
+        bool        dropped            = false;
+        uint64_t    actionChecksum     = 0;
+        // Quantized-action fingerprint via HYADES_ACTION_TOKEN (sub-bin noise
+        // insensitive). 0 = unpublished; scorer falls back to checksum.
+        uint64_t    actionToken        = 0;
+        uint64_t    cumulativeEscapes  = 0;
+        uint64_t    cumulativeFlips    = 0;
+        uint64_t    simTimePs          = 0;
+    };
+    std::vector<FrameRecord> frames;
+
+/**
+ * Per-frame per-kernel SilentEscape counts; agent argmaxes then resets.
+ */
+    std::unordered_map<std::string, uint64_t> eccPerFrameEscapesByKernel;
+
+/**
+ * Argmax over eccPerFrameEscapesByKernel; "" if empty/all-zero.
+ */
+    std::string argmaxEccPerFrameEscapesByKernel() const {
+        std::string best_name;
+        uint64_t    best_v = 0;
+        for (const auto& kv : eccPerFrameEscapesByKernel) {
+            if (kv.second > best_v) {
+                best_v    = kv.second;
+                best_name = kv.first;
+            }
+        }
+        return best_name;
+    }
+
+    /** Helper: zero out the per-frame escape map (consumer at frame close). */
+    void resetEccPerFrameEscapesByKernel() {
+        for (auto& kv : eccPerFrameEscapesByKernel) kv.second = 0u;
+    }
+
+    /** Cumulative flip/escape counters from EccGuard for per-frame deltas. */
     uint64_t eccCumulativeEscapes = 0;
     uint64_t eccCumulativeFlips   = 0;
+
+    /** Watcher checksum during ACTUATE; prefer over MMIO when valid. */
+    uint64_t watcherActionChecksum     = 0;
+    bool     watcherActionChecksumValid = false;
+    /** True if any CPU-observed byte in the critical window differed this frame. */
+    bool     watcherCriticalCorrupted  = false;
+    /** Per-run count of frames where watcherCriticalCorrupted was set (finish stat). */
+    uint64_t framesCriticalRegionCorrupted = 0;
 
     /** Returns the region id (== slot index) whose range contains addr, or -1. */
     int regionIdForAddress(uint64_t addr) const {
@@ -99,10 +162,41 @@ struct PipelineStateBase {
                        std::move(name)};
     }
 
+    bool requestFrameAbort() {
+        if (frameAbortRequested) return false;
+        frameAbortRequested = true;
+        return true;
+    }
+
+    bool consumeFrameAbort() {
+        if (!frameAbortRequested) return false;
+        frameAbortRequested = false;
+        ++framesDropped;
+        return true;
+    }
+
     void addEccCounts(uint64_t escapes, uint64_t flips) {
         eccCumulativeEscapes += escapes;
         eccCumulativeFlips += flips;
     }
+
+    void addKernelEscape(const std::string& kernel) {
+        ++eccPerFrameEscapesByKernel[kernel];
+    }
+
+    void publishWatcherChecksum(uint64_t checksum) {
+        watcherActionChecksum = checksum;
+        watcherActionChecksumValid = true;
+    }
+
+    void retireWatcherChecksum() { watcherActionChecksumValid = false; }
+
+    void recordWatcherCorruption(bool corrupted) {
+        watcherCriticalCorrupted = corrupted;
+        if (corrupted) ++framesCriticalRegionCorrupted;
+    }
+
+    void appendFrame(FrameRecord frame) { frames.push_back(std::move(frame)); }
 
     virtual ~PipelineStateBase() = default;
 };

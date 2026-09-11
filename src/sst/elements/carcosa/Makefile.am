@@ -191,3 +191,39 @@ EXTRA_DIST += \
 nobase_sst_HEADERS += \
     examples/SimplePipeline/simplePipelineExample.h \
     injectors/portModuleStateGate.h
+
+# Add pipeline frame control, fault observation, and action scoring
+libcarcosa_la_SOURCES += \
+    components/actionScorer.cc \
+    components/actionScorer.h \
+    components/carcosaHash.h \
+    components/criticalActionWatcher.cc \
+    components/criticalActionWatcher.h \
+    components/fourStateAgent.cc \
+    components/fourStateAgent.h \
+    components/framePipelineDriver.cc \
+    components/framePipelineDriver.h \
+    components/vlaRegions.h
+EXTRA_DIST += \
+    tests/fourstate.c \
+    tests/framePipelineCommon.py \
+    tests/testActionScorerDropDivergence.py \
+    tests/testActionScorerTaxonomy.py \
+    tests/testActionScorerTokenFallback.py \
+    tests/testEccGuardRegionPolicy.py \
+    tests/testEccRuntimeDueDrop.py \
+    tests/testFourStateRegistry.py \
+    tests/testFourStateRegistryGated.py \
+    tests/testFramePipelineCachedResponse.py \
+    tests/testFramePipelineClean.py \
+    tests/testFramePipelineCorrupt.py \
+    tests/testFramePipelineFallback.py \
+    tests/testFramePipelineMissingGolden.py \
+    tests/testStateGateRegionNoOverlap.py \
+    tests/testStateGateRegionOverlap.py
+nobase_sst_HEADERS += \
+    components/actionScorer.h \
+    components/carcosaHash.h \
+    components/criticalActionWatcher.h \
+    components/fourStateAgent.h \
+    components/vlaRegions.h

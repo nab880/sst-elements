@@ -49,8 +49,7 @@ EccRuntimeTestDriver::EccRuntimeTestDriver(ComponentId_t id, Params& params)
     mutated_max_ = params.find<int>("test_mutated_max", -1);
     min_changed_bits_ = params.find<unsigned>("test_min_changed_bits", 0);
     expect_mutated_ = params.find<int>("expect_mutated", -1);
-    if (params.contains("expect_abort"))
-        out_->fatal(CALL_INFO, -1, "EccRuntimeTestDriver: expect_abort requires frame integration.\n");
+    expect_abort_ = params.find<int>("expect_abort", -1);
     expect_escapes_ = params.find<int64_t>("expect_escapes", -1);
     virtual_offset_ = params.find<uint64_t>("virtual_offset", 0);
     expect_same_payload_ = params.find<bool>("expect_same_payload", false);
@@ -165,16 +164,17 @@ void EccRuntimeTestDriver::finish() {
                     elapsed_ps_, elapsed_min_ps_, elapsed_max_ps_);
     }
     if (expect_mutated_ >= 0 && mutated_ != expect_mutated_) ok = false;
+    if (expect_abort_ >= 0 && state_->frameAbortRequested != (expect_abort_ != 0)) ok = false;
     if (expect_escapes_ >= 0 && state_->eccCumulativeEscapes !=
         static_cast<uint64_t>(expect_escapes_)) ok = false;
     if (!ok) {
         out_->fatal(CALL_INFO, -1,
-            "EccRuntimeTestDriver: FAIL completed=%d/%d mutated=%d escapes=%" PRIu64 "\n",
-            completed_, requests_, mutated_,
+            "EccRuntimeTestDriver: FAIL completed=%d/%d mutated=%d abort=%d escapes=%" PRIu64 "\n",
+            completed_, requests_, mutated_, state_->frameAbortRequested ? 1 : 0,
             state_->eccCumulativeEscapes);
     }
-    out_->output("EccRuntimeTestDriver: PASS completed=%d mutated=%d escapes=%" PRIu64 "\n",
-                 completed_, mutated_,
+    out_->output("EccRuntimeTestDriver: PASS completed=%d mutated=%d abort=%d escapes=%" PRIu64 "\n",
+                 completed_, mutated_, state_->frameAbortRequested ? 1 : 0,
                  state_->eccCumulativeEscapes);
     delete out_; out_ = nullptr;
 }

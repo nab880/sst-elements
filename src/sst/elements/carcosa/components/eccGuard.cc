@@ -102,6 +102,7 @@ std::string resolveCampaignKernel(const std::string& raw) {
 
 bool parseDueAction(const std::string& s, EccGuard::DueAction& action) {
     if (s == "latency_only" || s == "LATENCY_ONLY") action = EccGuard::DueAction::LatencyOnly;
+    else if (s == "drop_frame" || s == "drop" || s == "DROP_FRAME") action = EccGuard::DueAction::DropFrame;
     else return false;
     return true;
 }
@@ -173,7 +174,7 @@ EccGuard::EccGuard(ComponentId_t id, Params& params) : Component(id) {
                     payload_dtype.c_str());
     }
     if (!parseDueAction(due_action, due_action_)) {
-        out_->fatal(CALL_INFO, -1, "EccGuard: unsupported due_action '%s'; only latency_only is available without frame integration.\n",
+        out_->fatal(CALL_INFO, -1, "EccGuard: unknown due_action '%s'.\n",
                     due_action.c_str());
     }
 
@@ -382,6 +383,7 @@ EccGuard::EccGuard(ComponentId_t id, Params& params) : Component(id) {
     stat_escape_high_blast_  = registerStatistic<uint64_t>("escape_high_blast");
     stat_escape_low_blast_   = registerStatistic<uint64_t>("escape_low_blast");
     stat_due_poisoned_       = registerStatistic<uint64_t>("due_poisoned_bits");
+    stat_frames_aborted_     = registerStatistic<uint64_t>("frames_aborted");
     stat_resident_born_      = registerStatistic<uint64_t>("resident_faults_born");
     stat_resident_scrubbed_  = registerStatistic<uint64_t>("resident_faults_scrubbed");
     stat_resident_scrub_due_ = registerStatistic<uint64_t>("resident_scrub_due");
@@ -455,7 +457,7 @@ void EccGuard::setup() {
                           : (fault_model_ == FaultModel::Campaign ? "campaign"
                                                                   : "poisson")),
                      EccPayloadCorruptor::dtypeName(payload_dtype_),
-                     "latency_only",
+                     due_action_ == DueAction::DropFrame ? "drop_frame" : "latency_only",
                      fault_event_rate_);
     }
 }
@@ -520,14 +522,14 @@ void EccGuard::finish() {
     }
 
     if (escape_high_blast_total_ + escape_low_blast_total_ > 0
-        || due_poison_flips_total_ > 0) {
-        out_->output("\n=== EccGuard %s Escape Summary ===\n", getName().c_str());
-        out_->output("escape_high_blast,escape_low_blast,payload_dtype,due_poisoned_bits\n");
-        out_->output("%" PRIu64 ",%" PRIu64 ",%s,%" PRIu64 "\n",
+        || frames_aborted_total_ > 0 || due_poison_flips_total_ > 0) {
+        out_->output("\n=== EccGuard %s Escape/Abort Summary ===\n", getName().c_str());
+        out_->output("escape_high_blast,escape_low_blast,frames_aborted,payload_dtype,due_poisoned_bits\n");
+        out_->output("%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%s,%" PRIu64 "\n",
                      escape_high_blast_total_, escape_low_blast_total_,
-                     EccPayloadCorruptor::dtypeName(payload_dtype_),
+                     frames_aborted_total_, EccPayloadCorruptor::dtypeName(payload_dtype_),
                      due_poison_flips_total_);
-        out_->output("=== End EccGuard %s Escape Summary ===\n\n", getName().c_str());
+        out_->output("=== End EccGuard %s Escape/Abort Summary ===\n\n", getName().c_str());
     }
 
     if (fault_model_ == FaultModel::Resident) {
@@ -634,9 +636,19 @@ void EccGuard::noteCampaignKernelEntry(const std::string& kernel_name) {
                                      campaign_events_this_entry_);
 }
 
+void EccGuard::requestFrameAbort() {
+    if (state_key_.empty()) return;
+    PipelineStateBase* s =
+        PipelineStateRegistry<PipelineStateBase>::getMutable(state_key_);
+    if (!s) return;
+    if (!s->requestFrameAbort()) return;
+    ++frames_aborted_total_;
+    if (stat_frames_aborted_) stat_frames_aborted_->addData(1);
+}
 
 namespace {
-// Publish generic cumulative ECC counters for consumers sharing this state key.
+// Helper: bump the registry's cumulative ECC counters so the ActionScorer
+// (and any other consumer) can compute per-frame deltas. Cheap pointer chase.
 void publishCumulative(const std::string& state_key, uint64_t escapes_inc,
                        uint64_t flips_inc) {
     if (state_key.empty()) return;
@@ -646,6 +658,15 @@ void publishCumulative(const std::string& state_key, uint64_t escapes_inc,
     s->addEccCounts(escapes_inc, flips_inc);
 }
 
+// Bump per-frame per-kernel escape counts (argmaxed at frame close).
+void publishPerFrameEscape(const std::string& state_key,
+                           const std::string& kernel_name) {
+    if (state_key.empty()) return;
+    PipelineStateBase* s =
+        PipelineStateRegistry<PipelineStateBase>::getMutable(state_key);
+    if (!s) return;
+    s->addKernelEscape(kernel_name);
+}
 } // namespace
 
 void EccGuard::handleHighlink(SST::Event* ev) {
@@ -1390,10 +1411,15 @@ uint64_t EccGuard::applyPolicy(MemEvent* mev) {
                                         draw.per_word_chip_errors, entry.scheme);
     EccOutcome     outcome = line.outcome;
 
-    // DUE words forward poison by flipping their drawn error bits into the
-    // payload, including when another word on the line silently escapes.
+    // DUE response shared by DUE and Escape line outcomes (hardware fires per
+    // word). drop_frame aborts; latency_only forwards poison by flipping the
+    // DUE words' drawn error bits into the payload.
     auto handleDueWords = [&]() {
         if (line.due_words.empty()) return;
+        if (due_action_ == DueAction::DropFrame) {
+            requestFrameAbort();
+            return;
+        }
         unsigned flips = 0;
         for (uint32_t w : line.due_words) {
             EccPayloadFlipCount count = draw.exact_bits.empty()
@@ -1444,6 +1470,7 @@ uint64_t EccGuard::applyPolicy(MemEvent* mev) {
         if (lo && stat_escape_low_blast_)  stat_escape_low_blast_->addData(lo);
         high_blast_flip = (hi > 0);
         publishCumulative(state_key_, /*escapes*/1, /*flips*/flips);
+        publishPerFrameEscape(state_key_, kernel_name);
         handleDueWords();
         if (!line.due_words.empty() && entry.due_latency_ps > latency_ps)
             latency_ps = entry.due_latency_ps;

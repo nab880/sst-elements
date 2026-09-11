@@ -13,7 +13,8 @@
 #define SST_ELEMENTS_CARCOSA_ECC_GUARD_H
 
 // Inline memHierarchy ECC boundary: classify outcomes, apply scrub latency.
-// JEDEC mixture and resident models are independent of workload frame handling.
+// jedec_mix weights default to Sridharan ASPLOS'15 Table 4 (cross-check:
+// Schroeder SIGMETRICS'09). due_action=drop_frame sets frameAbortRequested.
 
 #include "sst/elements/carcosa/components/eccPolicy.h"
 #include "sst/elements/carcosa/components/eccPayloadCorruptor.h"
@@ -104,7 +105,7 @@ public:
         {"fault_mode_weights",       "JEDEC mixture weights as a CSV 'cell:word:row:column:bank:device'; need not sum to 1 (normalized internally). Defaults to '0.55:0.15:0.10:0.08:0.07:0.05'.", ""},
         {"fault_event_rate",         "When fault_model='jedec_mix', per-access probability that a correlated fault event occurs (overrides BER for the mode draw). 0.0 falls back to BER * payload_bits as the event rate (Poisson approximation).", "0.0"},
         {"payload_dtype",            "Data-type-aware flip target for the silent-escape path: 'bytes' (current behavior), 'bf16', 'fp8', 'int8'. High-blast bits (sign/high exponent) are tracked separately in escape_high_blast vs escape_low_blast.", "bytes"},
-        {"due_action", "Detected-uncorrectable action: latency_only adds latency and forwards poisoned data. Frame actions require the frame integration component.", "latency_only"},
+        {"due_action",               "How to model a Detectable-Uncorrectable Error: 'latency_only' (add latency and forward the poisoned payload -- the DUE words' drawn error bits are flipped into the data, since an uncorrectable error cannot yield the correct data), or 'drop_frame' (set PipelineStateBase::frameAbortRequested so the VLA agents jump to ACTUATE and increment frames_dropped; payload is not consumed).", "latency_only"},
         {"resident_addr_start",      "Resident model: base of the address window the fault map covers. Falls back to inject_addr_start/inject_addr_len when resident_addr_len==0. fault_model='resident' requires a non-empty window (bounded fault-map memory).", "0"},
         {"resident_addr_len",        "Resident model: byte length of the fault-map window (see resident_addr_start).", "0"},
         {"resident_faults_at_start", "Resident model: number of faults materialized at t=0 (deterministic paired-comparison campaigns).", "0"},
@@ -149,6 +150,7 @@ public:
         {"escape_high_blast",     "Silent escapes whose flipped bit hit a high-blast position (sign / high exponent).", "count", 1},
         {"escape_low_blast",      "Silent escapes whose flipped bit hit a low-blast position (mantissa LSBs).", "count", 1},
         {"due_poisoned_bits",     "Bits flipped into forwarded payloads by DUE words under due_action='latency_only' (poison forwarding).", "count", 1},
+        {"frames_aborted",        "Frames the guard requested be aborted via due_action='drop_frame'.", "count", 1},
         {"resident_faults_born",  "Resident model: faults materialized into the fault map.", "count", 1},
         {"resident_faults_scrubbed", "Resident model: transient faults fully cleared by patrol scrub.", "count", 1},
         {"resident_scrub_due",    "Resident model: words a scrub pass found uncorrectable (accumulation-before-scrub).", "count", 1})
@@ -163,7 +165,7 @@ public:
 
     enum class FaultModel : uint8_t { Poisson, JedecMix, Campaign, Resident };
     using PayloadDtype = EccPayloadDtype;
-    enum class DueAction   : uint8_t { LatencyOnly };
+    enum class DueAction   : uint8_t { LatencyOnly, DropFrame };
 
     enum class FaultMode : uint8_t {
         SingleCell    = 0,
@@ -249,6 +251,7 @@ private:
     bool shouldApplyPolicy(SST::MemHierarchy::MemEvent* mev);
     void noteCampaignKernelEntry(const std::string& kernel_name);
 
+    void requestFrameAbort();
 
     SST::Output*  out_      = nullptr;
     bool          verbose_  = false;
@@ -340,6 +343,7 @@ private:
     Statistics::Statistic<uint64_t>* stat_escape_high_blast_     = nullptr;
     Statistics::Statistic<uint64_t>* stat_escape_low_blast_      = nullptr;
     Statistics::Statistic<uint64_t>* stat_due_poisoned_          = nullptr;
+    Statistics::Statistic<uint64_t>* stat_frames_aborted_        = nullptr;
 
     struct OutcomeCounters {
         uint64_t clean       = 0;
@@ -369,6 +373,7 @@ private:
     // Bits flipped into forwarded payloads by latency_only DUE poisoning.
     uint64_t due_poison_flips_total_  = 0;
 
+    uint64_t frames_aborted_total_    = 0;
 
     // Track which BER values have already triggered the tight-bound warning
     // (key is the bit-pattern of the double so we don't worry about == on

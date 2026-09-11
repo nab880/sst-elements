@@ -135,8 +135,8 @@ struct EccLineOutcome {
 };
 
 // Aggregate per-word outcomes: line = worst word; escape_bits sum only over
-// SilentEscape words. DUE words are uncorrectable; EccGuard forwards
-// poisoned bits by flipping them into the payload.
+// SilentEscape words. DUE words are uncorrectable — DropFrame aborts,
+// LatencyOnly forwards poisoned bits (EccGuard flips them into the payload).
 inline EccLineOutcome aggregateLineOutcome(const std::vector<unsigned>& per_word_errors,
                                            EccScheme scheme) {
     EccLineOutcome r;

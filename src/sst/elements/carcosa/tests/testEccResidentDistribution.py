@@ -6,4 +6,4 @@ build({"fault_model": "resident", "ecc_scheme": "none",
        "resident_permanent_fraction": 1, "resident_mode": "cell",
        "test_total_min": 5000, "test_total_max": 5000,
        "test_resident_born_min": 70, "test_resident_born_max": 130},
-      {"requests": 5000})
+      {"requests": 5000, "expect_abort": 0})
