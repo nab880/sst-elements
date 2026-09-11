@@ -11,6 +11,7 @@ typedef struct QuetzIpcClient QuetzIpcClient;
 
 QuetzIpcClient *quetz_ipc_attach(const char *shmname);
 void quetz_ipc_detach(QuetzIpcClient *client);
+unsigned quetz_ipc_vcpu_count(QuetzIpcClient *client);
 uint64_t quetz_ipc_mmio_read(QuetzIpcClient *client, unsigned vcpu,
                              uint64_t addr, unsigned size);
 void quetz_ipc_mmio_write(QuetzIpcClient *client, unsigned vcpu,

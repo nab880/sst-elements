@@ -43,6 +43,7 @@ compile test_decoder_aarch64.cc test_decoder_aarch64
 compile test_decoder_generic.cc test_decoder_generic
 compile test_coldfire_cache_ops.cc test_coldfire_cache_ops
 compile test_cache_launch.cc test_cache_launch
+compile test_multicore_launch.cc test_multicore_launch
 compile test_window_cache.cc test_window_cache
 compile test_region_table.cc test_region_table
 compile test_mem_issue_split.cc test_mem_issue_split
@@ -63,6 +64,7 @@ TESTS=(
     test_decoder_generic
     test_coldfire_cache_ops
     test_cache_launch
+    test_multicore_launch
     test_window_cache
     test_region_table
     test_mem_issue_split

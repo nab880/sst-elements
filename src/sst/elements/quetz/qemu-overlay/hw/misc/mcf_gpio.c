@@ -56,9 +56,11 @@
 #include "qemu/osdep.h"
 #include "hw/qdev-core.h"
 #include "hw/qdev-properties.h"
+#include "hw/irq.h"
 #include "exec/address-spaces.h"
 #include "exec/memory.h"
 #include "qapi/error.h"
+#include "qapi/visitor.h"
 #include "qemu/error-report.h"
 #include "qemu/module.h"
 
@@ -88,6 +90,9 @@ typedef struct McfGpioBank {
 
     /* Low 8 bits meaningful for each. */
     uint8_t value;                     /* output latch / input level */
+    uint8_t input;                     /* externally driven levels */
+    uint8_t input_mask;                /* connected external pins */
+    unsigned index;
     uint8_t direction;                 /* 1 = input, 0 = output */
     uint8_t pull_enable;               /* electrical, plain storage */
     uint8_t int_enable;                /* stored; arming traps */
@@ -101,7 +106,70 @@ struct McfGpioState {
     char *target;
     bool strict_mmio;
     McfGpioBank banks[G_N_ELEMENTS(raptor_gpio_blocks)];
+    qemu_irq outputs[G_N_ELEMENTS(raptor_gpio_blocks) * 8];
 };
+
+/* Undriven pins retain the established functional latch readback. Explicit
+ * host inputs affect only input-direction pins and never overwrite the latch. */
+static uint8_t gpio_pin_value(const McfGpioBank *b)
+{
+    uint8_t external = b->direction & b->input_mask;
+    return (b->value & ~external) | (b->input & external);
+}
+
+static void gpio_update_outputs(McfGpioBank *b)
+{
+    unsigned pin;
+    for (pin = 0; pin < 8; pin++) {
+        qemu_set_irq(b->owner->outputs[b->index * 8 + pin],
+                     !!(b->value & ~b->direction & (1U << pin)));
+    }
+}
+
+static void gpio_input(void *opaque, int line, int level)
+{
+    McfGpioState *s = opaque;
+    McfGpioBank *b = &s->banks[line / 8];
+    uint8_t mask = 1U << (line % 8);
+    b->input_mask |= mask;
+    b->input = (b->input & ~mask) | (level ? mask : 0);
+}
+
+static void gpio_get_input_property(Object *obj, Visitor *v, const char *name,
+                                    void *opaque, Error **errp)
+{
+    McfGpioState *s = MCF_GPIO(obj);
+    bool mask = opaque != NULL;
+    uint64_t value = 0;
+    unsigned i;
+    for (i = 0; i < G_N_ELEMENTS(s->banks); i++) {
+        value |= (uint64_t)(mask ? s->banks[i].input_mask : s->banks[i].input)
+                 << (i * 8);
+    }
+    visit_type_uint64(v, name, &value, errp);
+}
+
+static void gpio_set_input_property(Object *obj, Visitor *v, const char *name,
+                                    void *opaque, Error **errp)
+{
+    McfGpioState *s = MCF_GPIO(obj);
+    uint64_t value;
+    unsigned i;
+    if (!visit_type_uint64(v, name, &value, errp)) {
+        return;
+    }
+    if (value > UINT32_MAX) {
+        error_setg(errp, "%s requires a 32-bit bank bitmap", name);
+        return;
+    }
+    for (i = 0; i < G_N_ELEMENTS(s->banks); i++) {
+        if (opaque) {
+            s->banks[i].input_mask = value >> (i * 8);
+        } else {
+            s->banks[i].input = value >> (i * 8);
+        }
+    }
+}
 
 static void gpio_bad_access(McfGpioBank *b, const char *op,
                             hwaddr offset, unsigned size)
@@ -147,7 +215,7 @@ static uint64_t gpio_read(void *opaque, hwaddr offset, unsigned size)
 
     switch (offset) {
     case GPIO_VALUE_OFFSET:
-        return b->value & GPIO_PIN_MASK;
+        return gpio_pin_value(b);
     case GPIO_DIRECTION_OFFSET:
         return b->direction & GPIO_PIN_MASK;
     case GPIO_PULL_ENABLE_OFFSET:
@@ -186,12 +254,14 @@ static void gpio_write(void *opaque, hwaddr offset, uint64_t value,
         uint8_t mask = (word >> 8) & GPIO_PIN_MASK;
         uint8_t data = word & GPIO_PIN_MASK;
         b->value = (b->value & (uint8_t)~mask) | (data & mask);
+        gpio_update_outputs(b);
         return;
     }
     case GPIO_DIRECTION_OFFSET:
         /* Plain store: the driver already did the read-modify-write and writes
          * the resulting 8-bit value with no mask in the high byte. */
         b->direction = word & GPIO_PIN_MASK;
+        gpio_update_outputs(b);
         return;
     case GPIO_PULL_ENABLE_OFFSET:
         b->pull_enable = word & GPIO_PIN_MASK;
@@ -247,6 +317,8 @@ static void gpio_bank_reset(McfGpioBank *b)
     b->trigger_level = 0x00;
     b->trigger_type = 0x00;
     b->arm_reported = false;
+    /* External wiring/levels survive a device reset, like host-held pins. */
+    gpio_update_outputs(b);
 }
 
 static void mcf_gpio_realize(DeviceState *dev, Error **errp)
@@ -265,6 +337,7 @@ static void mcf_gpio_realize(DeviceState *dev, Error **errp)
         McfGpioBank *b = &s->banks[i];
 
         b->owner = s;
+        b->index = i;
         b->name = g_strdup(d->name);
         b->base = d->base;
         b->size = d->size;
@@ -321,12 +394,27 @@ static void mcf_gpio_class_init(ObjectClass *klass, void *data)
     dc->user_creatable = true;
     device_class_set_props(dc, mcf_gpio_properties);
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
+    object_class_property_add(klass, "input-levels", "uint64",
+                              gpio_get_input_property, gpio_set_input_property,
+                              NULL, NULL);
+    object_class_property_add(klass, "input-mask", "uint64",
+                              gpio_get_input_property, gpio_set_input_property,
+                              NULL, (void *)1);
+}
+
+static void mcf_gpio_instance_init(Object *obj)
+{
+    DeviceState *dev = DEVICE(obj);
+    McfGpioState *s = MCF_GPIO(obj);
+    qdev_init_gpio_in_named(dev, gpio_input, "in", G_N_ELEMENTS(s->outputs));
+    qdev_init_gpio_out_named(dev, s->outputs, "out", G_N_ELEMENTS(s->outputs));
 }
 
 static const TypeInfo mcf_gpio_info = {
     .name = TYPE_MCF_GPIO,
     .parent = TYPE_DEVICE,
     .instance_size = sizeof(McfGpioState),
+    .instance_init = mcf_gpio_instance_init,
     .class_init = mcf_gpio_class_init,
 };
 

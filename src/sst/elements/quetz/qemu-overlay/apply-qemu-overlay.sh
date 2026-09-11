@@ -13,11 +13,16 @@ cp "$OVERLAY/hw/misc/raptor_bsp_blocks.h" "$QEMU_SRC/hw/misc/raptor_bsp_blocks.h
 cp "$OVERLAY/hw/misc/mcf_dtimer.c" "$QEMU_SRC/hw/misc/mcf_dtimer.c"
 cp "$OVERLAY/hw/misc/raptor_dtimer_blocks.h" "$QEMU_SRC/hw/misc/raptor_dtimer_blocks.h"
 cp "$OVERLAY/hw/misc/mcf_gpio.c" "$QEMU_SRC/hw/misc/mcf_gpio.c"
+cp "$OVERLAY/hw/misc/raptor_edma.c" "$QEMU_SRC/hw/misc/raptor_edma.c"
 cp "$OVERLAY/hw/misc/raptor_gpio_blocks.h" "$QEMU_SRC/hw/misc/raptor_gpio_blocks.h"
 cp "$OVERLAY/quetz_ipc_client.c"        "$QEMU_SRC/hw/misc/quetz_ipc_client.c"
 
 mkdir -p "$QEMU_SRC/hw/m68k"
 cp "$OVERLAY/hw/m68k/raptor.c" "$QEMU_SRC/hw/m68k/raptor.c"
+cp "$OVERLAY/hw/m68k/raptor_boot.c" "$QEMU_SRC/hw/m68k/raptor_boot.c"
+cp "$OVERLAY/hw/m68k/raptor_boot.h" "$QEMU_SRC/hw/m68k/raptor_boot.h"
+cp "$OVERLAY/hw/m68k/raptor_multicore.c" "$QEMU_SRC/hw/m68k/raptor_multicore.c"
+cp "$OVERLAY/hw/m68k/raptor_multicore.h" "$QEMU_SRC/hw/m68k/raptor_multicore.h"
 
 mkdir -p "$QEMU_SRC/include/quetz"
 cp "$OVERLAY/include/quetz/quetz_ipc_client.h" "$QEMU_SRC/include/quetz/"
@@ -41,6 +46,16 @@ if ! grep -q "files('raptor.c')" "$M68K_MESON"; then
 # Quetz Raptor Core2 functional-profile machine
 m68k_ss.add(files('raptor.c'))
 EOF
+fi
+
+if ! grep -q "files('raptor_boot.c')" "$M68K_MESON"; then
+    echo "m68k_ss.add(files('raptor_boot.c'))" >> "$M68K_MESON"
+fi
+if ! grep -q "files('raptor_edma.c')" "$HW_MESON"; then
+    echo "system_ss.add(files('raptor_edma.c'))" >> "$HW_MESON"
+fi
+if ! grep -q "files('raptor_multicore.c')" "$M68K_MESON"; then
+    echo "m68k_ss.add(files('raptor_multicore.c'))" >> "$M68K_MESON"
 fi
 
 # Accept and retain the two ColdFire RAMBAR registers used by the production

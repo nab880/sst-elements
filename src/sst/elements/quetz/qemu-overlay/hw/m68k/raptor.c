@@ -10,6 +10,7 @@
 #include "qemu/log.h"
 #include "qemu/units.h"
 #include "qapi/error.h"
+#include "qapi/visitor.h"
 #include "cpu.h"
 #include "elf.h"
 #include "hw/boards.h"
@@ -17,10 +18,14 @@
 #include "hw/m68k/mcf.h"
 #include "hw/qdev-core.h"
 #include "hw/qdev-properties.h"
+#include "hw/sysbus.h"
 #include "qom/object.h"
 #include "sysemu/qtest.h"
 #include "sysemu/reset.h"
 #include "sysemu/sysemu.h"
+#include "raptor_boot.h"
+#include "raptor_multicore.h"
+#include "hw/irq.h"
 
 #define TYPE_RAPTOR_MACHINE MACHINE_TYPE_NAME("raptor-core2")
 OBJECT_DECLARE_SIMPLE_TYPE(RaptorMachineState, RAPTOR_MACHINE)
@@ -40,6 +45,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(RaptorMachineState, RAPTOR_MACHINE)
 
 #define RAPTOR_FLEXBUS_BASE   0xfc008000ULL
 #define RAPTOR_PLATFORM_BASE  0xfc040000ULL
+#define RAPTOR_EDMA_BASE      0xfc044000ULL
 #define RAPTOR_INTC_BASE      0xfc048000ULL
 #define RAPTOR_UART0_BASE     0xfc060000ULL
 #define RAPTOR_UART1_BASE     0xfc064000ULL
@@ -58,6 +64,9 @@ typedef struct RaptorPlatform {
 struct RaptorMachineState {
     MachineState parent_obj;
     bool strict_mmio;
+    uint32_t edma_irq;
+    uint32_t edma_error_irq;
+    char *secondary_kernel;
     MemoryRegion unknown;
     MemoryRegion rom;
     MemoryRegion mpflash;
@@ -67,6 +76,8 @@ struct RaptorMachineState {
     MemoryRegion p1_ram;
     RaptorFlexBus flexbus;
     RaptorPlatform platform;
+    RaptorBootState boot;
+    RaptorSecondaryState secondary;
 };
 
 static void raptor_bad_access(RaptorMachineState *s, const char *owner,
@@ -201,13 +212,70 @@ static void raptor_map_ram(MemoryRegion *mr, const char *name, uint64_t base,
     memory_region_add_subregion(get_system_memory(), base, mr);
 }
 
-static void raptor_create_reviewed_device(const char *type, bool strict_mmio)
+static DeviceState *raptor_create_reviewed_device(MachineState *machine,
+                                                  const char *name,
+                                                  const char *type,
+                                                  bool strict_mmio)
 {
     DeviceState *dev = qdev_new(type);
 
+    object_property_add_child(OBJECT(machine), name, OBJECT(dev));
     qdev_prop_set_string(dev, "target", "raptor");
     qdev_prop_set_bit(dev, "strict-mmio", strict_mmio);
     qdev_realize_and_unref(dev, NULL, &error_fatal);
+    /* These reviewed devices have no parent bus, so QOM ownership alone does
+     * not enroll them in the machine reset tree. */
+    qemu_register_resettable(OBJECT(dev));
+    return dev;
+}
+
+static void raptor_create_edma(RaptorMachineState *s, qemu_irq *pic)
+{
+    DeviceState *dev;
+    if (s->edma_irq && s->edma_irq == s->edma_error_irq) {
+        error_report("Raptor functional eDMA completion/error routes must differ");
+        exit(EXIT_FAILURE);
+    }
+    dev = qdev_new("raptor-edma");
+    object_property_add_child(OBJECT(s), "edma", OBJECT(dev));
+    qdev_prop_set_bit(dev, "completion-routed", s->edma_irq != 0);
+    qdev_prop_set_bit(dev, "error-routed", s->edma_error_irq != 0);
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, RAPTOR_EDMA_BASE);
+    if (s->edma_irq) {
+        sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0, pic[s->edma_irq]);
+    }
+    if (s->edma_error_irq) {
+        sysbus_connect_irq(SYS_BUS_DEVICE(dev), 1, pic[s->edma_error_irq]);
+    }
+}
+
+static void raptor_get_edma_route(Object *obj, Visitor *v, const char *name,
+                                   void *opaque, Error **errp)
+{
+    RaptorMachineState *s = RAPTOR_MACHINE(obj);
+    uint64_t value = opaque ? s->edma_error_irq : s->edma_irq;
+    visit_type_uint64(v, name, &value, errp);
+}
+
+static void raptor_set_edma_route(Object *obj, Visitor *v, const char *name,
+                                   void *opaque, Error **errp)
+{
+    RaptorMachineState *s = RAPTOR_MACHINE(obj);
+    uint64_t value;
+    if (!visit_type_uint64(v, name, &value, errp)) {
+        return;
+    }
+    if (value > 63 || (value >= 26 && value <= 28) || value == 30) {
+        error_setg(errp, "%s requires 0 (disabled) or an unused source 1..63; "
+                   "UART 26..28 and reference FFT 30 are reserved", name);
+        return;
+    }
+    if (opaque) {
+        s->edma_error_irq = value;
+    } else {
+        s->edma_irq = value;
+    }
 }
 
 static void raptor_machine_init(MachineState *machine)
@@ -217,11 +285,15 @@ static void raptor_machine_init(MachineState *machine)
     M68kCPU *cpu;
     CPUM68KState *env;
     qemu_irq *pic;
-    uint64_t elf_entry;
-    int kernel_size;
+    DeviceState *gpio;
 
     if (machine->ram_size != RAPTOR_LOCAL_RAM_SIZE) {
         error_report("raptor-core2 requires exactly 64 KiB of P2 local RAM");
+        exit(EXIT_FAILURE);
+    }
+    if ((machine->smp.cpus == 2) !=
+        (s->secondary_kernel && s->secondary_kernel[0])) {
+        error_report("raptor-core2 requires -smp 2 together with secondary-kernel=ELF");
         exit(EXIT_FAILURE);
     }
 
@@ -266,35 +338,40 @@ static void raptor_machine_init(MachineState *machine)
     mcf_uart_create_mmap(RAPTOR_UART0_BASE, pic[26], serial_hd(0));
     mcf_uart_create_mmap(RAPTOR_UART1_BASE, pic[27], serial_hd(1));
     mcf_uart_create_mmap(RAPTOR_UART2_BASE, pic[28], serial_hd(2));
+    raptor_create_edma(s, pic);
 
     /*
      * GPIO and DTIMER behavior comes from the same generated board-contract
      * tables used by the legacy compatibility path. The dedicated machine
      * owns these instances; the launcher refuses a second profile overlay.
      */
-    raptor_create_reviewed_device("mcf-gpio", s->strict_mmio);
-    raptor_create_reviewed_device("mcf-dtimer", s->strict_mmio);
+    gpio = raptor_create_reviewed_device(machine, "gpio", "mcf-gpio", s->strict_mmio);
+    raptor_create_reviewed_device(machine, "dtimer", "mcf-dtimer", s->strict_mmio);
 
     g_free(pic);
     qemu_register_reset(raptor_peripherals_reset, s);
     raptor_peripherals_reset(s);
 
-    if (!machine->kernel_filename) {
-        if (qtest_enabled()) {
-            return;
-        }
-        error_report("Raptor ELF must be specified with -kernel");
-        exit(EXIT_FAILURE);
+    raptor_boot_init(&s->boot, machine, cpu, RAPTOR_ROM_BASE, RAPTOR_ROM_SIZE);
+    if (machine->smp.cpus == 2) {
+        raptor_secondary_init(&s->secondary, machine, s->secondary_kernel,
+                               RAPTOR_P2_BASE, RAPTOR_LOCAL_RAM_SIZE, 0x4000fc00);
+        qdev_connect_gpio_out_named(gpio, "out", 7,
+            qemu_allocate_irq(raptor_secondary_release, &s->secondary, 0));
     }
+}
 
-    kernel_size = load_elf(machine->kernel_filename, NULL, NULL, NULL,
-                           &elf_entry, NULL, NULL, NULL, 1, EM_68K, 0, 0);
-    if (kernel_size < 0) {
-        error_report("Could not load Raptor ELF '%s': %s",
-                     machine->kernel_filename, load_elf_strerror(kernel_size));
-        exit(EXIT_FAILURE);
-    }
-    env->pc = elf_entry;
+static char *raptor_get_secondary_kernel(Object *obj, Error **errp)
+{
+    return g_strdup(RAPTOR_MACHINE(obj)->secondary_kernel);
+}
+
+static void raptor_set_secondary_kernel(Object *obj, const char *value,
+                                         Error **errp)
+{
+    RaptorMachineState *s = RAPTOR_MACHINE(obj);
+    g_free(s->secondary_kernel);
+    s->secondary_kernel = g_strdup(value);
 }
 
 static bool raptor_get_strict_mmio(Object *obj, Error **errp)
@@ -322,14 +399,29 @@ static void raptor_machine_class_init(ObjectClass *oc, void *data)
     mc->default_ram_id = "raptor.p2-ram";
     mc->default_ram_size = RAPTOR_LOCAL_RAM_SIZE;
     mc->min_cpus = 1;
-    mc->max_cpus = 1;
+    mc->max_cpus = 2;
     mc->default_cpus = 1;
 
     object_class_property_add_bool(oc, "strict-mmio", raptor_get_strict_mmio,
                                    raptor_set_strict_mmio);
+    object_class_property_add_str(oc, "secondary-kernel",
+                                  raptor_get_secondary_kernel,
+                                  raptor_set_secondary_kernel);
+    object_class_property_set_description(oc, "secondary-kernel",
+        "P2 ELF for the optional second CPU, held until GPIOB0 output bit 7 releases it");
     object_class_property_set_description(
         oc, "strict-mmio",
         "Fail immediately on accesses outside the reviewed subset");
+    object_class_property_add(oc, "edma-irq", "uint64",
+                              raptor_get_edma_route, raptor_set_edma_route,
+                              NULL, NULL);
+    object_class_property_add(oc, "edma-error-irq", "uint64",
+                              raptor_get_edma_route, raptor_set_edma_route,
+                              NULL, (void *)1);
+    object_class_property_set_description(oc, "edma-irq",
+        "Explicit functional aggregate completion route; 0 disables, not silicon routing");
+    object_class_property_set_description(oc, "edma-error-irq",
+        "Explicit functional aggregate error route; 0 disables, not silicon routing");
 }
 
 static const TypeInfo raptor_machine_typeinfo = {

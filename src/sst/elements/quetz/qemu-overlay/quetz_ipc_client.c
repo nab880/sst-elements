@@ -120,6 +120,11 @@ QuetzIpcClient *quetz_ipc_attach(const char *shmname)
     return c;
 }
 
+unsigned quetz_ipc_vcpu_count(QuetzIpcClient *client)
+{
+    return client && client->shared ? client->shared->numCores : 0;
+}
+
 void quetz_ipc_detach(QuetzIpcClient *client)
 {
     if (!client)

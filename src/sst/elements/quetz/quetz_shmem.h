@@ -65,9 +65,10 @@ public:
             // after this constructor-time init, so no ordering stronger
             // than the store is needed.
             sharedData->magic = QUETZ_SHM_MAGIC;
-        } else {
-            sync_.announceAttach();
         }
+        // The plugin announces readiness only after it validates the shared
+        // topology and registers callbacks. Announcing during construction
+        // could strand SST after a subsequent plugin-install failure.
         return childnum;
     }
 

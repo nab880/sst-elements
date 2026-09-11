@@ -261,6 +261,7 @@ static void cb_tb_trans(qemu_plugin_id_t , struct qemu_plugin_tb* tb)
 
 static void cb_vcpu_init(qemu_plugin_id_t , unsigned int vcpu_index)
 {
+    require_vcpu(vcpu_index);
     init_cache_registers(vcpu_index);
     if (vcpu_index < PLUGIN_MAX_VCPUS) {
         g_mem_seen[vcpu_index].store(false, std::memory_order_relaxed);

@@ -12,6 +12,7 @@
 #include <sst_config.h>
 #include "quetz_launcher.h"
 #include "quetz_cache_launch.h"
+#include "quetz_multicore_launch.h"
 
 #include <cstdlib>
 #include <inttypes.h>
@@ -64,6 +65,11 @@ QemuLauncher::QemuLauncher(SST::Output* out)
 pid_t QemuLauncher::spawn(const QuetzConfig& cfg,
                           const std::string& shmem_region_name,
                           bool detailed_tracking) {
+    if (cfg.system_mode && cfg.vcpu_count > 1) {
+        if (const char* error = multicoreLaunchError(
+                cfg.vcpu_count, cfg.sst_window_cache, cfg.qemu_extra_args))
+            output_->fatal(CALL_INFO, -1, "system multicore: %s.\n", error);
+    }
     if (cfg.sst_window_cache) {
         if (const char* error = windowCacheLaunchError(cfg.qemu_extra_args))
             output_->fatal(CALL_INFO, -1, "sst_window_cache=1: %s.\n", error);
@@ -138,6 +144,7 @@ pid_t QemuLauncher::spawn(const QuetzConfig& cfg,
             "sst-mmio-bridge,shmname=%s,base=0x%" PRIx64 ",size=0x%" PRIx64 ",vcpu_id=0",
             shmem_region_name.c_str(), mmio_base, mmio_size);
         std::string dev_arg(dev);
+        if (cfg.vcpu_count > 1) dev_arg += ",per-vcpu=on";
         // SST-device IRQ injection (QUETZ_IRQ_LINES = lines to poll, 0/unset =
         // off): only the MMIO bridge polls the reverse mailbox — the optional
         // SST-window aperture below shares the shmem and must not double-poll.
@@ -177,7 +184,9 @@ pid_t QemuLauncher::spawn(const QuetzConfig& cfg,
             "sst-mmio-bridge,shmname=%s,base=0x%" PRIx64 ",size=0x%" PRIx64 ",vcpu_id=0",
             shmem_region_name.c_str(), win_base, win_size);
         argv_strs.push_back("-device");
-        argv_strs.push_back(dev);
+        std::string window_arg(dev);
+        if (cfg.vcpu_count > 1) window_arg += ",per-vcpu=on";
+        argv_strs.push_back(window_arg);
     }
 
     // Optional ColdFire BSP-initialization compatibility device.  The device

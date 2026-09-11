@@ -21,6 +21,8 @@
 #include "hw/irq.h"
 #include "hw/qdev-core.h"
 #include "hw/qdev-properties.h"
+#include "hw/core/cpu.h"
+#include "exec/cpu-common.h"
 #include "exec/address-spaces.h"
 #include "exec/memory.h"
 #include "qapi/error.h"
@@ -42,6 +44,7 @@ struct SstMmioBridgeState {
     uint64_t base;
     uint64_t size;
     uint32_t vcpu_id;
+    bool per_vcpu;
     bool mapped;
 
     /* SST-device IRQ injection (disabled when irq_count == 0). */
@@ -52,17 +55,34 @@ struct SstMmioBridgeState {
     qemu_irq *irqs;
 };
 
+static unsigned sst_mmio_vcpu(SstMmioBridgeState *s)
+{
+    unsigned vcpu = s->vcpu_id;
+    if (s->per_vcpu) {
+        if (!current_cpu) {
+            error_report("sst-mmio-bridge: per-vcpu access requires a running CPU");
+            exit(EXIT_FAILURE);
+        }
+        vcpu = current_cpu->cpu_index;
+    }
+    if (vcpu >= quetz_ipc_vcpu_count(s->ipc) || vcpu >= QUETZ_MAX_MMIO_VCORES) {
+        error_report("sst-mmio-bridge: vCPU %u has no configured mailbox", vcpu);
+        exit(EXIT_FAILURE);
+    }
+    return vcpu;
+}
+
 static uint64_t sst_mmio_read(void *opaque, hwaddr offset, unsigned size)
 {
     SstMmioBridgeState *s = opaque;
-    return quetz_ipc_mmio_read(s->ipc, s->vcpu_id, s->base + offset, size);
+    return quetz_ipc_mmio_read(s->ipc, sst_mmio_vcpu(s), s->base + offset, size);
 }
 
 static void sst_mmio_write(void *opaque, hwaddr offset, uint64_t value,
                            unsigned size)
 {
     SstMmioBridgeState *s = opaque;
-    quetz_ipc_mmio_write(s->ipc, s->vcpu_id, s->base + offset, size, value);
+    quetz_ipc_mmio_write(s->ipc, sst_mmio_vcpu(s), s->base + offset, size, value);
 }
 
 static const MemoryRegionOps sst_mmio_ops = {
@@ -89,11 +109,11 @@ static void sst_mmio_bridge_irq_poll(void *opaque)
              * change posted to another vcore's row must not clobber row 0's
              * level on the same line (last-writer-wins on one GPIO). */
             if (changes[i].vcore != 0) {
-                warn_report_once("sst-mmio-bridge: dropping IRQ line %u "
+                error_report("sst-mmio-bridge: unsupported IRQ line %u "
                                  "change posted to vcore %u (only vcore 0 "
                                  "is wired to the INTC)",
                                  changes[i].line, changes[i].vcore);
-                continue;
+                exit(EXIT_FAILURE);
             }
             qemu_set_irq(s->irqs[changes[i].line], changes[i].level != 0);
         }
@@ -162,6 +182,13 @@ static void sst_mmio_bridge_realize(DeviceState *dev, Error **errp)
                    s->shmname, errno);
         return;
     }
+    unsigned vcpus = quetz_ipc_vcpu_count(s->ipc);
+    if (!vcpus || vcpus > QUETZ_MAX_MMIO_VCORES ||
+        (!s->per_vcpu && (s->vcpu_id >= vcpus || vcpus > 1))) {
+        error_setg(errp, "sst-mmio-bridge: multicore requires per-vcpu=on and "
+                   "one valid mailbox per configured vCPU");
+        return;
+    }
 
     memory_region_init_io(&s->mmio, OBJECT(dev), &sst_mmio_ops, s,
                           TYPE_SST_MMIO_BRIDGE, s->size);
@@ -198,6 +225,7 @@ static Property sst_mmio_bridge_properties[] = {
     DEFINE_PROP_UINT64("base", SstMmioBridgeState, base, 0),
     DEFINE_PROP_UINT64("size", SstMmioBridgeState, size, 0x400),
     DEFINE_PROP_UINT32("vcpu_id", SstMmioBridgeState, vcpu_id, 0),
+    DEFINE_PROP_BOOL("per-vcpu", SstMmioBridgeState, per_vcpu, false),
     /* SST-device IRQ injection: poll lines [0, irq-count) of the shared IRQ
      * mailbox (0 = off). intc-type names the QOM type whose qdev GPIO inputs
      * receive the lines. */

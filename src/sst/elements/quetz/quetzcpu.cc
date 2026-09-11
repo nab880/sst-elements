@@ -15,6 +15,7 @@
 #include "quetz_config_manager.h"
 #include "quetz_core_backend.h"
 #include "quetz_irq_event.h"
+#include "quetz_multicore_launch.h"
 
 #include <inttypes.h>
 
@@ -43,16 +44,10 @@ QuetzCPU::QuetzCPU(ComponentId_t id, Params& params)
         }
     }
 
-    // The system-mode sync-MMIO path is single-vCPU only: the launcher
-    // instantiates every sst-mmio-bridge aperture with vcpu_id=0, so two MTTCG
-    // vCPU threads would race one request slot (lost requests, interleaved
-    // field writes) with no diagnostic. Refuse the config until per-vCPU
-    // bridge instances exist.
     if (cfg_.system_mode && cfg_.vcpu_count > 1) {
-        output_->fatal(CALL_INFO, -1,
-            "system_mode=1 supports only vcpu_count=1 (the QEMU MMIO bridge "
-            "is wired to mailbox slot 0; SMP guests would race it). Use "
-            "vcpu_count=1, or user mode for multi-threaded workloads.\n");
+        if (const char* error = multicoreLaunchError(
+                cfg_.vcpu_count, cfg_.sst_window_cache, cfg_.qemu_extra_args))
+            output_->fatal(CALL_INFO, -1, "system multicore: %s.\n", error);
     }
 
     output_->verbose(CALL_INFO, 1, 0, "Creating QuetzComponent...\n");
@@ -196,6 +191,10 @@ void QuetzCPU::handleIrqEvent(SST::Event* ev)
         output_->fatal(CALL_INFO, -1,
             "Non-QuetzIrqEvent received on an irq_link port.\n");
     }
+    if (cfg_.system_mode && irq->vcpu != 0)
+        output_->fatal(CALL_INFO, -1,
+            "System-mode device IRQs route only to vCPU 0; target %u is unsupported.\n",
+            irq->vcpu);
     output_->verbose(CALL_INFO, 2, 0,
         "IRQ event: vcpu=%" PRIu32 " line=%" PRIu32 " level=%" PRIu32 "\n",
         irq->vcpu, irq->line, irq->level);
