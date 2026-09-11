@@ -133,3 +133,35 @@ nobase_sst_HEADERS += \
     components/hyadesProtocol.h \
     components/ringProtocol.h \
     examples/MmioControl/mmioControlExample.h
+
+# Add core ECC schemes, Poisson faults, and access policies
+libcarcosa_la_SOURCES += \
+    components/componentTestBounds.h \
+    components/configParse.h \
+    components/eccGuard.cc \
+    components/eccGuard.h \
+    components/eccModelMath.h \
+    components/eccPayloadCorruptor.cc \
+    components/eccPayloadCorruptor.h \
+    components/eccPolicy.h \
+    components/eccScheme.h \
+    components/eccTestComponents.cc \
+    components/eccTestComponents.h \
+    components/memEventPayload.h \
+    components/pipelineStateRegistry.h
+EXTRA_DIST += \
+    tests/eccRuntimeCommon.py \
+    tests/testEccCoreRuntime.py \
+    tests/testEccGuardSmoke.py \
+    tests/testEccModelDeterministic.py \
+    tests/testEccPoissonDistribution.py
+nobase_sst_HEADERS += \
+    components/componentTestBounds.h \
+    components/configParse.h \
+    components/eccGuard.h \
+    components/eccModelMath.h \
+    components/eccPayloadCorruptor.h \
+    components/eccPolicy.h \
+    components/eccScheme.h \
+    components/memEventPayload.h \
+    components/pipelineStateRegistry.h
