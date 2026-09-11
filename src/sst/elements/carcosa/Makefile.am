@@ -110,3 +110,26 @@ install-exec-hook:
 # Fix Carcosa CPU traffic selection and documented defaults
 EXTRA_DIST += \
     tests/testCarcosaTrafficStandalone.py
+
+# Add transport-neutral Hali control and MMIO routing
+libcarcosa_la_SOURCES += \
+    components/haliTestComponents.cc \
+    components/haliTestComponents.h \
+    components/hyadesProtocol.h \
+    components/ringProtocol.h \
+    examples/MmioControl/mmioControlExample.cc \
+    examples/MmioControl/mmioControlExample.h
+EXTRA_DIST += \
+    examples/MmioControl/tests/testMmioControl.py \
+    tests/haliEdgeCommon.py \
+    tests/testHaliDeferredComplete.py \
+    tests/testHaliDoubleDeferred.py \
+    tests/testHaliMmioRouting.py \
+    tests/testHaliPayloadGetX.py \
+    tests/testHaliPayloadlessGetX.py \
+    tests/testHaliPostedWrite.py
+nobase_sst_HEADERS += \
+    components/haliEvent.h \
+    components/hyadesProtocol.h \
+    components/ringProtocol.h \
+    examples/MmioControl/mmioControlExample.h
