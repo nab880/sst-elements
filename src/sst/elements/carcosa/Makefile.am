@@ -106,3 +106,7 @@ AM_CPPFLAGS += $(HMC_FLAG)
 install-exec-hook:
 	$(SST_REGISTER_TOOL) SST_ELEMENT_SOURCE     carcosa=$(abs_srcdir)
 	$(SST_REGISTER_TOOL) SST_ELEMENT_TESTS      carcosa=$(abs_srcdir)/tests
+
+# Fix Carcosa CPU traffic selection and documented defaults
+EXTRA_DIST += \
+    tests/testCarcosaTrafficStandalone.py
