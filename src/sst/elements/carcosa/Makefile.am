@@ -227,3 +227,15 @@ nobase_sst_HEADERS += \
     components/criticalActionWatcher.h \
     components/fourStateAgent.h \
     components/vlaRegions.h
+
+# Add optional Balar CUDA replay bridge with retry and DMA regressions
+if SST_CARCOSA_HAVE_BALAR
+libcarcosa_la_SOURCES += \
+    components/balarRingBridge.cc \
+    components/balarRingBridge.h \
+    components/balarTraceParser.cc \
+    components/balarTraceParser.h
+AM_CPPFLAGS += $(CUDA_CPPFLAGS) -DHAVE_BALAR_BRIDGE=1
+endif
+EXTRA_DIST += \
+    tests/testBalarRingBridgeStandalone.py
