@@ -67,8 +67,8 @@ Full detail in [SIMULATING-YOUR-SYSTEM.md](SIMULATING-YOUR-SYSTEM.md)
   not peripheral timing or physical I/O. See
   [BSP-COMPATIBILITY.md](BSP-COMPATIBILITY.md).
 - **Two ColdFire machine roles.** `mcf5208evb` remains the portable legacy
-  vehicle. `raptor-core2` is the single-CPU Raptor functional profile and the
-  acceptance path for Raptor BSP ELFs. Its UART0–2 sources are provisionally
+  vehicle. `raptor-core2` is the Raptor functional profile, with single-CPU
+  BSP acceptance and optional two-core diagnostics. Its UART0–2 sources are provisionally
   26–28; exact SKU and complete topology remain nonclaims.
 - **Interrupts:** native IRQs and SST-device injection work on the legacy
   vehicle. On `raptor-core2`, UART delivery is verified; GPIO and DMA-timer
@@ -418,10 +418,12 @@ sub-word layout; the shipped ColdFire compute deck overrides it to big-endian.
 See SIMULATING-YOUR-SYSTEM.md § Endianness contract for
 `window_big_endian` / `data_big_endian`.
 
-**System mode is single-vCPU.**  `vcpu_count` must be `1` when
-`system_mode=1`: every `sst-mmio-bridge` aperture is wired to mailbox slot
-0, so SMP guests would race the sync-MMIO path. Use user mode for
-multi-threaded workloads.
+**System-mode topology.** Most decks use one vCPU. The Raptor profile also
+supports exactly two `cfv4e` CPUs with per-vCPU mailboxes, separate P1/P2 ELFs
+and `-accel tcg,thread=single`. Its optional `sst_window_cache` creates private
+finite V4e data caches for both CPUs across P1/P2 RAM and the SST window.
+Software clean/invalidate controls sharing; automatic snooping is not modeled.
+Use `tests/sysmode/basic_quetz_raptor_multicore_cache.py` for the cached example.
 
 **Private BSP compatibility.** In discovery mode, QEMU's
 `mcf-bsp-compat` device logs accesses to the allowlisted, otherwise-unmodeled
@@ -677,8 +679,8 @@ Build a test binary:
 
 Set `vcpu_count` to the number of OS threads the binary will create.  QEMU
 user-mode transparently handles `pthread_create` and OpenMP — each new thread
-becomes a new vCPU in the plugin's view.  In **system mode**
-(`system_mode=1`) only `vcpu_count=1` is supported (see § System mode).
+becomes a new vCPU in the plugin's view. In **system mode**, the Raptor profile
+supports one or two CPUs under the constraints described in § System mode.
 
 **Halt quorum:** the simulation ends only when **every** vCPU has halted (via
 EXIT or `max_insts`) **and** every vCPU has drained its in-flight memory

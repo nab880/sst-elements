@@ -16,6 +16,7 @@
 #include "quetz_core_backend.h"
 #include "quetz_irq_event.h"
 #include "quetz_multicore_launch.h"
+#include "quetz_cache_launch.h"
 
 #include <inttypes.h>
 
@@ -34,11 +35,16 @@ QuetzCPU::QuetzCPU(ComponentId_t id, Params& params)
     cfg_ = QuetzConfigManager::fromParams(params, output_).config();
     output_->setVerboseLevel(cfg_.verbosity);
     if (cfg_.sst_window_cache) {
-        if (!cfg_.system_mode || cfg_.vcpu_count != 1 || !cfg_.window_big_endian)
+        if (!cfg_.system_mode || !cfg_.window_big_endian)
             output_->fatal(CALL_INFO, -1,
-                "sst_window_cache=1 requires single-vCPU big-endian system mode.\n");
+                "sst_window_cache=1 requires big-endian system mode.\n");
+        if (const char* error = windowCacheLaunchError(cfg_.qemu_extra_args, cfg_.vcpu_count))
+            output_->fatal(CALL_INFO, -1, "sst_window_cache=1: %s.\n", error);
         try {
-            window_cache_.configure(cfg_.sst_window_base, cfg_.sst_window_size);
+            window_caches_.configure(cfg_.vcpu_count, cfg_.sst_window_base, cfg_.sst_window_size);
+            window_caches_.addRegion(0x80000000, QUETZ_LOCAL_RAM_BYTES);
+            window_caches_.addRegion(0x40000000, QUETZ_LOCAL_RAM_BYTES);
+            cache_reset_epochs_.assign(cfg_.vcpu_count, 0);
         } catch (const std::exception& e) {
             output_->fatal(CALL_INFO, -1, "%s\n", e.what());
         }
@@ -149,6 +155,13 @@ QuetzCPU::QuetzCPU(ComponentId_t id, Params& params)
         });
         output_->verbose(CALL_INFO, 1, 0,
             "vCPU %" PRIu32 ": mmio_link connected.\n", i);
+    }
+
+    if (cfg_.sst_window_cache) {
+        for (uint32_t i = 0; i < cfg_.vcpu_count; ++i)
+            if (!mmio_ifaces_[i])
+                output_->fatal(CALL_INFO, -1,
+                    "Window cache requires an MMIO interface for vCPU %u.\n", i);
     }
 
     loadAcceleratorPorts();
@@ -307,7 +320,7 @@ bool QuetzCPU::tick(SST::Cycle_t ) {
 
     // Keep the simulation alive while a posted (async) offload is outstanding,
     // even if every vCPU has halted — its completion still has to be delivered.
-    if (window_cache_.active() || cache_request_outstanding_ || hasAsyncInFlight())
+    if (window_caches_.active() || !generic_pending_.empty() || hasAsyncInFlight())
         return false;
 
     if (!stop_ticking_) {

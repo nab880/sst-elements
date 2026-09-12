@@ -80,6 +80,8 @@ AcceleratorPort* QuetzCPU::portForAddr(uint64_t addr) const
 
 bool QuetzCPU::windowBigEndian(uint64_t addr) const
 {
+    if (cfg_.sst_window_cache)
+        return cfg_.window_big_endian && window_caches_.cache(0).contains(addr);
     return cfg_.window_big_endian && cfg_.sst_window_size != 0 &&
            addr >= cfg_.sst_window_base &&
            addr < cfg_.sst_window_base + cfg_.sst_window_size;
@@ -92,6 +94,17 @@ void QuetzCPU::pollMmioSyncMailbox()
         return;
 
     for (uint32_t v = 0; v < cfg_.vcpu_count; v++) {
+        if (cfg_.sst_window_cache) {
+            const auto epoch = __atomic_load_n(&shared->cpu_reset_epoch[v], __ATOMIC_ACQUIRE);
+            if (epoch != cache_reset_epochs_[v]) {
+                try {
+                    window_caches_.resetCore(v);
+                    cache_reset_epochs_[v] = epoch;
+                } catch (const std::exception& e) {
+                    output_->fatal(CALL_INFO, -1, "Window cache reset vCPU %u: %s\n", v, e.what());
+                }
+            }
+        }
         QuetzMmioSyncRequest* req = &shared->mmio_req[v];
         // Acquire pairs with the producer's (QEMU bridge) release-store of
         // `pending`, so the request fields it published beforehand are visible
@@ -134,29 +147,33 @@ void QuetzCPU::pollMmioSyncMailbox()
 
 bool QuetzCPU::handleMmioSyncCommand(uint32_t vcpu, const QuetzCommand& cmd)
 {
+    if (vcpu >= cfg_.vcpu_count)
+        output_->fatal(CALL_INFO, -1, "MMIO command has invalid vCPU %u.\n", vcpu);
     if (cmd.cmd == QUETZ_CMD_CACHE_OP ||
-        (cfg_.sst_window_cache && window_cache_.contains(cmd.addr))) {
-        if (!cfg_.sst_window_cache || vcpu != 0 || !mmio_ifaces_[0])
+        (cfg_.sst_window_cache && window_caches_.cache(vcpu).contains(cmd.addr))) {
+        if (!cfg_.sst_window_cache || !mmio_ifaces_[vcpu])
             output_->fatal(CALL_INFO, -1, "Cache mailbox requires an enabled window cache and MMIO interface.\n");
         try {
+            auto& cache = window_caches_.cache(vcpu);
             if (cmd.cmd == QUETZ_CMD_CACHE_OP) {
                 uint32_t value = 0;
                 for (unsigned i = 0; i < 4; ++i) value |= uint32_t(cmd.data[i]) << (8 * i);
-                if (cmd.size == 0) window_cache_.movec(cmd.addr, value);
-                else if (cmd.size == 1) window_cache_.push(value);
+                if (cmd.addr > UINT32_MAX) throw std::invalid_argument("invalid cache control operand");
+                if (cmd.size == 0) cache.movec(cmd.addr, value);
+                else if (cmd.size == 1) cache.push(value, cmd.addr);
                 else throw std::invalid_argument("unknown cache maintenance command");
             } else if (cmd.cmd == QUETZ_CMD_MMIO_READ_REQ || cmd.cmd == QUETZ_CMD_MMIO_WRITE_REQ) {
                 const bool write = cmd.cmd == QUETZ_CMD_MMIO_WRITE_REQ;
                 if (cmd.size > sizeof(cmd.data)) throw std::invalid_argument("oversized cache access");
-                window_cache_.access(cmd.addr, cmd.size, write,
+                cache.access(cmd.addr, cmd.size, write,
                     write ? std::vector<uint8_t>(cmd.data, cmd.data + cmd.size) : std::vector<uint8_t>{});
                 cores_[vcpu]->recordMmioSyncRequest(!write);
             } else {
                 throw std::invalid_argument("unexpected cached-window command");
             }
-            serviceWindowCache();
+            serviceWindowCache(vcpu);
         } catch (const std::exception& e) {
-            output_->fatal(CALL_INFO, -1, "Window cache: %s\n", e.what());
+            output_->fatal(CALL_INFO, -1, "Window cache vCPU %u: %s\n", vcpu, e.what());
         }
         return true;
     }
@@ -200,18 +217,19 @@ bool QuetzCPU::handleMmioSyncCommand(uint32_t vcpu, const QuetzCommand& cmd)
 bool QuetzCPU::completeMmioSyncResponse(uint32_t vcpu_hint,
                                         StandardMem::Request* resp)
 {
-    if (cache_request_outstanding_ && resp->getID() == cache_request_id_) {
+    if (const auto* pending = window_caches_.pending(resp->getID())) {
+        const uint32_t vcpu = pending->vcpu;
         auto* read = dynamic_cast<StandardMem::ReadResp*>(resp);
         auto* write = dynamic_cast<StandardMem::WriteResp*>(resp);
-        if (vcpu_hint != 0 || resp->getFail() || (cache_response_read_ ? !read : !write))
+        if (vcpu_hint != vcpu || resp->getFail() || (pending->read ? !read : !write))
             output_->fatal(CALL_INFO, -1, "Invalid or failed window-cache memory response.\n");
         try {
-            window_cache_.complete(read ? read->data : std::vector<uint8_t>{});
+            window_caches_.complete(resp->getID(), vcpu, read != nullptr,
+                                    read ? read->data : std::vector<uint8_t>{});
             delete resp;
-            cache_request_outstanding_ = false;
-            serviceWindowCache();
+            serviceWindowCache(vcpu);
         } catch (const std::exception& e) {
-            output_->fatal(CALL_INFO, -1, "Window cache: %s\n", e.what());
+            output_->fatal(CALL_INFO, -1, "Window cache vCPU %u: %s\n", vcpu, e.what());
         }
         return true;
     }
@@ -248,22 +266,47 @@ bool QuetzCPU::completeMmioSyncResponse(uint32_t vcpu_hint,
     return true;
 }
 
-void QuetzCPU::serviceWindowCache()
+void QuetzCPU::serviceWindowCache(uint32_t vcpu)
 {
-    const auto action = window_cache_.next();
-    if (action.kind == WindowDataCache::Kind::Done) {
-        uint64_t value = 0;
-        for (uint8_t byte : action.bytes) value = (value << 8) | byte;
-        frontend_->tunnel()->mmioSync().postResponse(0, value);
+    auto& cache = window_caches_.cache(vcpu);
+    for (;;) {
+        const auto action = cache.next();
+        if (action.kind == WindowDataCache::Kind::Done) {
+            uint64_t value = 0;
+            for (uint8_t byte : action.bytes) value = (value << 8) | byte;
+            frontend_->tunnel()->mmioSync().postResponse(vcpu, value);
+            return;
+        }
+        const bool read = action.kind == WindowDataCache::Kind::Read;
+        const uint64_t native_bases[] = {0x80000000, 0x40000000};
+        uint8_t* native = nullptr;
+        for (unsigned bank = 0; bank < 2; ++bank) {
+            if (action.address >= native_bases[bank] &&
+                action.address - native_bases[bank] < QUETZ_LOCAL_RAM_BYTES) {
+                const auto offset = action.address - native_bases[bank];
+                if (action.size > QUETZ_LOCAL_RAM_BYTES - offset)
+                    throw std::runtime_error("cache backing access crosses native RAM boundary");
+                native = quetzLocalRam(frontend_->tunnel()->getSharedData(), bank) + offset;
+                break;
+            }
+        }
+        if (native) {
+            if (read) cache.complete({native, native + action.size});
+            else {
+                if (action.bytes.size() != action.size)
+                    throw std::runtime_error("invalid native cache writeback size");
+                std::copy(action.bytes.begin(), action.bytes.end(), native);
+                cache.complete();
+            }
+            continue;
+        }
+        StandardMem::Request* request;
+        if (read) request = new StandardMem::Read(action.address, action.size);
+        else request = new StandardMem::Write(action.address, action.size, action.bytes);
+        window_caches_.issued(vcpu, request->getID(), read);
+        mmio_ifaces_[vcpu]->send(request);
         return;
     }
-    StandardMem::Request* request;
-    cache_response_read_ = action.kind == WindowDataCache::Kind::Read;
-    if (cache_response_read_) request = new StandardMem::Read(action.address, action.size);
-    else request = new StandardMem::Write(action.address, action.size, action.bytes);
-    cache_request_id_ = request->getID();
-    cache_request_outstanding_ = true;
-    mmio_ifaces_[0]->send(request);
 }
 
 bool QuetzCPU::hasAsyncInFlight() const

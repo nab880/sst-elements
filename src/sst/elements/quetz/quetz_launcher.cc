@@ -71,7 +71,7 @@ pid_t QemuLauncher::spawn(const QuetzConfig& cfg,
             output_->fatal(CALL_INFO, -1, "system multicore: %s.\n", error);
     }
     if (cfg.sst_window_cache) {
-        if (const char* error = windowCacheLaunchError(cfg.qemu_extra_args))
+        if (const char* error = windowCacheLaunchError(cfg.qemu_extra_args, cfg.vcpu_count))
             output_->fatal(CALL_INFO, -1, "sst_window_cache=1: %s.\n", error);
     }
     std::string resolved_plugin = cfg.qemu_plugin;
@@ -301,6 +301,11 @@ pid_t QemuLauncher::spawn(const QuetzConfig& cfg,
 
     for (const auto& kv : cfg.extra_env)
         setenv(kv.first.c_str(), kv.second.c_str(), 1);
+
+    if (cfg.sst_window_cache)
+        setenv("QUETZ_CACHE_RAM_SHM", shmem_region_name.c_str(), 1);
+    else
+        unsetenv("QUETZ_CACHE_RAM_SHM");
 
     if (!cfg.stdin_file.empty()) {
         if (!freopen(cfg.stdin_file.c_str(), "r", stdin)) _exit(1);

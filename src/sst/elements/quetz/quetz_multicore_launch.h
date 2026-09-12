@@ -8,11 +8,10 @@ namespace SST { namespace Quetz {
 // The initial two-core contract uses QEMU-owned shared RAM and independent
 // trace/MMIO slots. CPU1 starts from a second ELF when GPIO0 bit7 releases it;
 // hardware cache coherence and per-core interrupt controllers are not modeled.
-inline const char* multicoreLaunchError(uint32_t vcpus, bool cached_window,
+inline const char* multicoreLaunchError(uint32_t vcpus, bool /*cached_window*/,
                                       const std::vector<std::string>& args)
 {
     if (vcpus != 2) return "system multicore requires exactly two configured vCPUs";
-    if (cached_window) return "system multicore does not support sst_window_cache";
     bool machine_seen = false, cpu_seen = false, smp_seen = false, accel_seen = false;
     for (size_t i = 0; i < args.size(); ++i) {
         std::string option = args[i];

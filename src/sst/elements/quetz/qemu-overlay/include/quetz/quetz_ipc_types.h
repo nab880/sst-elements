@@ -16,8 +16,8 @@ enum QuetzShmemCmd {
     QUETZ_CMD_EXIT           = 3,
     QUETZ_CMD_MMIO_READ_REQ  = 4,
     QUETZ_CMD_MMIO_WRITE_REQ = 5,
-    // Synchronous cache operation: addr=control register, size=0 MOVEC /
-    // 1 CPUSHL, write_val=register value / instruction word. No layout change.
+    // Synchronous cache operation: size=0 MOVEC (addr=control register,
+    // value=register value), size=1 CPUSHL (addr=An set/way, value=instruction).
     QUETZ_CMD_CACHE_OP       = 7,
 };
 
@@ -66,7 +66,8 @@ typedef struct QuetzIrqSlot {
  * this struct or SST-core's tunnel header drifts, so skew fails the attach
  * loudly instead of corrupting MMIO values silently. 'QZM' + layout version —
  * must match sst-elements/quetz/quetz_ipc_types.h exactly. */
-#define QUETZ_SHM_MAGIC 0x515A4D02u
+#define QUETZ_SHM_MAGIC 0x515A4D04u
+#define QUETZ_LOCAL_RAM_BYTES 65536u
 
 typedef struct QuetzSharedData {
     size_t            numCores;
@@ -81,9 +82,23 @@ typedef struct QuetzSharedData {
      * acquire-loads it and skips the whole irq_slot scan when unchanged. */
     volatile uint32_t irq_generation;
     uint32_t          _pad2;
+    /* Release-published by QEMU before a reset CPU resumes execution. */
+    volatile uint32_t cpu_reset_epoch[QUETZ_MAX_MMIO_VCORES];
+    uint32_t local_ram_offset;
+    uint8_t local_ram_storage[3 * QUETZ_LOCAL_RAM_BYTES - 1];
     volatile uint32_t magic;   /* QUETZ_SHM_MAGIC — keep as the LAST field */
     uint32_t          _pad1;
 } QuetzSharedData;
+
+static inline uint8_t *quetz_local_ram(QuetzSharedData *shared, unsigned bank)
+{
+    const size_t begin = offsetof(QuetzSharedData, local_ram_storage);
+    const size_t end = begin + sizeof(shared->local_ram_storage);
+    if (bank >= 2 || shared->local_ram_offset < begin ||
+        shared->local_ram_offset > end - 2 * QUETZ_LOCAL_RAM_BYTES)
+        return NULL;
+    return (uint8_t *)shared + shared->local_ram_offset + bank * QUETZ_LOCAL_RAM_BYTES;
+}
 
 #ifdef __cplusplus
 }

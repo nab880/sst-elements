@@ -43,6 +43,7 @@ libquetz_la_SOURCES = \
     quetz_launcher.h \
     quetz_cache_launch.h \
     quetz_multicore_launch.h \
+    quetz_window_cache_bank.h \
     quetz_region_handler.h \
     quetz_region_table.cc \
     quetz_region_table.h \
@@ -177,6 +178,10 @@ EXTRA_DIST =	GETTING-STARTED.md \
 	README.md \
 	profiles/raptor-init.json \
 	qemu-overlay/apply-qemu-overlay.sh \
+	qemu-overlay/patch-cached-ram.py \
+	qemu-overlay/hw/m68k/raptor_boot.c \
+	qemu-overlay/hw/m68k/raptor_boot.h \
+	qemu-overlay/hw/misc/raptor_edma.c \
 	qemu-overlay/hw/m68k/raptor.c \
 	qemu-overlay/hw/misc/mcf_bsp_compat.c \
 	qemu-overlay/hw/misc/mcf_dtimer.c \
@@ -192,6 +197,12 @@ EXTRA_DIST =	GETTING-STARTED.md \
 	qemu-overlay/quetz_ipc_client.c \
 	qemu-overlay/hw/m68k/raptor_multicore.c \
 	qemu-overlay/hw/m68k/raptor_multicore.h \
+	tests/sysmode/basic_quetz_raptor_multicore_cache.py \
+	tests/sysmode/basic_quetz_raptor_edma_cache.py \
+	tests/sysmode/basic_quetz_raptor_cache_native.py \
+	tests/sysmode/firmware/raptor_dual_cache.c \
+	tests/sysmode/firmware/raptor_edma_cache.c \
+	tests/sysmode/firmware/raptor_cache_native.c \
 	SIMULATING-YOUR-SYSTEM.md \
 	TESTING.md \
 	tests/.gitignore \
@@ -344,6 +355,7 @@ EXTRA_DIST =	GETTING-STARTED.md \
 	tests/unit/test_cache_launch.cc \
 	tests/unit/test_multicore_launch.cc \
 	tests/unit/test_window_cache.cc \
+	tests/unit/test_window_cache_bank.cc \
 	tests/unit/test_decoder_riscv.cc \
 	tests/unit/test_fft_compute.cc \
 	tests/unit/test_scale_offset.cc \

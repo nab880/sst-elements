@@ -105,7 +105,8 @@ static void cb_cache_op(unsigned vi, void* userdata)
     if (__atomic_load_n(&req->pending, __ATOMIC_ACQUIRE) != 0 ||
         __atomic_load_n(&slot->ready, __ATOMIC_ACQUIRE) != 0)
         cache_op_fatal("synchronous cache mailbox already in use");
-    req->addr = op.control;
+    req->addr = op.kind == 0 ? op.control
+        : read_cache_register(vi, cache_registers[vi][op.source]);
     req->size = op.kind;
     req->write_val = value;
     req->cmd = QUETZ_CMD_CACHE_OP;

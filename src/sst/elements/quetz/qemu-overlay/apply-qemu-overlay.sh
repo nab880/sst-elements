@@ -113,6 +113,7 @@ if "VMSTATE_UINT32_V(env.rambar1" not in text:
 
 print("Raptor RAMBAR overlay applied")
 PY
+python3 "$OVERLAY/patch-cached-ram.py" "$QEMU_SRC"
 if ! grep -q mcf_bsp_compat.c "$HW_MESON"; then
     cat >> "$HW_MESON" <<'EOF'
 system_ss.add(files('mcf_bsp_compat.c'))

@@ -31,7 +31,26 @@ struct QuetzIpcClient {
     /* Shadow of shared irq_generation as of the last COMPLETE drain scan;
      * an unchanged generation lets the drain skip the whole slot matrix. */
     uint32_t          irq_gen;
+    struct QuetzIpcClient *next;
 };
+
+/* Reset may precede bridge realization. Preserve epochs and publish them
+ * on attach. Reset/attach/detach run under QEMU's global lock. */
+static QuetzIpcClient *reset_clients;
+static uint32_t reset_epochs[QUETZ_MAX_MMIO_VCORES];
+
+void quetz_ipc_cpu_reset(unsigned vcpu)
+{
+    if (vcpu >= QUETZ_MAX_MMIO_VCORES) {
+        fprintf(stderr, "quetz-ipc: reset CPU index out of range\n");
+        abort();
+    }
+    const uint32_t epoch = ++reset_epochs[vcpu];
+    for (QuetzIpcClient *c = reset_clients; c; c = c->next) {
+        __atomic_store_n(&c->shared->cpu_reset_epoch[vcpu], epoch,
+                         __ATOMIC_RELEASE);
+    }
+}
 
 static int map_shmem(const char *shmname, QuetzIpcClient *c)
 {
@@ -104,6 +123,15 @@ static int map_shmem(const char *shmname, QuetzIpcClient *c)
         c->fd = -1;
         return -1;
     }
+    uint8_t *ram = quetz_local_ram(c->shared, 0);
+    if (!ram || ((uintptr_t)ram & 4095u)) {
+        fprintf(stderr, "quetz-ipc: invalid shared RAM offset/alignment\n");
+        munmap(c->map, c->map_size);
+        c->map = NULL;
+        close(c->fd);
+        c->fd = -1;
+        return -1;
+    }
     return 0;
 }
 
@@ -117,6 +145,12 @@ QuetzIpcClient *quetz_ipc_attach(const char *shmname)
         free(c);
         return NULL;
     }
+    for (unsigned v = 0; v < QUETZ_MAX_MMIO_VCORES; ++v) {
+        __atomic_store_n(&c->shared->cpu_reset_epoch[v], reset_epochs[v],
+                         __ATOMIC_RELEASE);
+    }
+    c->next = reset_clients;
+    reset_clients = c;
     return c;
 }
 
@@ -125,10 +159,19 @@ unsigned quetz_ipc_vcpu_count(QuetzIpcClient *client)
     return client && client->shared ? client->shared->numCores : 0;
 }
 
+uint8_t *quetz_ipc_local_ram(QuetzIpcClient *client, unsigned bank)
+{
+    return client && client->shared && bank < 2
+        ? quetz_local_ram(client->shared, bank) : NULL;
+}
+
 void quetz_ipc_detach(QuetzIpcClient *client)
 {
     if (!client)
         return;
+    QuetzIpcClient **link = &reset_clients;
+    while (*link && *link != client) link = &(*link)->next;
+    if (*link) *link = client->next;
     if (client->map)
         munmap(client->map, client->map_size);
     if (client->fd >= 0)

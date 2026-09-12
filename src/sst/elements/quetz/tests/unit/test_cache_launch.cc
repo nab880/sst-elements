@@ -25,4 +25,29 @@ TEST_CASE("cache window rejects absent or conflicting CPU and machine arguments"
     CHECK(windowCacheLaunchError({"-M", "raptor-core2,strict-mmio=off"}) != nullptr);
     CHECK(windowCacheLaunchError({"-M", "raptor-core2", "-readconfig", "board.cfg"}) != nullptr);
     CHECK(windowCacheLaunchError({"-M", "raptor-core2", "--readconfig=board.cfg"}) != nullptr);
+    CHECK(windowCacheLaunchError({"-M", "raptor-core2", "-M", "raptor-core2"}) != nullptr);
+    CHECK(windowCacheLaunchError({"-M", "raptor-core2", "-cpu", "cfv4e", "-cpu", "cfv4e"}) != nullptr);
+    CHECK(windowCacheLaunchError({"-M", "raptor-core2", "-global", "x=y"}) != nullptr);
+    CHECK(windowCacheLaunchError({"-M", "raptor-core2", "-smp", "2"}) != nullptr);
+    CHECK(windowCacheLaunchError({"-M", "raptor-core2", "-accel", "tcg,thread=multi"}) != nullptr);
+}
+
+TEST_CASE("two private caches require the complete two-CPU launch contract") {
+    const std::vector<std::string> valid = {"-M", "raptor-core2,secondary-kernel=second.elf",
+                                           "-smp", "2", "-accel", "tcg,thread=single"};
+    CHECK(windowCacheLaunchError(valid, 2) == nullptr);
+    CHECK(windowCacheLaunchError(valid, 1) != nullptr);
+    CHECK(windowCacheLaunchError(valid, 0) != nullptr);
+    CHECK(windowCacheLaunchError(valid, 3) != nullptr);
+    CHECK(windowCacheLaunchError({"-M", "raptor-core2"}, 2) != nullptr);
+    for (const std::vector<std::string>& override : {
+             std::vector<std::string>{"-accel", "tcg,thread=multi"},
+             {"-cpu", "m5208"}, {"-readconfig", "a.cfg"}, {"-smp", "1"}}) {
+        auto args = valid;
+        args.insert(args.end(), override.begin(), override.end());
+        CHECK(windowCacheLaunchError(args, 2) != nullptr);
+    }
+    auto routes = valid;
+    routes[1] += ",edma-irq=40,edma-error-irq=41";
+    CHECK(windowCacheLaunchError(routes, 2) == nullptr);
 }

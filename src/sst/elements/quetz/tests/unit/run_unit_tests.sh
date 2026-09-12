@@ -45,6 +45,7 @@ compile test_coldfire_cache_ops.cc test_coldfire_cache_ops
 compile test_cache_launch.cc test_cache_launch
 compile test_multicore_launch.cc test_multicore_launch
 compile test_window_cache.cc test_window_cache
+compile test_window_cache_bank.cc test_window_cache_bank
 compile test_region_table.cc test_region_table
 compile test_mem_issue_split.cc test_mem_issue_split
 compile test_balar_flush_range.cc test_balar_flush_range
@@ -66,6 +67,7 @@ TESTS=(
     test_cache_launch
     test_multicore_launch
     test_window_cache
+    test_window_cache_bank
     test_region_table
     test_mem_issue_split
     test_balar_flush_range

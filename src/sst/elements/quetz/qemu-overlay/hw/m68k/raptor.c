@@ -26,6 +26,7 @@
 #include "raptor_boot.h"
 #include "raptor_multicore.h"
 #include "hw/irq.h"
+#include "quetz/quetz_ipc_client.h"
 
 #define TYPE_RAPTOR_MACHINE MACHINE_TYPE_NAME("raptor-core2")
 OBJECT_DECLARE_SIMPLE_TYPE(RaptorMachineState, RAPTOR_MACHINE)
@@ -61,6 +62,12 @@ typedef struct RaptorPlatform {
     struct RaptorMachineState *machine;
 } RaptorPlatform;
 
+typedef struct RaptorCacheRamView {
+    MemoryRegion iomem;
+    QuetzIpcClient *ipc;
+    uint64_t base;
+} RaptorCacheRamView;
+
 struct RaptorMachineState {
     MachineState parent_obj;
     bool strict_mmio;
@@ -74,6 +81,9 @@ struct RaptorMachineState {
     MemoryRegion sram1;
     MemoryRegion sram2;
     MemoryRegion p1_ram;
+    MemoryRegion p2_cache_ram;
+    QuetzIpcClient *cache_ipc;
+    RaptorCacheRamView cache_ram_view[2];
     RaptorFlexBus flexbus;
     RaptorPlatform platform;
     RaptorBootState boot;
@@ -212,6 +222,59 @@ static void raptor_map_ram(MemoryRegion *mr, const char *name, uint64_t base,
     memory_region_add_subregion(get_system_memory(), base, mr);
 }
 
+/* Internal data-only aliases live above the guest's 32-bit address space.
+ * The m68k TLB overlay selects them only for cacheable P1/P2 data accesses.
+ * Fetch, ELF loading, native DMA and uncached CPU accesses use raw RAM. */
+static unsigned raptor_cache_vcpu(RaptorCacheRamView *view)
+{
+    if (!current_cpu || current_cpu->cpu_index < 0 ||
+        (unsigned)current_cpu->cpu_index >= quetz_ipc_vcpu_count(view->ipc) ||
+        !(M68K_CPU(current_cpu)->env.sr & SR_S)) {
+        error_report("Raptor cached RAM requires a configured supervisor CPU");
+        exit(EXIT_FAILURE);
+    }
+    return current_cpu->cpu_index;
+}
+
+static uint64_t raptor_cache_ram_read(void *opaque, hwaddr offset, unsigned size)
+{
+    RaptorCacheRamView *view = opaque;
+    return quetz_ipc_mmio_read(view->ipc, raptor_cache_vcpu(view),
+                               view->base + offset, size);
+}
+
+static void raptor_cache_ram_write(void *opaque, hwaddr offset, uint64_t value,
+                                   unsigned size)
+{
+    RaptorCacheRamView *view = opaque;
+    quetz_ipc_mmio_write(view->ipc, raptor_cache_vcpu(view),
+                         view->base + offset, size, value);
+}
+
+static const MemoryRegionOps raptor_cache_ram_ops = {
+    .read = raptor_cache_ram_read,
+    .write = raptor_cache_ram_write,
+    .endianness = DEVICE_BIG_ENDIAN,
+    .valid = { .min_access_size = 1, .max_access_size = 8, .unaligned = true },
+    .impl = { .min_access_size = 1, .max_access_size = 8, .unaligned = true },
+};
+
+static void raptor_map_cached_ram(RaptorMachineState *s, MemoryRegion *ram,
+                                   const char *name, uint64_t base, unsigned bank)
+{
+    RaptorCacheRamView *view = &s->cache_ram_view[bank];
+    memory_region_init_ram_ptr(ram, OBJECT(s), name, RAPTOR_LOCAL_RAM_SIZE,
+                               quetz_ipc_local_ram(s->cache_ipc, bank));
+    memory_region_add_subregion(get_system_memory(), base, ram);
+    view->ipc = s->cache_ipc;
+    view->base = base;
+    memory_region_init_io(&view->iomem, OBJECT(s), &raptor_cache_ram_ops, view,
+                          bank ? "raptor.p2-data-cache" : "raptor.p1-data-cache",
+                          RAPTOR_LOCAL_RAM_SIZE);
+    memory_region_add_subregion(get_system_memory(), base + (UINT64_C(1) << 32),
+                                &view->iomem);
+}
+
 static DeviceState *raptor_create_reviewed_device(MachineState *machine,
                                                   const char *name,
                                                   const char *type,
@@ -286,6 +349,7 @@ static void raptor_machine_init(MachineState *machine)
     CPUM68KState *env;
     qemu_irq *pic;
     DeviceState *gpio;
+    const char *cache_shm = getenv("QUETZ_CACHE_RAM_SHM");
 
     if (machine->ram_size != RAPTOR_LOCAL_RAM_SIZE) {
         error_report("raptor-core2 requires exactly 64 KiB of P2 local RAM");
@@ -297,9 +361,18 @@ static void raptor_machine_init(MachineState *machine)
         exit(EXIT_FAILURE);
     }
 
+    if (cache_shm && cache_shm[0]) {
+        if (strcmp(machine->cpu_type, M68K_CPU_TYPE_NAME("cfv4e")) ||
+            !(s->cache_ipc = quetz_ipc_attach(cache_shm)) ||
+            quetz_ipc_vcpu_count(s->cache_ipc) != machine->smp.cpus) {
+            error_report("Raptor cached RAM requires cfv4e and matching Quetz IPC");
+            exit(EXIT_FAILURE);
+        }
+    }
     cpu = M68K_CPU(cpu_create(machine->cpu_type));
     env = &cpu->env;
     env->vbr = 0;
+    env->quetz_cache_ram = s->cache_ipc != NULL;
 
     memory_region_init_io(&s->unknown, OBJECT(machine), &raptor_unknown_ops, s,
                           "raptor.unmapped", UINT64_C(1) << 32);
@@ -316,9 +389,14 @@ static void raptor_machine_init(MachineState *machine)
                    RAPTOR_SRAM_SIZE);
     raptor_map_ram(&s->sram2, "raptor.sram2", RAPTOR_SRAM2_BASE,
                    RAPTOR_SRAM_SIZE);
-    memory_region_add_subregion(sysmem, RAPTOR_P2_BASE, machine->ram);
-    raptor_map_ram(&s->p1_ram, "raptor.p1-ram", RAPTOR_P1_BASE,
-                   RAPTOR_LOCAL_RAM_SIZE);
+    if (s->cache_ipc) {
+        raptor_map_cached_ram(s, &s->p1_ram, "raptor.p1-ram", RAPTOR_P1_BASE, 0);
+        raptor_map_cached_ram(s, &s->p2_cache_ram, "raptor.p2-ram", RAPTOR_P2_BASE, 1);
+    } else {
+        memory_region_add_subregion(sysmem, RAPTOR_P2_BASE, machine->ram);
+        raptor_map_ram(&s->p1_ram, "raptor.p1-ram", RAPTOR_P1_BASE,
+                       RAPTOR_LOCAL_RAM_SIZE);
+    }
 
     s->flexbus.machine = s;
     memory_region_init_io(&s->flexbus.iomem, OBJECT(machine),
@@ -356,6 +434,7 @@ static void raptor_machine_init(MachineState *machine)
     if (machine->smp.cpus == 2) {
         raptor_secondary_init(&s->secondary, machine, s->secondary_kernel,
                                RAPTOR_P2_BASE, RAPTOR_LOCAL_RAM_SIZE, 0x4000fc00);
+        s->secondary.cpu->env.quetz_cache_ram = s->cache_ipc != NULL;
         qdev_connect_gpio_out_named(gpio, "out", 7,
             qemu_allocate_irq(raptor_secondary_release, &s->secondary, 0));
     }

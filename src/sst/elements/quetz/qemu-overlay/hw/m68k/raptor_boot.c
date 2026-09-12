@@ -15,12 +15,14 @@
 #include "sysemu/qtest.h"
 #include "sysemu/reset.h"
 #include "raptor_boot.h"
+#include "quetz/quetz_ipc_client.h"
 
 static void raptor_boot_reset(void *opaque)
 {
     RaptorBootState *state = opaque;
 
     cpu_reset(CPU(state->cpu));
+    quetz_ipc_cpu_reset(CPU(state->cpu)->cpu_index);
     state->cpu->env.pc = state->entry;
     if (state->vector_boot) {
         state->cpu->env.aregs[7] = state->initial_sp;

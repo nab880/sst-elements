@@ -27,8 +27,8 @@ enum QuetzShmemCmd : uint32_t {
     QUETZ_CMD_EXIT           = 3,
     QUETZ_CMD_MMIO_READ_REQ  = 4,
     QUETZ_CMD_MMIO_WRITE_REQ = 5,
-    // Synchronous cache operation: addr=control register, size=0 MOVEC /
-    // 1 CPUSHL, write_val=register value / instruction word. No layout change.
+    // Synchronous cache operation: size=0 MOVEC (addr=control register,
+    // value=register value), size=1 CPUSHL (addr=An set/way, value=instruction).
     QUETZ_CMD_CACHE_OP       = 7,
     // A run of `size` consecutive non-memory insns of one `insn_class`; the SST
     // input stage re-expands it into `size` NOP events (P2 ring-traffic cut).
@@ -114,7 +114,8 @@ struct QuetzIrqSlot {
 // hand-mirrors) drifts, turning silent layout skew into a loud attach
 // failure. 'QZM' + layout version — BUMP THE LOW BYTE on ANY change to this
 // struct, and keep the overlay mirror header in lockstep.
-static constexpr uint32_t QUETZ_SHM_MAGIC = 0x515A4D02u;
+static constexpr uint32_t QUETZ_SHM_MAGIC = 0x515A4D04u;
+static constexpr uint32_t QUETZ_LOCAL_RAM_BYTES = 65536u;
 
 struct QuetzSharedData {
     size_t            numCores;
@@ -129,9 +130,34 @@ struct QuetzSharedData {
     // acquire-loads it and skips the whole irq_slot scan when unchanged.
     volatile uint32_t irq_generation;
     uint32_t          _pad2;
+    // QEMU publishes each CPU reset before that CPU can resume execution.
+    // SST acquire-loads the epoch before consuming the CPU's next request.
+    volatile uint32_t cpu_reset_epoch[QUETZ_MAX_MMIO_VCORES];
+    uint32_t local_ram_offset;
+    // QEMU maps aligned P1/P2 RAM directly from this backing. CPU data uses
+    // the same per-core cache as the SST window; ELF loading, fetch and DMA
+    // use these bytes directly. Extra space permits 64-KiB pointer alignment.
+    uint8_t local_ram_storage[3 * QUETZ_LOCAL_RAM_BYTES - 1];
     volatile uint32_t magic;   // QUETZ_SHM_MAGIC — keep as the LAST field
     uint32_t          _pad1;
 };
+
+inline uint8_t* quetzLocalRam(QuetzSharedData* shared, unsigned bank) {
+    const size_t begin = offsetof(QuetzSharedData, local_ram_storage);
+    const size_t end = begin + sizeof(shared->local_ram_storage);
+    if (bank >= 2 || shared->local_ram_offset < begin ||
+        shared->local_ram_offset > end - 2 * QUETZ_LOCAL_RAM_BYTES)
+        return nullptr;
+    return reinterpret_cast<uint8_t*>(shared) + shared->local_ram_offset +
+        bank * QUETZ_LOCAL_RAM_BYTES;
+}
+
+inline void quetzInitializeLocalRam(QuetzSharedData* shared) {
+    const uintptr_t first = (uintptr_t(shared->local_ram_storage) +
+        QUETZ_LOCAL_RAM_BYTES - 1) & ~uintptr_t(QUETZ_LOCAL_RAM_BYTES - 1);
+    // Publish one relative offset; separate mmap views must never realign it.
+    shared->local_ram_offset = uint32_t(first - uintptr_t(shared));
+}
 
 } // namespace Quetz
 } // namespace SST
