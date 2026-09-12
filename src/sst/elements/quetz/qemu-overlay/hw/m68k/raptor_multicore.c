@@ -7,12 +7,14 @@
 #include "sysemu/reset.h"
 #include "elf.h"
 #include "raptor_multicore.h"
+#include "quetz/quetz_ipc_client.h"
 
 static void raptor_secondary_reset(void *opaque)
 {
     RaptorSecondaryState *s = opaque;
     CPUState *cpu = CPU(s->cpu);
     cpu_reset(cpu);
+    quetz_ipc_cpu_reset(cpu->cpu_index);
     s->cpu->env.pc = s->entry;
     s->cpu->env.aregs[7] = s->initial_sp;
     cpu->halted = true;
@@ -30,6 +32,7 @@ void raptor_secondary_release(void *opaque, int line, int level)
         CPUState *cpu = CPU(s->cpu);
         /* Each release restarts the secondary ELF; shared RAM survives hold/release cycles. */
         cpu_reset(cpu);
+        quetz_ipc_cpu_reset(cpu->cpu_index);
         s->cpu->env.pc = s->entry;
         s->cpu->env.aregs[7] = s->initial_sp;
         s->released = true;

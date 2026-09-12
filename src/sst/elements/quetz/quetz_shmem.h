@@ -15,6 +15,7 @@
 #define _SST_QUETZ_SHMEM_H
 
 #include <stdlib.h>
+#include <cstring>
 
 #include <sst/core/interprocess/tunneldef.h>
 
@@ -57,8 +58,12 @@ public:
             for (size_t i = 0; i < QUETZ_MAX_MMIO_VCORES; i++) {
                 mmio_sync_.clearSlot((uint32_t)i);
                 mmio_sync_.clearIrqSlots((uint32_t)i);
+                sharedData->cpu_reset_epoch[i] = 0;
             }
             sharedData->irq_generation = 0;
+            quetzInitializeLocalRam(sharedData);
+            std::memset(sharedData->local_ram_storage, 0,
+                        sizeof(sharedData->local_ram_storage));
             // Layout stamp, checked by the QEMU-side IPC client at attach
             // (quetz_ipc_client.c). Written last, after the slots are in
             // their initial state; the QEMU process is spawned strictly

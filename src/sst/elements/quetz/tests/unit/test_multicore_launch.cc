@@ -14,7 +14,7 @@ TEST_CASE("two-core launch requires explicit topology and serialized TCG") {
           "-smp=2", "-accel=tcg,thread=single", "-cpu=cfv4e"}) == nullptr);
     CHECK(multicoreLaunchError(1, false, valid()) != nullptr);
     CHECK(multicoreLaunchError(3, false, valid()) != nullptr);
-    CHECK(multicoreLaunchError(2, true, valid()) != nullptr);
+    CHECK(multicoreLaunchError(2, true, valid()) == nullptr);
     for (size_t index : {size_t(0), size_t(2), size_t(4)}) {
         auto args = valid(); args.erase(args.begin() + index, args.begin() + index + 2);
         CHECK(multicoreLaunchError(2, false, args) != nullptr);
@@ -40,6 +40,7 @@ TEST_CASE("unsupported machine CPU accelerator and topology cannot override cont
     for (const std::string accel : {"tcg", "tcg,thread=multi", "kvm"}) {
         auto args = valid(); args[5] = accel;
         CHECK(multicoreLaunchError(2, false, args) != nullptr);
+        CHECK(multicoreLaunchError(2, true, args) != nullptr);
     }
 }
 

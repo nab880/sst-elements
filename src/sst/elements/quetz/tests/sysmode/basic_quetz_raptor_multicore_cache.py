@@ -1,7 +1,8 @@
-"""Two real CPUs, independent trace/mailbox slots, and one shared SST window.
+"""Two real CPUs with independent functional V4e caches and shared SST backing.
 
-Native RAM remains QEMU-owned. Per-core trace memories do not drive guest data.
-Only the synchronous shared window supplies the cross-core SST data exchange.
+Per-core trace memories do not drive guest data. Native SRAM flags synchronize
+phases. Tested bytes reside in the SST window or shared raw P1/P2 RAM backing;
+each CPU has its own data cache in either case.
 """
 import os
 import sst
@@ -12,7 +13,7 @@ for path in (primary, secondary):
     if not os.path.isfile(path) or any(char in path for char in ', \t\n'):
         raise ValueError('multicore diagnostic requires existing ELF paths without QEMU delimiters')
 os.environ['QUETZ_SST_WIN_START'] = '0x71000000'
-os.environ['QUETZ_SST_WIN_END'] = '0x7100003f'
+os.environ['QUETZ_SST_WIN_END'] = '0x710000ff'
 for name in ('QUETZ_MMIO_PAYLOAD', 'QUETZ_MMIO_START', 'QUETZ_MMIO_END',
              'QUETZ_IRQ_LINES', 'QUETZ_BSP_PROFILE', 'QUETZ_BSP_DISCOVER'):
     os.environ.pop(name, None)
@@ -25,7 +26,7 @@ cpu.addParams({'verbose': 1, 'clock': '1GHz', 'vcpu_count': 2,
                'qemu_args': f'-machine raptor-core2,secondary-kernel={secondary} '
                             '-smp 2 -accel tcg,thread=single -display none -monitor none '
                             '-serial null -serial stdio -serial null',
-               'window_big_endian': 1, 'sst_window_cache': 0,
+               'window_big_endian': 1, 'sst_window_cache': 1,
                'appstdout': os.environ['QUETZ_STDOUT_FILE'],
                'appstderr': os.environ.get('QUETZ_STDERR_FILE', os.environ['QUETZ_STDOUT_FILE'] + '.stderr'),
                'filter_unmatched_regions': 1})
@@ -54,14 +55,14 @@ for core in range(2):
     nic.addParams({'group': 0, 'destinations': [2], 'network_bw': '25GB/s'})
     sst.Link(f'mailbox{core}').connect((nic, 'port', '1ns'), (router, f'port{core}', '1ns'))
 memory = sst.Component('shared_memory', 'memHierarchy.MemController')
-memory.addParams({'clock': '1GHz', 'addr_range_start': 0x71000000, 'addr_range_end': 0x7100003f})
+memory.addParams({'clock': '1GHz', 'addr_range_start': 0x71000000, 'addr_range_end': 0x710000ff})
 memory.setSubComponent('backend', 'memHierarchy.simpleMem').addParams(
-    {'access_time': '100ns', 'mem_size': '64B'})
+    {'access_time': '100ns', 'mem_size': '256B'})
 memlink = memory.setSubComponent('highlink', 'memHierarchy.MemLink')
 directory = sst.Component('directory', 'memHierarchy.DirectoryController')
 directory.addParams({'clock': '1GHz', 'coherence_protocol': 'MESI', 'cache_line_size': 64,
                      'entry_cache_size': 4096, 'mshr_num_entries': 256,
-                     'addr_range_start': 0x71000000, 'addr_range_end': 0x7100003f})
+                     'addr_range_start': 0x71000000, 'addr_range_end': 0x710000ff})
 network = directory.setSubComponent('highlink', 'memHierarchy.MemNIC')
 network.addParams({'group': 2, 'sources': [0], 'network_bw': '25GB/s'})
 sst.Link('directory_network').connect((network, 'port', '1ns'), (router, 'port2', '1ns'))
