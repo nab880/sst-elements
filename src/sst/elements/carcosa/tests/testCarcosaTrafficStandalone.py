@@ -24,7 +24,7 @@ cpu = sst.Component("cpu", "carcosa.CarcosaCPU")
 cpu.addParams({{"clock": "1GHz", "memFreq": 1, "memSize": "16KiB",
     "opCount": {operations}, "rngseed": 101, "verbose": 2,
     "maxOutstanding": 16, "reqsPerIssue": 4,
-    "noncacheableRangeStart": 8192, "noncacheableRangeEnd": 16384}})
+    "noncacheableRangeStart": {noncacheable_start}, "noncacheableRangeEnd": {noncacheable_end}}})
 cpu.addParams({frequencies!r})
 iface = cpu.setSubComponent("memory", "memHierarchy.standardInterface")
 memory = sst.Component("memory", "memHierarchy.MemController")
@@ -37,7 +37,7 @@ sst.Link("hali_cache").connect((hali, "lowlink", "100ps"), (cache, "highlink", "
 sst.Link("cache_memory").connect((cache, "lowlink", "100ps"), (memory, "highlink", "100ps"))
 sst.setStatisticLoadLevel(1)
 sst.setStatisticOutput("sst.statOutputCSV", {{"filepath": "stats.csv"}})
-cpu.enableStatistics(["reads", "writes", "readNoncache", "writeNoncache"],
+cpu.enableStatistics({statistics!r},
     {{"type": "sst.AccumulatorStatistic", "rate": "0ns"}})
 sst.setProgramOption("stop-at", "500us")
 '''
@@ -48,11 +48,13 @@ def require(condition, message):
         raise AssertionError(message)
 
 
-def run_case(args, root, name, frequencies):
+def run_simulation(args, root, name, frequencies, operations, noncacheable_range, statistics):
     directory = root / name
     directory.mkdir()
     config = directory / "traffic.py"
-    config.write_text(CONFIG.format(operations=OPERATIONS, frequencies=frequencies))
+    config.write_text(CONFIG.format(operations=operations, frequencies=frequencies,
+                                   noncacheable_start=noncacheable_range[0],
+                                   noncacheable_end=noncacheable_range[1], statistics=statistics))
     command = [args.sst]
     if args.lib_path:
         command.append("--lib-path=" + args.lib_path)
@@ -70,8 +72,15 @@ def run_case(args, root, name, frequencies):
                 statistic = row["StatisticName"]
                 require(statistic not in counts, name + ": duplicate final statistic " + statistic)
                 counts[statistic] = int(row["Sum.u64"])
-    for statistic in ("reads", "writes", "readNoncache", "writeNoncache"):
+    for statistic in statistics:
         require(statistic in counts, name + ": missing statistic " + statistic)
+    return counts, output
+
+
+def run_case(args, root, name, frequencies):
+    counts, output = run_simulation(args, root, name, frequencies, OPERATIONS,
+                                    (8192, MEMORY_BYTES),
+                                    ["reads", "writes", "readNoncache", "writeNoncache"])
     require(counts["reads"] + counts["writes"] == OPERATIONS, name + ": wrong operation count")
     # The upper half is noncacheable, so its counters prove the CPU uses more
     # than the old hard-coded 200-byte range even in builds without debug logs.
@@ -84,6 +93,35 @@ def run_case(args, root, name, frequencies):
                 name + ": unaligned or out-of-range address")
         require(max(addresses) >= MEMORY_BYTES // 2, name + ": logged addresses stayed in the old range")
     return counts, max(addresses) if addresses else None
+
+
+def run_cacheable_case(args, root, name, frequency, statistic, noncacheable_range):
+    operations = 256
+    counts, output = run_simulation(args, root, name,
+                                    {"read_freq": 0, "write_freq": 0, frequency: 100},
+                                    operations, noncacheable_range, [statistic])
+    is_llsc = frequency == "llsc_freq"
+    expected = operations // 2 if is_llsc else operations
+    require(counts[statistic] == expected, name + ": wrong operation count")
+    # These helpers log through verbose(), independently of debug build flags.
+    addresses = [int(value, 16) for value in re.findall(
+        r"Issued (?:FlushAddrInv|FlushAddr|LoadLink|StoreConditional) for address 0x([0-9a-fA-F]+)",
+        output)]
+    require(len(addresses) == operations, name + ": missing issued addresses")
+    size = 4 if is_llsc else 64
+    start, end = noncacheable_range
+    require(all(address % size == 0 and address + size <= MEMORY_BYTES for address in addresses),
+            name + ": unaligned or out-of-range address")
+    require(all(address + size <= start or address >= end for address in addresses),
+            name + ": request overlaps noncacheable memory")
+    if start:
+        require(min(addresses) < start, name + ": no requests below noncacheable memory")
+    if end < MEMORY_BYTES:
+        # Also catches remapping only samples below 'end', which leaves the
+        # top of memory unreachable when the noncacheable interval is narrow.
+        require(max(addresses) >= max(end, MEMORY_BYTES - (end - start)),
+                name + ": no requests reached the top of cacheable memory")
+    print("PASS %s: %s=%d max_address=0x%x" % (name, statistic, counts[statistic], max(addresses)))
 
 
 def main():
@@ -103,6 +141,13 @@ def main():
     with tempfile.TemporaryDirectory(prefix="carcosa-traffic-") as temporary:
         results = {name: run_case(args, Path(temporary), name, frequencies)
                    for name, frequencies in cases.items()}
+        ranges = {"middle-wide": (4096, 12288), "middle-narrow": (4096, 6144),
+                  "lower-half": (0, 8192), "upper-half": (8192, MEMORY_BYTES)}
+        for range_name, interval in ranges.items():
+            for frequency, statistic in (("flush_freq", "flushes"),
+                                         ("flushinv_freq", "flushinvs"), ("llsc_freq", "llsc")):
+                run_cacheable_case(args, Path(temporary), range_name + "-" + frequency,
+                                   frequency, statistic, interval)
     require(results["read-only"][0]["reads"] == OPERATIONS, "read-only configuration issued writes")
     require(results["write-only"][0]["writes"] == OPERATIONS, "write-only configuration issued reads")
     defaults = results["defaults"][0]
