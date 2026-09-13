@@ -332,6 +332,10 @@ EccGuard::EccGuard(ComponentId_t id, Params& params) : Component(id) {
                     "window: set resident_addr_start/resident_addr_len (or the "
                     "inject_addr_start/inject_addr_len fallback).\n");
             }
+            if (wlen - 1 > UINT64_MAX - wbase) {
+                out_->fatal(CALL_INFO, -1,
+                    "EccGuard: resident fault-map window exceeds the address space.\n");
+            }
             if (resident_rate_per_ns_ <= 0.0 && resident_faults_at_start_ == 0) {
                 out_->output("EccGuard WARNING: fault_model='resident' with no "
                               "arrival rate (resident_fault_rate_per_ms / FIT) and "
@@ -710,14 +714,6 @@ inline uint32_t numWords(uint32_t payload_bytes, EccScheme scheme) {
     return EccModelMath::wordCount(payload_bytes, scheme);
 }
 
-// Bits per ECC word for the draw. For schemes with no word concept we use
-// payload bits.
-inline uint32_t bitsPerWord(uint32_t payload_bytes, EccScheme scheme) {
-    uint32_t wb = eccWordBytes(scheme);
-    if (wb == 0) return payload_bytes * 8;
-    return wb * 8;
-}
-
 inline bool isCorrelatedMode(EccGuard::FaultMode m) {
     // SingleWord and spatial modes deposit all errors into one ECC word —
     // the clustering chipkill is designed against. SingleCell is 1-bit.
@@ -742,7 +738,8 @@ void EccGuard::distributeErrorsToChips(
     unsigned nchips = chipsPerEccWord(scheme);
     if (nchips == 0 || errs == 0) return;
     chip_counts.assign(nchips, 0);
-    if (campaign_force_multi_chip_ && nchips >= 3) {
+    if (fault_model_ == FaultModel::Campaign && campaign_force_multi_chip_
+        && nchips >= 3 && errs >= 3) {
         unsigned need = std::min<unsigned>(3u, nchips);
         std::vector<unsigned> picks;
         picks.reserve(need);
@@ -791,15 +788,18 @@ void EccGuard::placeFaultErrors(FaultDraw& draw, uint32_t payload_bytes,
         }
     };
 
-    if (isCorrelatedMode(draw.mode)) {
+    // Forced multi-chip campaigns must keep enough errors together to affect
+    // three chips in one protection word, including when the mode is "cell".
+    const bool force_chip_cluster = fault_model_ == FaultModel::Campaign
+        && campaign_force_multi_chip_ && chip_aware;
+    if (isCorrelatedMode(draw.mode) || force_chip_cluster) {
         std::uniform_int_distribution<uint32_t> pick(0, word_count - 1);
         uint32_t word = pick(stdRng_);
         unsigned remaining = draw.num_errors;
-        unsigned capacity = bitsPerWord(payload_bytes, scheme);
         for (uint32_t offset = 0; remaining > 0 && offset < word_count; ++offset) {
             uint32_t target = (word + offset) % word_count;
-            unsigned placed = capacity == 0
-                ? remaining : std::min(capacity, remaining);
+            unsigned capacity = EccModelMath::wordBits(payload_bytes, scheme, target);
+            unsigned placed = std::min(capacity, remaining);
             setWord(target, placed);
             remaining -= placed;
         }
@@ -931,6 +931,17 @@ EccGuard::FaultDraw EccGuard::drawFaultCampaign(uint32_t payload_bytes,
     d.mode = campaign_mode_;
     int chosen = static_cast<int>(campaign_mode_);
 
+    // Check the effective access policy, which can override the uniform
+    // scheme. The force flag is inert for SECDED and unprotected accesses.
+    const bool force_chipkill = campaign_force_multi_chip_
+        && scheme == EccScheme::CHIPKILL_x4;
+    if (force_chipkill && campaign_errors_fixed_ > 0
+        && campaign_errors_fixed_ < 3) {
+        out_->fatal(CALL_INFO, -1,
+                    "EccGuard: campaign_force_multi_chip with chipkill requires "
+                    "campaign_errors_fixed to be 0 (sampled) or at least 3.\n");
+    }
+
     unsigned lo = kFaultModeBitsLow [chosen];
     unsigned hi = kFaultModeBitsHigh[chosen];
     if (hi < lo) hi = lo;
@@ -938,6 +949,10 @@ EccGuard::FaultDraw EccGuard::drawFaultCampaign(uint32_t payload_bytes,
     if (campaign_errors_fixed_ > 0) {
         errs = campaign_errors_fixed_;
     } else {
+        if (force_chipkill) {
+            lo = std::max(lo, 3u);
+            hi = std::max(hi, lo);
+        }
         std::uniform_int_distribution<unsigned> nbits(lo, hi);
         errs = nbits(stdRng_);
     }
@@ -1014,6 +1029,10 @@ static inline unsigned residentChipForWordBit(uint32_t bit_in_word, size_t nchip
 
 void EccGuard::addUniformBitInLine(ResidentFault& f, uint64_t line_base,
                                    unsigned bit_in_line) {
+    uint64_t wbase = 0, wlen = 0;
+    const uint64_t byte = line_base + bit_in_line / 8;
+    if (!resolveResidentWindow(wbase, wlen)
+        || byte < wbase || byte - wbase >= wlen) return;
     auto& mask = f.line_bits[line_base]; // value-initialized (zeroed) on first touch
     mask[bit_in_line / 8] |= static_cast<uint8_t>(1u << (bit_in_line % 8));
 }
@@ -1022,13 +1041,19 @@ void EccGuard::addChipBitsInLine(ResidentFault& f, uint64_t line_base,
                                  unsigned chip, unsigned nbits) {
     unsigned positions[16];
     unsigned n = 0;
+    uint64_t wbase = 0, wlen = 0;
+    if (!resolveResidentWindow(wbase, wlen)) return;
     for (unsigned j = 0; j < 4; ++j)
-        for (unsigned i = 0; i < kResidentNibbleBits; ++i)
-            positions[n++] = residentLineBitForChip(chip, j, i);
-    if (nbits > 16) nbits = 16;
+        for (unsigned i = 0; i < kResidentNibbleBits; ++i) {
+            const unsigned bit = residentLineBitForChip(chip, j, i);
+            const uint64_t byte = line_base + bit / 8;
+            if (byte >= wbase && byte - wbase < wlen)
+                positions[n++] = bit;
+        }
+    nbits = std::min(nbits, n);
     // Partial Fisher-Yates: nbits distinct positions.
     for (unsigned k = 0; k < nbits; ++k) {
-        std::uniform_int_distribution<unsigned> pick(k, 15);
+        std::uniform_int_distribution<unsigned> pick(k, n - 1);
         std::swap(positions[k], positions[pick(residentRng_)]);
         addUniformBitInLine(f, line_base, positions[k]);
     }
@@ -1038,7 +1063,8 @@ void EccGuard::materializeResidentFault() {
     uint64_t wbase = 0, wlen = 0;
     if (!resolveResidentWindow(wbase, wlen) || wlen == 0) return;
     const uint64_t first_line = wbase & ~63ULL;
-    const uint64_t nlines     = (wbase + wlen - first_line + 63) / 64;
+    const uint64_t last_byte  = wbase + (wlen - 1);
+    const uint64_t nlines     = (last_byte - first_line) / 64 + 1;
 
     ResidentFault f;
     if (resident_mode_mix_) {
@@ -1057,11 +1083,16 @@ void EccGuard::materializeResidentFault() {
         std::bernoulli_distribution(resident_permanent_fraction_)(residentRng_);
 
     auto lineAt = [&](uint64_t idx) { return first_line + idx * 64; };
-    std::uniform_int_distribution<uint64_t> lpick(0, nlines - 1);
-    std::uniform_int_distribution<unsigned> chip_pick(0, 31);
     std::uniform_int_distribution<unsigned> k14(1, 4);
     std::uniform_int_distribution<unsigned> k12(1, 2);
-    std::uniform_int_distribution<unsigned> bpick(0, 511);
+    auto addCell = [&]() {
+        std::uniform_int_distribution<uint64_t> byte_pick(0, wlen - 1);
+        std::uniform_int_distribution<unsigned> bit_pick(0, 7);
+        const uint64_t byte = wbase + byte_pick(residentRng_);
+        addUniformBitInLine(f, byte & ~63ULL,
+                            (byte % 64) * 8 + bit_pick(residentRng_));
+    };
+    std::vector<uint64_t> footprint_lines;
 
     const uint64_t row_lines = std::max<uint64_t>(1, resident_row_bytes_ / 64);
     const uint64_t nrows     = (nlines + row_lines - 1) / row_lines;
@@ -1072,68 +1103,95 @@ void EccGuard::materializeResidentFault() {
 
     switch (f.mode) {
     case FaultMode::SingleCell:
-        addUniformBitInLine(f, lineAt(lpick(residentRng_)), bpick(residentRng_));
+        addCell();
         break;
     case FaultMode::SingleWord: {
-        // Multi-bit fault at one address: 2 distinct bits inside one aligned
-        // 64-bit region of a single line.
-        uint64_t lb = lineAt(lpick(residentRng_));
-        std::uniform_int_distribution<unsigned> rpick(0, 7);
-        std::uniform_int_distribution<unsigned> bit64(0, 63);
-        unsigned region = rpick(residentRng_);
-        unsigned b1 = bit64(residentRng_), b2 = b1;
-        while (b2 == b1) b2 = bit64(residentRng_);
-        addUniformBitInLine(f, lb, region * 64 + b1);
-        addUniformBitInLine(f, lb, region * 64 + b2);
+        // Two distinct in-window bits from one intersecting aligned word.
+        const uint64_t first_word = wbase & ~7ULL;
+        const uint64_t nwords = (last_byte - first_word) / 8 + 1;
+        std::uniform_int_distribution<uint64_t> word_pick(0, nwords - 1);
+        const uint64_t word = first_word + word_pick(residentRng_) * 8;
+        const uint64_t first = std::max(wbase, word);
+        const uint64_t last = std::min(last_byte, word + 7);
+        const unsigned bits = static_cast<unsigned>(last - first + 1) * 8;
+        std::uniform_int_distribution<unsigned> first_pick(0, bits - 1);
+        std::uniform_int_distribution<unsigned> second_pick(0, bits - 2);
+        const unsigned b1 = first_pick(residentRng_);
+        unsigned b2 = second_pick(residentRng_);
+        if (b2 >= b1) ++b2;
+        const uint64_t lb = word & ~63ULL;
+        const unsigned offset = static_cast<unsigned>(first - lb) * 8;
+        addUniformBitInLine(f, lb, offset + b1);
+        addUniformBitInLine(f, lb, offset + b2);
         break;
     }
     case FaultMode::SingleRow: {
         // One DRAM row on one x4 chip: every line of the row carries 1-4 bad
         // bits confined to that chip's nibbles.
-        unsigned chip = chip_pick(residentRng_);
         std::uniform_int_distribution<uint64_t> rowp(0, nrows - 1);
         uint64_t r0 = rowp(residentRng_) * row_lines;
         for (uint64_t i = r0; i < std::min(nlines, r0 + row_lines); i += stride)
-            addChipBitsInLine(f, lineAt(i), chip, k14(residentRng_));
+            footprint_lines.push_back(lineAt(i));
         break;
     }
     case FaultMode::SingleColumn: {
         // Same in-row line offset across every row, one chip.
-        unsigned chip = chip_pick(residentRng_);
-        std::uniform_int_distribution<uint64_t> colp(0, row_lines - 1);
+        std::uniform_int_distribution<uint64_t> colp(0, std::min(row_lines, nlines) - 1);
         uint64_t col = colp(residentRng_);
         for (uint64_t r = 0; r < nrows; r += stride) {
             uint64_t idx = r * row_lines + col;
             if (idx < nlines)
-                addChipBitsInLine(f, lineAt(idx), chip, k12(residentRng_));
+                footprint_lines.push_back(lineAt(idx));
         }
         break;
     }
     case FaultMode::SingleBank: {
         // A contiguous group of rows in one bank, one chip; the fault
         // manifests at one scattered line per row.
-        unsigned chip   = chip_pick(residentRng_);
-        uint64_t nbanks = std::max<uint64_t>(1, nrows / resident_bank_rows_);
+        const uint64_t nbanks = 1 + (nrows - 1) / resident_bank_rows_;
         std::uniform_int_distribution<uint64_t> bankp(0, nbanks - 1);
-        std::uniform_int_distribution<uint64_t> colp(0, row_lines - 1);
         uint64_t r0 = bankp(residentRng_) * resident_bank_rows_;
-        for (uint64_t r = r0; r < std::min(nrows, r0 + resident_bank_rows_); ++r) {
-            uint64_t idx = r * row_lines + colp(residentRng_);
-            if (idx < nlines)
-                addChipBitsInLine(f, lineAt(idx), chip, k14(residentRng_));
+        const uint64_t rows = std::min(nrows - r0, resident_bank_rows_);
+        for (uint64_t r = r0; r < r0 + rows; ++r) {
+            const uint64_t first = r * row_lines;
+            std::uniform_int_distribution<uint64_t> colp(
+                0, std::min(row_lines, nlines - first) - 1);
+            footprint_lines.push_back(lineAt(first + colp(residentRng_)));
         }
         break;
     }
     case FaultMode::SingleDevice:
         // Whole x4 chip: every line in the window sees 1-4 bad bits in that
         // chip's nibbles. The pattern chipkill is built to absorb.
-        for (uint64_t i = 0, chip = chip_pick(residentRng_); i < nlines; i += stride)
-            addChipBitsInLine(f, lineAt(i), static_cast<unsigned>(chip),
-                              k14(residentRng_));
+        for (uint64_t i = 0; i < nlines; i += stride)
+            footprint_lines.push_back(lineAt(i));
         break;
     default:
-        addUniformBitInLine(f, lineAt(lpick(residentRng_)), bpick(residentRng_));
+        addCell();
         break;
+    }
+
+    if (!footprint_lines.empty()) {
+        // Boundary lines may expose only part of a chip's nibbles. Choose
+        // from chips represented anywhere in the footprint so every birth
+        // affects the window, while all its lines retain one physical chip.
+        uint32_t chips = 0;
+        for (uint64_t lb : footprint_lines) {
+            for (unsigned byte = 0; byte < 64; ++byte) {
+                const uint64_t addr = lb + byte;
+                if (addr < wbase || addr - wbase >= wlen) continue;
+                chips |= 3u << ((byte % 16) * 2);
+            }
+            if (chips == UINT32_MAX) break;
+        }
+        std::uniform_int_distribution<unsigned> chip_pick(
+            0, static_cast<unsigned>(__builtin_popcount(chips)) - 1);
+        unsigned selected = chip_pick(residentRng_);
+        while (selected-- > 0) chips &= chips - 1;
+        const unsigned chip = static_cast<unsigned>(__builtin_ctz(chips));
+        for (uint64_t lb : footprint_lines)
+            addChipBitsInLine(f, lb, chip, f.mode == FaultMode::SingleColumn
+                ? k12(residentRng_) : k14(residentRng_));
     }
 
     for (const auto& kv : f.line_bits) {
@@ -1248,19 +1306,25 @@ EccGuard::FaultDraw EccGuard::drawFaultResident(MemEvent* mev,
                                                 EccScheme scheme) {
     FaultDraw d;
     if (payload_bytes == 0) return d;
-    uint32_t nwords = numWords(payload_bytes, scheme);
-    d.per_word_errors.assign(nwords, 0u);
-    if (resident_mask_.empty()) return d;
-
     // Cached responses contain the entire line, even when the original
     // request (and its preserved virtual address) starts inside that line.
     const uint64_t a = memEventPayloadAddress(*mev);
-
     const uint32_t wb = eccWordBytes(scheme);
+    d.word_offset_bytes = wb == 0 ? 0 : a % wb;
+    const uint64_t first_byte = a - d.word_offset_bytes;
+    const uint32_t nwords = numWords(payload_bytes + d.word_offset_bytes, scheme);
+    const uint64_t payload_end = a + payload_bytes;
+    const uint64_t decode_end = wb == 0 ? payload_end
+        : first_byte + static_cast<uint64_t>(nwords) * wb;
+    d.per_word_errors.assign(nwords, 0u);
+    if (resident_mask_.empty()) return d;
+
     const bool need_chips = (scheme == EccScheme::CHIPKILL_x4);
     if (need_chips) d.per_word_chip_errors.resize(nwords);
 
-    for (uint64_t lb = a & ~63ULL; lb < a + payload_bytes; lb += 64) {
+    // Decode every complete protection word touched by the access. Faults
+    // outside a partial payload still affect its codeword's ECC outcome.
+    for (uint64_t lb = first_byte & ~63ULL; lb < decode_end; lb += 64) {
         auto it = resident_mask_.find(lb);
         if (it == resident_mask_.end()) continue;
         const auto& mask = it->second;
@@ -1268,20 +1332,21 @@ EccGuard::FaultDraw EccGuard::drawFaultResident(MemEvent* mev,
             unsigned m = mask[byte];
             if (!m) continue;
             const uint64_t abs_byte = lb + byte;
-            if (abs_byte < a || abs_byte >= a + payload_bytes) continue;
-            const uint32_t rel_byte = static_cast<uint32_t>(abs_byte - a);
+            if (abs_byte < first_byte || abs_byte >= decode_end) continue;
+            const uint32_t word_byte = static_cast<uint32_t>(abs_byte - first_byte);
             const uint32_t w = (wb == 0) ? 0
-                : std::min<uint32_t>(rel_byte / wb, nwords - 1);
+                : word_byte / wb;
             while (m) {
                 const unsigned bit = static_cast<unsigned>(__builtin_ctz(m));
                 m &= m - 1;
-                d.exact_bits.push_back(rel_byte * 8 + bit);
+                if (abs_byte >= a && abs_byte < payload_end)
+                    d.exact_bits.push_back(static_cast<uint32_t>(abs_byte - a) * 8 + bit);
                 d.per_word_errors[w] += 1;
                 d.num_errors += 1;
                 if (need_chips) {
                     auto& cc = d.per_word_chip_errors[w];
                     if (cc.empty()) cc.assign(chipsPerEccWord(scheme), 0);
-                    const uint32_t bit_in_word = (rel_byte - w * wb) * 8 + bit;
+                    const uint32_t bit_in_word = (word_byte - w * wb) * 8 + bit;
                     const unsigned chip = residentChipForWordBit(bit_in_word,
                                                                  cc.size());
                     if (cc[chip] < 255) ++cc[chip];
@@ -1396,12 +1461,13 @@ uint64_t EccGuard::applyPolicy(MemEvent* mev) {
         if (line.due_words.empty()) return;
         unsigned flips = 0;
         for (uint32_t w : line.due_words) {
-            EccPayloadFlipCount count = draw.exact_bits.empty()
+            EccPayloadFlipCount count = fault_model_ != FaultModel::Resident
                 ? EccPayloadCorruptor::flipRandom(
                     *mev, w, entry.scheme, draw.per_word_errors[w],
                     payload_dtype_, rng_)
                 : EccPayloadCorruptor::flipExact(
-                    *mev, w, entry.scheme, draw.exact_bits, payload_dtype_);
+                    *mev, w, entry.scheme, draw.exact_bits, payload_dtype_,
+                    draw.word_offset_bytes);
             flips += count.total;
         }
         due_poison_flips_total_ += flips;
@@ -1428,12 +1494,13 @@ uint64_t EccGuard::applyPolicy(MemEvent* mev) {
         // Correctable words leak nothing; DUE words get the DUE response below.
         unsigned hi = 0, lo = 0, flips = 0;
         for (uint32_t w : line.escape_words) {
-            EccPayloadFlipCount count = draw.exact_bits.empty()
+            EccPayloadFlipCount count = fault_model_ != FaultModel::Resident
                 ? EccPayloadCorruptor::flipRandom(
                     *mev, w, entry.scheme, draw.per_word_errors[w],
                     payload_dtype_, rng_)
                 : EccPayloadCorruptor::flipExact(
-                    *mev, w, entry.scheme, draw.exact_bits, payload_dtype_);
+                    *mev, w, entry.scheme, draw.exact_bits, payload_dtype_,
+                    draw.word_offset_bytes);
             flips += count.total;
             hi += count.high;
             lo += count.low;

@@ -37,7 +37,7 @@ public:
     static EccPayloadFlipCount flipExact(
         SST::MemHierarchy::MemEvent& event, uint32_t word_index,
         EccScheme scheme, const std::vector<uint32_t>& bits,
-        EccPayloadDtype dtype);
+        EccPayloadDtype dtype, uint32_t word_offset_bytes = 0);
 };
 
 } // namespace SST::Carcosa

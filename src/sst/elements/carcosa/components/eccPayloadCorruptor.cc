@@ -98,7 +98,7 @@ EccPayloadFlipCount EccPayloadCorruptor::flipRandom(
 EccPayloadFlipCount EccPayloadCorruptor::flipExact(
     SST::MemHierarchy::MemEvent& event, uint32_t word_index,
     EccScheme scheme, const std::vector<uint32_t>& bits,
-    EccPayloadDtype dtype)
+    EccPayloadDtype dtype, uint32_t word_offset_bytes)
 {
     EccPayloadFlipCount result;
     auto& payload = event.getPayload();
@@ -106,9 +106,15 @@ EccPayloadFlipCount EccPayloadCorruptor::flipExact(
 
     uint32_t total_bits = payload.size() * 8;
     uint32_t word_bytes = eccWordBytes(scheme);
-    uint32_t start = word_bytes == 0 ? 0 : word_index * word_bytes * 8;
-    uint32_t end = word_bytes == 0
-        ? total_bits : std::min(total_bits, start + word_bytes * 8);
+    // Resident decoding uses complete aligned words even when the returned
+    // payload begins inside the first word. Clip that word to payload bytes.
+    const int64_t word_start = static_cast<int64_t>(word_index) * word_bytes
+        - word_offset_bytes;
+    uint32_t start = word_bytes == 0 ? 0
+        : static_cast<uint32_t>(std::max<int64_t>(0, word_start * 8));
+    uint32_t end = word_bytes == 0 ? total_bits
+        : static_cast<uint32_t>(std::max<int64_t>(0,
+            std::min<int64_t>(total_bits, (word_start + word_bytes) * 8)));
     for (uint32_t selected : bits) {
         if (selected < start || selected >= end) continue;
         uint32_t byte = selected / 8u;

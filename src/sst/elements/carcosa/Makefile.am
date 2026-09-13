@@ -141,6 +141,8 @@ libcarcosa_la_SOURCES += \
     components/eccGuard.cc \
     components/eccGuard.h \
     components/eccModelMath.h \
+    components/eccFaultModelTest.cc \
+    components/eccFaultModelTest.h \
     components/eccPayloadCorruptor.cc \
     components/eccPayloadCorruptor.h \
     components/eccPolicy.h \
@@ -168,6 +170,10 @@ nobase_sst_HEADERS += \
 
 # Add correlated, campaign, and resident ECC fault models
 EXTRA_DIST += \
+    tests/testEccFaultModelBoundaries.py \
+    tests/testEccCampaignScope.py \
+    tests/testEccCampaignMultiChip.py \
+    tests/testEccCampaignPartialWord.py \
     tests/testEccCampaignFilterLength.py \
     tests/testEccCampaignPayloadlessRead.py \
     tests/testEccCampaignReentry.py \
