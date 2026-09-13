@@ -46,6 +46,8 @@ public:
         {"region_size",     "Size in bytes of the critical region.", "64"},
         {"cached_responses", "Return full cache lines from memory instead of noncacheable byte ranges.", "false"},
         {"virtual_address_offset", "Subtract this offset from scripted virtual addresses to produce physical request addresses.", "0"},
+        {"prefill_reads",   "Issue PREFILL reads before ACTUATE in each frame.", "true"},
+        {"post_reads",      "Issue POST reads between frames; the last frame always includes a POST read to flush the watcher.", "true"},
         {"frames",          "Number of pipeline frames to run.", "3"},
         {"corrupt_frame",   "Frame index whose in-region ACTUATE read payload gets one bit flipped (-1 = none).", "-1"},
         {"close_kernel_id", "Kernel id stamped into FrameRecord::kernelAtClose (set differently from the golden log's kernel_at_close to exercise the cycle-only fallback).", "1"},
@@ -98,6 +100,8 @@ private:
     uint64_t    region_size_ = 64;
     bool        cached_responses_ = false;
     uint64_t    virtual_address_offset_ = 0;
+    bool        prefill_reads_ = true;
+    bool        post_reads_ = true;
     int         frames_      = 3;
     int         corrupt_frame_   = -1;
     int         close_kernel_id_ = 1;

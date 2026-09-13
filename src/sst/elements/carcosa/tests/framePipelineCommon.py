@@ -93,7 +93,7 @@ def build(frames=3, corrupt_frame=-1, close_kernel_id=1, golden_kernel_id=None,
           expect_corrupted=0, verbose=False, extra_region=None,
           mem_side_gate=None, check_exact_checksums=True,
           cached_responses=False, virtual_address_offset=0,
-          watcher_responses_only=True):
+          watcher_responses_only=True, prefill_reads=True, post_reads=True):
     """Wire up driver/watcher/scorer for one scenario.
 
     golden_kernel_id: kernel_at_close written into the golden CSV. Defaults
@@ -117,6 +117,8 @@ def build(frames=3, corrupt_frame=-1, close_kernel_id=1, golden_kernel_id=None,
     and the physical addresses sent to memory.
     watcher_responses_only: when false, also exercise observation of empty
     read requests; the watcher must not create a payload for them.
+    prefill_reads/post_reads: omit traffic outside ACTUATE to exercise frame
+    boundaries first observed in a later cycle. The final POST always runs.
     """
     gk = close_kernel_id if golden_kernel_id is None else golden_kernel_id
     golden_rows = [(f, gk, expected_checksum(f, cached_responses=cached_responses))
@@ -136,6 +138,8 @@ def build(frames=3, corrupt_frame=-1, close_kernel_id=1, golden_kernel_id=None,
         "region_size": REGION_SIZE,
         "cached_responses": cached_responses,
         "virtual_address_offset": virtual_address_offset,
+        "prefill_reads": prefill_reads,
+        "post_reads": post_reads,
         "frames": frames,
         "corrupt_frame": corrupt_frame,
         "close_kernel_id": close_kernel_id,

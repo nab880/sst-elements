@@ -292,7 +292,7 @@ void CriticalActionWatcher::finalizeActuateFrame() {
     if (!state_ptr_) return;
     uint64_t checksum = hashSnapshot();
 
-    int pipeline_cycle = state_ptr_->pipelineCycle;
+    int pipeline_cycle = last_pipeline_cycle_;
     if (emit_golden_ && observed_this_frame_)
         emitted_golden_.push_back({{pipeline_cycle, last_kernel_id_}, checksum});
 
@@ -336,21 +336,27 @@ void CriticalActionWatcher::finalizeActuateFrame() {
 
 void CriticalActionWatcher::observeEvent(MemEvent* mev) {
     if (!mev || !state_ptr_) return;
+
+    const std::string& k = state_ptr_->currentKernelName;
+    const int cycle = state_ptr_->pipelineCycle;
+    // Intervening kernels may produce no traffic on this link. A new cycle
+    // closes the previous ACTUATE snapshot even if ACTUATE is still the next
+    // observed kernel. Finalize before refreshing the new frame's bounds.
+    if (saw_kernel_ && last_kernel_name_ == actuation_kernel_name_
+        && (k != actuation_kernel_name_ || cycle != last_pipeline_cycle_)) {
+        finalizeActuateFrame();
+    }
+    last_kernel_name_ = k;
+    last_kernel_id_   = state_ptr_->currentKernel;
+    last_pipeline_cycle_ = cycle;
+    saw_kernel_       = true;
+
     if (!resolveCriticalBounds(crit_base_, crit_len_)) {
         crit_base_ = 0;
         crit_len_  = 0;
     } else if (snapshot_.size() != crit_len_) {
         snapshot_.assign(crit_len_, 0);
     }
-
-    const std::string& k = state_ptr_->currentKernelName;
-    if (saw_kernel_ && last_kernel_name_ == actuation_kernel_name_
-        && k != actuation_kernel_name_) {
-        finalizeActuateFrame();
-    }
-    last_kernel_name_ = k;
-    last_kernel_id_   = state_ptr_->currentKernel;
-    saw_kernel_       = true;
 
     if ((!apply_on_responses_only_ || isResponseCmd(mev))
         && k == actuation_kernel_name_) {

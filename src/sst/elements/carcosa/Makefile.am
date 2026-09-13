@@ -228,3 +228,13 @@ AM_CPPFLAGS += $(HMC_FLAG)
 install-exec-hook:
 	$(SST_REGISTER_TOOL) SST_ELEMENT_SOURCE     carcosa=$(abs_srcdir)
 	$(SST_REGISTER_TOOL) SST_ELEMENT_TESTS      carcosa=$(abs_srcdir)/tests
+
+# Regression coverage for pipeline scoring and frame control.
+EXTRA_DIST += \
+    tests/testActionScorerGoldenTokenFallback.py \
+    tests/testEccRuntimeDueDropEmptyState.py \
+    tests/testEccRuntimeDueDropMissingState.py \
+    tests/testFourStatePostedWrite.py \
+    tests/testFourStateWatcherSetup.py \
+    tests/testFramePipelineActuateCycles.py \
+    tests/testFramePipelineDeferredBoundary.py

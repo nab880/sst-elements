@@ -231,7 +231,7 @@ void ActionScorer::finish() {
         // Decoded-action divergence: only meaningful when both sides carry a
         // token (frame token 0 = workload never published one). Falls back
         // to the checksum oracle otherwise, preserving legacy scoring.
-        bool token_avail    = has_golden_token && fr.actionToken != 0;
+        bool token_avail    = has_golden_token && golden_tok != 0 && fr.actionToken != 0;
         bool action_changed = token_avail && (golden_tok != fr.actionToken);
         bool divergence     = token_avail ? action_changed : argmax_changed;
         bool had_escape     = escapes_in > 0;
