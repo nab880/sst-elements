@@ -78,6 +78,8 @@ libcarcosa_la_SOURCES =                     \
     components/framePipelineDriver.h        \
     components/regressionTestComponents.cc  \
     components/regressionTestComponents.h   \
+    components/stateGateTestComponents.cc   \
+    components/stateGateTestComponents.h    \
     components/vlaRegions.h                 \
     components/carcosaMemCtrl.cc            \
     components/carcosaMemCtrl.h             \
@@ -160,6 +162,8 @@ EXTRA_DIST = \
     tests/testFramePipelineMissingGolden.py       \
     tests/testStateGateRegionNoOverlap.py         \
     tests/testStateGateRegionOverlap.py           \
+    tests/testStateGatePayload.py                 \
+    tests/testStateGateRegions.py                 \
     tests/testActionScorerTaxonomy.py             \
     tests/testActionScorerTokenFallback.py        \
     tests/testActionScorerDropDivergence.py       \

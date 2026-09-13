@@ -11,6 +11,7 @@
 
 #include "sst/elements/carcosa/injectors/portModuleStateGate.h"
 #include "sst/elements/carcosa/components/configParse.h"
+#include "sst/elements/carcosa/components/memEventPayload.h"
 #include "sst/elements/carcosa/faultlogic/randomFlipFault.h"
 #include "sst/core/params.h"
 
@@ -234,14 +235,16 @@ PortModuleStateGate::doInjection(Event* ev)
     }
 
     EventAddress ea;
+    bool has_payload = false;
     if (auto* mev = dynamic_cast<SST::MemHierarchy::MemEvent*>(ev)) {
-        // Same address convention as CriticalActionWatcher/EccGuard: prefer
-        // the virtual address when the CPU supplied one (published regions
-        // are workload-virtual), else the physical address.
-        uint64_t vaddr = mev->getVirtualAddress();
+        // Cached responses carry a full line even when the request address
+        // retains a byte offset. Prefer workload-virtual addresses when set.
         ea.valid = true;
-        ea.addr  = (vaddr != 0) ? vaddr : mev->getAddr();
-        ea.size  = mev->getSize() ? mev->getSize() : mev->getPayload().size();
+        ea.addr  = memEventPayloadAddress(*mev);
+        ea.size  = mev->getSize() ? mev->getSize() : mev->getPayloadSize();
+        // getPayload() allocates data for payloadless requests. Only existing
+        // data can be flipped; drops remain valid for every Event type.
+        has_payload = mev->getPayloadSize() != 0;
     }
 
     if (!matchesState(*state, ea)) {
@@ -253,13 +256,14 @@ PortModuleStateGate::doInjection(Event* ev)
             triggered_[0] = (this->randFloat(0.0, 1.0) < drop_probability_);
             return triggered_[0];
         case Mode::Flip:
-            triggered_[1] = (this->randFloat(0.0, 1.0) < flip_probability_);
+            triggered_[1] = has_payload &&
+                            (this->randFloat(0.0, 1.0) < flip_probability_);
             return triggered_[1];
         case Mode::DropFlip:
             triggered_[0] = (this->randFloat(0.0, 1.0) < drop_probability_);
             // Only roll for flip if we didn't already decide to drop the event;
             // a dropped event has nothing left to flip.
-            triggered_[1] = !triggered_[0] &&
+            triggered_[1] = !triggered_[0] && has_payload &&
                             (this->randFloat(0.0, 1.0) < flip_probability_);
             return triggered_[0] || triggered_[1];
     }
