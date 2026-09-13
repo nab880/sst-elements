@@ -151,6 +151,8 @@ libcarcosa_la_SOURCES += \
     components/pipelineStateRegistry.h
 EXTRA_DIST += \
     tests/eccRuntimeCommon.py \
+    tests/testEccAccessWindows.py \
+    tests/testEccChipkillPartial.py \
     tests/testEccCoreRuntime.py \
     tests/testEccGuardSmoke.py \
     tests/testEccModelDeterministic.py \

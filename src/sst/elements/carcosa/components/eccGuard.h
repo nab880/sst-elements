@@ -154,7 +154,7 @@ private:
     uint64_t applyPolicy(SST::MemHierarchy::MemEvent* mev);
     FaultDraw drawFaultPoisson(uint32_t payload_bytes, double ber, EccScheme scheme);
     void distributeErrorsToChips(std::vector<uint8_t>& chip_counts,
-                                 unsigned errs, EccScheme scheme);
+                                 unsigned errs, EccScheme scheme, unsigned word_bits);
     // Emit a one-shot warning whenever a policy entry's BER exceeds the
     // documented tight-approximation bound (see kEccBerTightUpperBound in
     // eccScheme.h). Tracks already-warned BER values to avoid log spam.

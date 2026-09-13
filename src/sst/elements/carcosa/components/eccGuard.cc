@@ -403,8 +403,9 @@ inline uint32_t numWords(uint32_t payload_bytes, EccScheme scheme) {
 
 // Scatter Poisson bit errors across x4 chips for chip-aware classification.
 void EccGuard::distributeErrorsToChips(
-        std::vector<uint8_t>& chip_counts, unsigned errs, EccScheme scheme) {
-    unsigned nchips = chipsPerEccWord(scheme);
+        std::vector<uint8_t>& chip_counts, unsigned errs, EccScheme scheme,
+        unsigned word_bits) {
+    unsigned nchips = std::min(chipsPerEccWord(scheme), (word_bits + 3) / 4);
     if (nchips == 0 || errs == 0) return;
     chip_counts.assign(nchips, 0);
     std::uniform_int_distribution<unsigned> cpick(0, nchips - 1);
@@ -437,7 +438,7 @@ EccGuard::FaultDraw EccGuard::drawFaultPoisson(uint32_t payload_bytes,
         d.per_word_errors[w] = errs;
         total += errs;
         if (need_chips && errs > 0)
-            distributeErrorsToChips(d.per_word_chip_errors[w], errs, scheme);
+            distributeErrorsToChips(d.per_word_chip_errors[w], errs, scheme, word_bits);
     }
     d.num_errors = total;
     return d;
@@ -467,32 +468,8 @@ uint64_t EccGuard::applyPolicy(MemEvent* mev) {
     std::string kernel_name;
     if (state_ptr_) kernel_name = state_ptr_->currentKernelName;
 
-    if (!addr_filter_region_.empty() && !eventOverlapsAddrFilter(mev)) {
-        if (stat_total_) stat_total_->addData(1);
-        if (stat_clean_) stat_clean_->addData(1);
-        return 0;
-    }
-
-    // Raw inject window (no region registry): confine to [start, start+len).
-    // Prefer preserved vAddr; fall back to physical (e.g. balar H2D path).
-    if (inject_addr_len_ > 0) {
-        const uint64_t a = memEventPayloadAddress(*mev);
-        const uint64_t sz = mev->getPayloadSize() != 0
-            ? mev->getPayloadSize() : mev->getSize();
-        const bool overlaps = sz != 0 && (a < inject_addr_start_
-            ? inject_addr_start_ - a < sz : a - inject_addr_start_ < inject_addr_len_);
-        if (!overlaps) {
-            if (stat_total_) stat_total_->addData(1);
-            if (stat_clean_) stat_clean_->addData(1);
-            return 0;
-        }
-    }
-
     int region_id = resolveRegionIdForEvent(mev);
     const std::string& region_name = regionNameForId(region_id);
-
-    const EccPolicyEntry& entry = policy_.effectiveFor(kernel_name, region_name);
-
     auto& kernel_bucket = per_kernel_[kernel_name];
     auto& region_bucket = per_kernel_region_[std::make_pair(kernel_name, region_name)];
 
@@ -502,6 +479,26 @@ uint64_t EccGuard::applyPolicy(MemEvent* mev) {
         kernel_bucket.clean += 1;
         region_bucket.clean += 1;
     };
+
+    if (!addr_filter_region_.empty() && !eventOverlapsAddrFilter(mev)) {
+        countClean();
+        return 0;
+    }
+
+    // Raw inject window uses physical/SST addresses, without a region registry.
+    if (inject_addr_len_ > 0) {
+        const uint64_t a = memEventPayloadAddress(*mev, /*prefer_virtual=*/false);
+        const uint64_t sz = mev->getPayloadSize() != 0
+            ? mev->getPayloadSize() : mev->getSize();
+        const bool overlaps = sz != 0 && (a < inject_addr_start_
+            ? inject_addr_start_ - a < sz : a - inject_addr_start_ < inject_addr_len_);
+        if (!overlaps) {
+            countClean();
+            return 0;
+        }
+    }
+
+    const EccPolicyEntry& entry = policy_.effectiveFor(kernel_name, region_name);
 
     if (entry.ber <= 0.0 && entry.scheme == EccScheme::NONE) {
         countClean();
