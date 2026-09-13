@@ -316,6 +316,86 @@ struct Transport {
     }
 };
 
+void testReplayOnce(Params params, uint64_t expected_checksum) {
+    params.values.erase("replay_each_cmd"); // Exercise the default mode.
+    params.values["state_key"] = "once";
+    BalarRingBridge bridge(2, params);
+    Link done; bridge.setRingLink(&done); bridge.agentSetup();
+    Transport transport(bridge);
+    HaliEvent cmd(RingTag::Cmd, 0);
+    bridge.handleRingEvent(&cmd);
+    bridge.handleRingEvent(&cmd); // Queue a command while the initial replay runs.
+    transport.drain();
+    require(done.pending.size() == 2 && bridge.cmd_pending_ == 0,
+            "queued Cmd did not receive Done");
+    auto* state = PipelineStateRegistry<PipelineStateBase>::getMutable("once");
+    require(state && state->watcherActionChecksumValid &&
+            state->watcherActionChecksum == expected_checksum, "initial checksum missing");
+    const auto initial_calls = transport.calls;
+    for (size_t frame = 0; frame < 2; ++frame) {
+        state->retireWatcherChecksum(); // The driver consumes each frame's result.
+        state->watcherActionChecksum = 0;
+        bridge.handleRingEvent(&cmd); transport.drain();
+        require(done.pending.size() == 3 + frame, "later Cmd did not receive Done");
+        require(state->watcherActionChecksumValid &&
+                state->watcherActionChecksum == expected_checksum,
+                "Done-only Cmd did not republish the consumed checksum");
+        require(bridge.replays_ == 1 && transport.calls == initial_calls &&
+                transport.weight_bytes_written == 64, "Done-only Cmd replayed CUDA calls");
+    }
+}
+
+BalarCudaCallPacket_t parseIntegerArgument(const std::string& value, size_t size) {
+    std::ofstream trace("integer.trace");
+    trace << "kernel launch: name:scalar, ptx_name:scalar, gdx:1, gdy:1, gdz:1, "
+          << "bdx:1, bdy:1, bdz:1, sharedBytes:0, args:" << value << '/' << size << "/\n";
+    trace.close();
+    Output out("", 0, 0, 0);
+    BalarTraceParser parser(&out, "integer.trace", "test");
+    BalarTracePacket packet;
+    while (parser.next(packet)) {
+        if (packet.packet.cuda_call_id == CUDA_REG_FAT_BINARY) parser.setFatbinHandle(123);
+        if (packet.packet.cuda_call_id == CUDA_SET_ARG) return packet.packet;
+    }
+    throw std::runtime_error("integer argument was not emitted");
+}
+
+void testIntegerArguments() {
+    struct Case { const char* value; std::vector<uint8_t> bytes; };
+    const std::vector<Case> cases = {
+        {"-1", std::vector<uint8_t>(8, 0xff)},
+        {"4294967296", {0, 0, 0, 0, 1, 0, 0, 0}},
+        {"-9223372036854775808", {0, 0, 0, 0, 0, 0, 0, 0x80}},
+        {"9223372036854775807", {0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f}},
+        {"18446744073709551615", std::vector<uint8_t>(8, 0xff)},
+        {"-2147483648", {0, 0, 0, 0x80}},
+        {"2147483647", {0xff, 0xff, 0xff, 0x7f}},
+        {"4294967295", std::vector<uint8_t>(4, 0xff)},
+        {"0x12345678", {0x78, 0x56, 0x34, 0x12}},
+        {"-128", {0x80}}, {"255", {0xff}},
+        {"-32768", {0, 0x80}}, {"65535", {0xff, 0xff}},
+        {" -1 ", std::vector<uint8_t>(8, 0xff)},
+    };
+    for (const auto& test : cases) {
+        auto packet = parseIntegerArgument(test.value, test.bytes.size());
+        require(packet.setup_argument.size == test.bytes.size() &&
+                std::equal(test.bytes.begin(), test.bytes.end(), packet.setup_argument.value),
+                "integer argument bytes do not match the declared width");
+    }
+    for (const auto& test : std::vector<std::pair<const char*, size_t>>{
+            {"-129", 1}, {"256", 1}, {"-32769", 2}, {"65536", 2},
+            {"-2147483649", 4}, {"4294967296", 4},
+            {"-9223372036854775809", 8}, {"18446744073709551616", 8},
+            {" -9223372036854775809", 8}, {"1", 9}}) {
+        bool failed = false;
+        try { parseIntegerArgument(test.first, test.second); }
+        catch (const std::runtime_error& e) {
+            failed = std::string(e.what()).find("integer argument") != std::string::npos;
+        }
+        require(failed, "integer argument outside its declared range was accepted");
+    }
+}
+
 int main() {
     try {
         static_assert(sizeof(BalarCudaCallReturnPacket_t) > sizeof(BalarCudaCallPacket_t));
@@ -351,6 +431,8 @@ int main() {
         }
         require(transport.retries == 6 && transport.saw_partial_line, "retry/unaligned coverage missing");
         require(transport.rejected_packets.empty(), "a rejected call was skipped");
+        testReplayOnce(params, fnv1a64(expected.data(), expected.size()));
+        testIntegerArguments();
 
         // Fatal CUDA errors must be checked before dereferencing union pointers.
         bridge.active_packet_.cuda_call_id = CUDA_MALLOC;
@@ -361,7 +443,7 @@ int main() {
         try { bridge.completeCudaCall(&failure); }
         catch (const std::runtime_error& e) { failed = std::string(e.what()).find("CUDA error 999") != std::string::npos; }
         require(failed, "CUDA failure was not reported before union access");
-        std::printf("PASS: packet assembly, nonoverlapping D2H, deferred retries, cache invalidation, CUDA failures (%zu returns)\n",
+        std::printf("PASS: packet assembly, nonoverlapping D2H, deferred retries, cache invalidation, CUDA failures, checksum reuse, integer widths (%zu returns)\n",
                     transport.assembled_returns);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "FAIL: %s\n", e.what()); return 1;

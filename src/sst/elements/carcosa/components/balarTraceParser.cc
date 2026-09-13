@@ -10,7 +10,6 @@
 #include "sst/elements/carcosa/components/configParse.h"
 
 #include <algorithm>
-#include <climits>
 #include <cstring>
 #include <limits>
 #include <sstream>
@@ -88,19 +87,36 @@ T parseInteger(const std::string& value, const char* field, Output* out,
     return {};
 }
 
-int parseSignedInteger(const std::string& value, const char* field, Output* out,
-                       size_t line_number)
+uint64_t parseIntegerArgument(const std::string& value, size_t bytes, Output* out,
+                              size_t line_number)
 {
+    // Traces specify width but not signedness. Preserve signed negatives and
+    // the full unsigned positive range, rejecting values that do not fit.
+    if (bytes == 0 || bytes > sizeof(uint64_t)) {
+        out->fatal(CALL_INFO, -1,
+                   "Balar trace line %zu: unsupported integer argument size %zu\n",
+                   line_number, bytes);
+    }
     try {
         size_t parsed = 0;
-        long long raw = std::stoll(value, &parsed, 0);
-        if (parsed == value.size() && raw >= INT_MIN && raw <= INT_MAX) {
-            return static_cast<int>(raw);
+        if (!value.empty() && value.front() == '-') {
+            int64_t raw = std::stoll(value, &parsed, 0);
+            if (parsed == value.size() &&
+                (bytes == sizeof(raw) || raw >= -(int64_t{1} << (bytes * 8 - 1)))) {
+                return static_cast<uint64_t>(raw);
+            }
+        } else {
+            uint64_t raw = std::stoull(value, &parsed, 0);
+            if (parsed == value.size() &&
+                (bytes == sizeof(raw) || raw < (uint64_t{1} << (bytes * 8)))) {
+                return raw;
+            }
         }
     } catch (...) {
     }
-    out->fatal(CALL_INFO, -1, "Balar trace line %zu: invalid %s '%s'\n",
-               line_number, field, value.c_str());
+    out->fatal(CALL_INFO, -1,
+               "Balar trace line %zu: invalid integer argument '%s' for %zu bytes\n",
+               line_number, value.c_str(), bytes);
     return 0;
 }
 
@@ -277,7 +293,7 @@ bool BalarTraceParser::parseLine(const std::string& line,
                             "Balar trace line %zu: malformed kernel arguments\n",
                             line_number_);
             }
-            std::string value = arguments.substr(0, value_end);
+            std::string value = trim(arguments.substr(0, value_end));
             arguments.erase(0, value_end + 1);
             size_t size_end = arguments.find('/');
             if (size_end == std::string::npos) {
@@ -327,9 +343,11 @@ bool BalarTraceParser::parseLine(const std::string& line,
                                 line_number_, argument_size);
                 }
             } else {
-                int parsed = parseSignedInteger(value, "integer argument", out_, line_number_);
-                memcpy(argument.setup_argument.value, &parsed,
-                       std::min(argument_size, sizeof(parsed)));
+                uint64_t parsed = parseIntegerArgument(value, argument_size, out_, line_number_);
+                for (size_t i = 0; i < argument_size; ++i) {
+                    argument.setup_argument.value[i] = static_cast<uint8_t>(parsed & 0xff);
+                    parsed >>= 8;
+                }
             }
             queued_packets_.push(argument);
         }
