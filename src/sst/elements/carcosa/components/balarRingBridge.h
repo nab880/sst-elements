@@ -133,6 +133,7 @@ private:
     void finishCudaCall();
     void releasePendingD2H();
     void finishReplay();               // publish checksum + send Done, arm for next Cmd
+    void sendDone();                   // republish the result for each consuming frame
 
     static void uint64ToData(uint64_t num, std::vector<uint8_t>* data);
     static uint64_t dataToUInt64(std::vector<uint8_t>* data);

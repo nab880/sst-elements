@@ -163,7 +163,7 @@ void BalarRingBridge::handleRingEvent(HaliEvent* ev)
     // If we already replayed once and are not replaying per-Cmd, just release the
     // barrier: the resident-weight result is stable, so re-launching is redundant.
     if (replayed_once_ && !replay_each_cmd_) {
-        if (ring_link_) ring_link_->send(new HaliEvent(RingTag::Done, 0u));
+        sendDone();
         return;
     }
     if (replay_active_) { ++cmd_pending_; return; }  // serialize; drain on finish
@@ -538,26 +538,29 @@ void BalarRingBridge::releasePendingD2H()
     pending_d2h_is_sst_ = false;
 }
 
+void BalarRingBridge::sendDone()
+{
+    // The driver retires the checksum after each frame. Republish even when
+    // reusing the first replay's result, before releasing the command barrier.
+    if (!state_key_.empty()) {
+        PipelineStateBase* s = PipelineStateRegistry<PipelineStateBase>::getMutable(state_key_);
+        if (!s) s = PipelineStateRegistry<PipelineStateBase>::getOrCreate(state_key_);
+        s->publishWatcherChecksum(checksum_);
+    }
+    if (ring_link_) ring_link_->send(new HaliEvent(RingTag::Done, 0u));
+}
+
 void BalarRingBridge::finishReplay()
 {
     ++replays_;
     replayed_once_ = true;
     replay_active_ = false;
 
-    // Publish the running checksum into the shared pipeline state; the CPU driver
-    // snapshots it into the frame's actionChecksum at ACTUATE close (same slot the
-    // mini-GPU used), and ActionScorer diffs it against the golden log.
-    if (!state_key_.empty()) {
-        PipelineStateBase* s = PipelineStateRegistry<PipelineStateBase>::getMutable(state_key_);
-        if (!s) s = PipelineStateRegistry<PipelineStateBase>::getOrCreate(state_key_);
-        s->publishWatcherChecksum(checksum_);
-    }
-
     if (verbose_)
         out_->output("BalarRingBridge: replay %" PRIu64 " done, checksum=0x%" PRIx64 "\n",
                      replays_, checksum_);
 
-    if (ring_link_) ring_link_->send(new HaliEvent(RingTag::Done, 0u));
+    sendDone();
 
     // Drain ALL Cmds that arrived mid-replay. In Done-only mode each queued
     // Cmd gets its own Done; in replay-each mode start the next replay, which
@@ -565,7 +568,7 @@ void BalarRingBridge::finishReplay()
     while (cmd_pending_ > 0) {
         --cmd_pending_;
         if (replay_each_cmd_) { beginTrace(); break; }
-        if (ring_link_) ring_link_->send(new HaliEvent(RingTag::Done, 0u));
+        sendDone();
     }
 }
 
