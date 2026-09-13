@@ -47,6 +47,10 @@ FourStateAgent::FourStateAgent(ComponentId_t id, Params& params)
                     "FourStateAgent: 'state_key' is required (pick something unique per core, "
                     "e.g. 'core0').\n");
     }
+
+    // Consumers such as CriticalActionWatcher look up the snapshot in
+    // setup(), whose order across components is unspecified.
+    PipelineStateRegistry<PipelineStateBase>::getOrCreate(state_key_);
 }
 
 FourStateAgent::~FourStateAgent()
@@ -58,9 +62,7 @@ void FourStateAgent::agentSetup()
 {
     nextCommand_ = initialCommand_;
 
-    // Establish the registry entry for this core. After this point any
-    // PortModule (e.g. PortModuleStateGate) looking up state_key_ will see
-    // a live snapshot instead of nullptr.
+    // Initialize the snapshot established during construction.
     PipelineStateBase* s = PipelineStateRegistry<PipelineStateBase>::getOrCreate(state_key_);
     s->publishKernel(IDLE, kernelNameFor(IDLE), 0);
     publishedKernel_     = IDLE;
@@ -225,7 +227,9 @@ void FourStateAgent::sendCommandResponse(MemEvent* request, int value)
 
 void FourStateAgent::sendWriteAck(MemEvent* ev)
 {
-    MemEvent* resp = ev->makeResponse();
-    if (highlink_) highlink_->send(resp);
+    if (!ev->queryFlag(MemEventBase::F_NORESPONSE)) {
+        MemEvent* resp = ev->makeResponse();
+        if (highlink_) highlink_->send(resp);
+    }
     delete ev;
 }

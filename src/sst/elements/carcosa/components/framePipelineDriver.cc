@@ -29,6 +29,8 @@ FramePipelineDriver::FramePipelineDriver(ComponentId_t id, Params& params)
     region_size_     = params.find<uint64_t>("region_size", 64);
     cached_responses_ = params.find<bool>("cached_responses", false);
     virtual_address_offset_ = params.find<uint64_t>("virtual_address_offset", 0);
+    prefill_reads_   = params.find<bool>("prefill_reads", true);
+    post_reads_      = params.find<bool>("post_reads", true);
     frames_          = params.find<int>("frames", 3);
     corrupt_frame_   = params.find<int>("corrupt_frame", -1);
     close_kernel_id_ = params.find<int>("close_kernel_id", 1);
@@ -123,7 +125,8 @@ void FramePipelineDriver::buildScript() {
         // merged, the [48,64) hole would carry 0xE0-pattern bytes instead of
         // zeros and every expected checksum below would mismatch.
         script_.push_back({Op::Kind::Publish, 0, "PREFILL", f});
-        script_.push_back({Op::Kind::Read, -1, "", f, base, 64, 0xE0, false});
+        if (prefill_reads_)
+            script_.push_back({Op::Kind::Read, -1, "", f, base, 64, 0xE0, false});
         // ACTUATE: in-region read [base+16, base+48) then a straddling read
         // [base-16, base+16) whose upper half overlaps the region start.
         script_.push_back({Op::Kind::Publish, 1, "ACTUATE", f});
@@ -134,9 +137,10 @@ void FramePipelineDriver::buildScript() {
         // the real pipeline; mirror that ordering here.
         script_.push_back({Op::Kind::Stamp});
         script_.push_back({Op::Kind::Publish, 2, "POST", f});
-        // The watcher only notices kernel transitions on observed events;
-        // this read makes it finalize (and classify) the ACTUATE frame.
-        script_.push_back({Op::Kind::Read, -1, "", f, base, 4, 0x00, false});
+        // Skip intermediate POST traffic to exercise deferred boundaries.
+        // Always flush the final frame before finish() checks the counts.
+        if (post_reads_ || f + 1 == frames_)
+            script_.push_back({Op::Kind::Read, -1, "", f, base, 4, 0x00, false});
     }
 }
 

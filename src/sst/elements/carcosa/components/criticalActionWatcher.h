@@ -91,6 +91,7 @@ private:
     std::string        actuation_kernel_name_;
     std::string        last_kernel_name_;
     int                last_kernel_id_ = -1;
+    int                last_pipeline_cycle_ = 0;
     bool               saw_kernel_ = false;
 
     std::string golden_path_;

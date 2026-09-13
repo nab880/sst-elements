@@ -177,6 +177,10 @@ EccGuard::EccGuard(ComponentId_t id, Params& params) : Component(id) {
         out_->fatal(CALL_INFO, -1, "EccGuard: unknown due_action '%s'.\n",
                     due_action.c_str());
     }
+    if (due_action_ == DueAction::DropFrame && state_key_.empty()) {
+        out_->fatal(CALL_INFO, -1,
+                    "EccGuard: due_action='drop_frame' requires a non-empty state_key.\n");
+    }
 
     std::string mw_csv = params.find<std::string>("fault_mode_weights", "");
     if (!mw_csv.empty()) {
@@ -637,10 +641,16 @@ void EccGuard::noteCampaignKernelEntry(const std::string& kernel_name) {
 }
 
 void EccGuard::requestFrameAbort() {
-    if (state_key_.empty()) return;
     PipelineStateBase* s =
         PipelineStateRegistry<PipelineStateBase>::getMutable(state_key_);
-    if (!s) return;
+    // Publishers may create their state during setup. Check only when a DUE
+    // needs an abort, before suppressing the uncorrectable payload's poison.
+    if (!s) {
+        out_->fatal(CALL_INFO, -1,
+                    "EccGuard: due_action='drop_frame' cannot abort a frame: "
+                    "no pipeline state is registered for state_key='%s'.\n",
+                    state_key_.c_str());
+    }
     if (!s->requestFrameAbort()) return;
     ++frames_aborted_total_;
     if (stat_frames_aborted_) stat_frames_aborted_->addData(1);

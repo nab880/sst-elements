@@ -227,3 +227,13 @@ nobase_sst_HEADERS += \
     components/criticalActionWatcher.h \
     components/fourStateAgent.h \
     components/vlaRegions.h
+
+# Regression coverage for pipeline scoring and frame control.
+EXTRA_DIST += \
+    tests/testActionScorerGoldenTokenFallback.py \
+    tests/testEccRuntimeDueDropEmptyState.py \
+    tests/testEccRuntimeDueDropMissingState.py \
+    tests/testFourStatePostedWrite.py \
+    tests/testFourStateWatcherSetup.py \
+    tests/testFramePipelineActuateCycles.py \
+    tests/testFramePipelineDeferredBoundary.py
