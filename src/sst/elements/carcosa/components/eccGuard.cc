@@ -755,8 +755,8 @@ inline bool isCorrelatedMode(EccGuard::FaultMode m) {
 // For SingleDevice mode all errors land in a single randomly-chosen chip.
 void EccGuard::distributeErrorsToChips(
         std::vector<uint8_t>& chip_counts,
-        unsigned errs, EccScheme scheme, FaultMode mode) {
-    unsigned nchips = chipsPerEccWord(scheme);
+        unsigned errs, EccScheme scheme, unsigned word_bits, FaultMode mode) {
+    unsigned nchips = std::min(chipsPerEccWord(scheme), (word_bits + 3u) / 4u);
     if (nchips == 0 || errs == 0) return;
     chip_counts.assign(nchips, 0);
     if (fault_model_ == FaultModel::Campaign && campaign_force_multi_chip_
@@ -805,7 +805,8 @@ void EccGuard::placeFaultErrors(FaultDraw& draw, uint32_t payload_bytes,
         draw.per_word_errors[word] = errors;
         if (chip_aware) {
             distributeErrorsToChips(draw.per_word_chip_errors[word], errors,
-                                    scheme, draw.mode);
+                                    scheme, EccModelMath::wordBits(payload_bytes, scheme, word),
+                                    draw.mode);
         }
     };
 
@@ -814,7 +815,13 @@ void EccGuard::placeFaultErrors(FaultDraw& draw, uint32_t payload_bytes,
     const bool force_chip_cluster = fault_model_ == FaultModel::Campaign
         && campaign_force_multi_chip_ && chip_aware;
     if (isCorrelatedMode(draw.mode) || force_chip_cluster) {
-        std::uniform_int_distribution<uint32_t> pick(0, word_count - 1);
+        uint32_t candidate_words = word_count;
+        // A one-byte tail cannot hold three x4 chips. Prefer a complete word
+        // for forced campaigns when the payload contains one.
+        if (force_chip_cluster && candidate_words > 1 &&
+            EccModelMath::wordBits(payload_bytes, scheme, candidate_words - 1) < 12)
+            --candidate_words;
+        std::uniform_int_distribution<uint32_t> pick(0, candidate_words - 1);
         uint32_t word = pick(stdRng_);
         unsigned remaining = draw.num_errors;
         for (uint32_t offset = 0; remaining > 0 && offset < word_count; ++offset) {
@@ -836,6 +843,7 @@ void EccGuard::placeFaultErrors(FaultDraw& draw, uint32_t payload_bytes,
             if (draw.per_word_errors[word] > 0) {
                 distributeErrorsToChips(draw.per_word_chip_errors[word],
                                         draw.per_word_errors[word], scheme,
+                                        EccModelMath::wordBits(payload_bytes, scheme, word),
                                         draw.mode);
             }
         }
@@ -866,7 +874,8 @@ EccGuard::FaultDraw EccGuard::drawFaultPoisson(uint32_t payload_bytes,
         d.per_word_errors[w] = errs;
         total += errs;
         if (need_chips && errs > 0)
-            distributeErrorsToChips(d.per_word_chip_errors[w], errs, scheme, d.mode);
+            distributeErrorsToChips(d.per_word_chip_errors[w], errs, scheme,
+                                    word_bits, d.mode);
     }
     d.num_errors = total;
     return d;
@@ -1329,7 +1338,8 @@ EccGuard::FaultDraw EccGuard::drawFaultResident(MemEvent* mev,
     if (payload_bytes == 0) return d;
     // Cached responses contain the entire line, even when the original
     // request (and its preserved virtual address) starts inside that line.
-    const uint64_t a = memEventPayloadAddress(*mev);
+    // A map inherited from inject_addr_* uses physical/SST addresses.
+    const uint64_t a = memEventPayloadAddress(*mev, resident_addr_len_ > 0);
     const uint32_t wb = eccWordBytes(scheme);
     d.word_offset_bytes = wb == 0 ? 0 : a % wb;
     const uint64_t first_byte = a - d.word_offset_bytes;
@@ -1402,32 +1412,8 @@ uint64_t EccGuard::applyPolicy(MemEvent* mev) {
     std::string kernel_name;
     if (state_ptr_) kernel_name = state_ptr_->currentKernelName;
 
-    if (!addr_filter_region_.empty() && !eventOverlapsAddrFilter(mev)) {
-        if (stat_total_) stat_total_->addData(1);
-        if (stat_clean_) stat_clean_->addData(1);
-        return 0;
-    }
-
-    // Raw inject window (no region registry): confine to [start, start+len).
-    // Prefer preserved vAddr; fall back to physical (e.g. balar H2D path).
-    if (inject_addr_len_ > 0) {
-        const uint64_t a = memEventPayloadAddress(*mev);
-        const uint64_t sz = mev->getPayloadSize() != 0
-            ? mev->getPayloadSize() : mev->getSize();
-        const bool overlaps = sz != 0 && (a < inject_addr_start_
-            ? inject_addr_start_ - a < sz : a - inject_addr_start_ < inject_addr_len_);
-        if (!overlaps) {
-            if (stat_total_) stat_total_->addData(1);
-            if (stat_clean_) stat_clean_->addData(1);
-            return 0;
-        }
-    }
-
     int region_id = resolveRegionIdForEvent(mev);
     const std::string& region_name = regionNameForId(region_id);
-
-    const EccPolicyEntry& entry = policy_.effectiveFor(kernel_name, region_name);
-
     auto& kernel_bucket = per_kernel_[kernel_name];
     auto& region_bucket = per_kernel_region_[std::make_pair(kernel_name, region_name)];
 
@@ -1437,6 +1423,27 @@ uint64_t EccGuard::applyPolicy(MemEvent* mev) {
         kernel_bucket.clean += 1;
         region_bucket.clean += 1;
     };
+
+    if (!addr_filter_region_.empty() && !eventOverlapsAddrFilter(mev)) {
+        countClean();
+        return 0;
+    }
+
+    // Raw inject window (no region registry): confine to [start, start+len).
+    // Use the documented physical/SST address, including the payload's line base.
+    if (inject_addr_len_ > 0) {
+        const uint64_t a = memEventPayloadAddress(*mev, false);
+        const uint64_t sz = mev->getPayloadSize() != 0
+            ? mev->getPayloadSize() : mev->getSize();
+        const bool overlaps = sz != 0 && (a < inject_addr_start_
+            ? inject_addr_start_ - a < sz : a - inject_addr_start_ < inject_addr_len_);
+        if (!overlaps) {
+            countClean();
+            return 0;
+        }
+    }
+
+    const EccPolicyEntry& entry = policy_.effectiveFor(kernel_name, region_name);
 
     if (entry.ber <= 0.0 && fault_event_rate_ <= 0.0
         && entry.scheme == EccScheme::NONE

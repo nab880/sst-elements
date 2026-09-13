@@ -112,6 +112,8 @@ AM_CPPFLAGS += $(CUDA_CPPFLAGS) -DHAVE_BALAR_BRIDGE=1
 endif
 
 EXTRA_DIST = \
+    tests/testEccAccessWindows.py                 \
+    tests/testEccChipkillPartial.py                \
     hyades.h                                      \
     tests/pingpong.c                              \
     tests/fourstate.c                             \

@@ -206,7 +206,8 @@ private:
     FaultDraw drawFaultPoisson(uint32_t payload_bytes, double ber, EccScheme scheme);
     FaultDraw drawFaultJedecMix(uint32_t payload_bytes, double event_rate, EccScheme scheme);
     void      distributeErrorsToChips(std::vector<uint8_t>& chip_counts,
-                                      unsigned errs, EccScheme scheme, FaultMode mode);
+                                      unsigned errs, EccScheme scheme, unsigned word_bits,
+                                      FaultMode mode);
     void      placeFaultErrors(FaultDraw& draw, uint32_t payload_bytes,
                                EccScheme scheme);
     FaultDraw drawFaultCampaign(uint32_t payload_bytes, EccScheme scheme,
