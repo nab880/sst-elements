@@ -71,3 +71,5 @@ sink.addPortModule("in", "carcosa.SimpleStageGate", {
 link = sst.Link("producer_to_sink")
 link.connect((producer, "out", "1us"),
              (sink,     "in",  "1us"))
+# The registry is local and unsynchronized; keep publisher and gate on one thread.
+link.setNoCut()

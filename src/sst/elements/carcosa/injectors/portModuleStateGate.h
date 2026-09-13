@@ -25,6 +25,7 @@ namespace SST::Carcosa {
 
 /**
  * State-gated drop/flip PortModule; predicates AND (empty list matches all).
+ * Drops accept any Event; flips require an existing MemEvent payload.
  */
 class PortModuleStateGate : public FaultInjectorBase {
 public:

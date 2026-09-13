@@ -183,11 +183,15 @@ EXTRA_DIST += \
 libcarcosa_la_SOURCES += \
     examples/SimplePipeline/simplePipelineExample.cc \
     examples/SimplePipeline/simplePipelineExample.h \
+    components/stateGateTestComponents.cc \
+    components/stateGateTestComponents.h \
     injectors/portModuleStateGate.cc \
     injectors/portModuleStateGate.h
 EXTRA_DIST += \
     examples/SimplePipeline/tests/testPortModuleStateGate.py \
-    examples/SimplePipeline/tests/testSimplePipeline.py
+    examples/SimplePipeline/tests/testSimplePipeline.py \
+    tests/testStateGatePayload.py \
+    tests/testStateGateRegions.py
 nobase_sst_HEADERS += \
     examples/SimplePipeline/simplePipelineExample.h \
     injectors/portModuleStateGate.h
