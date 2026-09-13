@@ -134,6 +134,7 @@ EXTRA_DIST = \
     tests/testEccGuardSmoke.py                    \
     tests/testEccModelDeterministic.py            \
     tests/testBalarRingBridgeStandalone.py        \
+    tests/testCarcosaTrafficStandalone.py         \
     tests/eccRuntimeCommon.py                     \
     tests/testEccRuntimeCorrectable.py            \
     tests/testEccRuntimeDueDrop.py                \

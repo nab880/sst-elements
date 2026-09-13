@@ -296,8 +296,8 @@ StandardMem::Request* CarcosaCPUBase::createRead(Addr addr) {
 
 StandardMem::Request* CarcosaCPUBase::createFlush(Addr addr) {
     addr = ((addr % (maxAddr - noncacheableSize) >> 2) << 2);
-    if (addr >= noncacheableRangeStart && addr < noncacheableRangeEnd)
-        addr += noncacheableRangeEnd;
+    if (addr >= noncacheableRangeStart)
+        addr += noncacheableSize;
     addr = addr - (addr % lineSize);
     StandardMem::Request* req = new Interfaces::StandardMem::FlushAddr(addr, lineSize, false, 10);
     num_flushes_issued->addData(1);
@@ -308,8 +308,8 @@ StandardMem::Request* CarcosaCPUBase::createFlush(Addr addr) {
 
 StandardMem::Request* CarcosaCPUBase::createFlushInv(Addr addr) {
     addr = ((addr % (maxAddr - noncacheableSize) >> 2) << 2);
-    if (addr >= noncacheableRangeStart && addr < noncacheableRangeEnd)
-        addr += noncacheableRangeEnd;
+    if (addr >= noncacheableRangeStart)
+        addr += noncacheableSize;
     addr = addr - (addr % lineSize);
     StandardMem::Request* req = new Interfaces::StandardMem::FlushAddr(addr, lineSize, true, 10);
     num_flushinvs_issued->addData(1);
@@ -325,8 +325,8 @@ StandardMem::Request* CarcosaCPUBase::createFlushCache() {
 StandardMem::Request* CarcosaCPUBase::createLL(Addr addr) {
     Addr cacheableSize = maxAddr + 1 - noncacheableRangeEnd + noncacheableRangeStart;
     addr = (addr % (cacheableSize >> 2)) << 2;
-    if (addr >= noncacheableRangeStart && addr < noncacheableRangeEnd)
-        addr += noncacheableRangeEnd;
+    if (addr >= noncacheableRangeStart)
+        addr += noncacheableSize;
     addr = (addr >> 2) << 2;
     StandardMem::Request* req = new Interfaces::StandardMem::LoadLink(addr, 4);
     ll_addr = addr;
