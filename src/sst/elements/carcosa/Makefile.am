@@ -13,6 +13,8 @@ libcarcosa_la_SOURCES =                     \
     components/hali.h                       \
     components/eccGuard.cc                  \
     components/eccGuard.h                   \
+    components/eccFaultModelTest.cc          \
+    components/eccFaultModelTest.h           \
     components/eccPayloadCorruptor.cc       \
     components/eccPayloadCorruptor.h        \
     components/eccModelMath.h               \
@@ -133,6 +135,10 @@ EXTRA_DIST = \
     tests/testEccGuardResident.py                 \
     tests/testEccGuardSmoke.py                    \
     tests/testEccModelDeterministic.py            \
+    tests/testEccFaultModelBoundaries.py          \
+    tests/testEccCampaignScope.py                 \
+    tests/testEccCampaignMultiChip.py             \
+    tests/testEccCampaignPartialWord.py           \
     tests/testBalarRingBridgeStandalone.py        \
     tests/testCarcosaTrafficStandalone.py         \
     tests/eccRuntimeCommon.py                     \

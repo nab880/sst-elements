@@ -171,6 +171,7 @@ EccRuntimeTestDriver::EccRuntimeTestDriver(ComponentId_t id, Params& params)
     state_key_ = params.find<std::string>("state_key", "ecc_runtime_test");
     requests_ = params.find<int>("requests", 1);
     payload_size_ = params.find<int>("payload_size", 8);
+    min_changed_bits_ = params.find<unsigned>("test_min_changed_bits", 0);
     expect_mutated_ = params.find<int>("expect_mutated", -1);
     expect_abort_ = params.find<int>("expect_abort", -1);
     expect_escapes_ = params.find<int64_t>("expect_escapes", -1);
@@ -255,7 +256,17 @@ void EccRuntimeTestDriver::cpuEvent(Event* ev) {
     for (uint8_t b : resp->getPayload()) if (b != 0xA5) { changed = true; break; }
     if (!expect_mutated_sequence_.empty() && changed != (expect_mutated_sequence_[completed_] != 0))
         out_->fatal(CALL_INFO, -1, "EccRuntimeTestDriver: response %d has unexpected mutation state.\n", completed_);
-    if (changed) ++mutated_;
+    if (changed) {
+        unsigned changed_bits = 0;
+        for (uint8_t byte : resp->getPayload()) {
+            unsigned difference = byte ^ 0xA5u;
+            while (difference) { difference &= difference - 1; ++changed_bits; }
+        }
+        if (changed_bits < min_changed_bits_)
+            out_->fatal(CALL_INFO, -1, "EccRuntimeTestDriver: leaked %u changed bits (minimum %u).\n",
+                        changed_bits, min_changed_bits_);
+        ++mutated_;
+    }
     delete resp;
     ++completed_;
     if (completed_ == requests_) primaryComponentOKToEndSim();

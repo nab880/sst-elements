@@ -78,6 +78,7 @@ public:
         {"region_size", "Published region bytes.", "4096"},
         {"expect_same_payload", "Require every response to match the first response byte for byte.", "false"},
         {"expect_mutated_sequence", "Optional CSV 0/1 mutation expectation for each response.", ""},
+        {"test_min_changed_bits", "Minimum bit differences in every changed response (0 disables).", "0"},
         {"expect_mutated", "Expected mutated responses (-1 disables).", "-1"},
         {"expect_abort", "Expected frameAbortRequested (-1 disables).", "-1"},
         {"expect_escapes", "Expected cumulative escapes (-1 disables).", "-1"})
@@ -103,6 +104,7 @@ private:
     bool expect_same_payload_ = false;
     int requests_ = 1, payload_size_ = 8, issued_ = 0, completed_ = 0;
     int mutated_ = 0, expect_mutated_ = -1, expect_abort_ = -1;
+    unsigned min_changed_bits_ = 0;
     int64_t expect_escapes_ = -1;
     bool started_ = false;
 };

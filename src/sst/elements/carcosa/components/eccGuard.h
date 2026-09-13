@@ -96,8 +96,8 @@ public:
         {"campaign_event_budget",    "Campaign mode only: total number of fault events to inject across the run; once exhausted the guard reverts to clean classification on every subsequent access. 0 disables campaign injection regardless of fault_model.", "0"},
         {"campaign_event_rate",      "Campaign mode only: per-eligible-access probability of firing one campaign event. Eligible accesses are those whose currentKernel matches campaign_target_kernel.", "0.0"},
         {"campaign_max_events_per_kernel_entry", "Campaign mode only: cap fault events per contiguous visit to campaign_target_kernel (e.g. 1 per ACTUATE frame). 0 disables the per-entry cap.", "0"},
-        {"campaign_errors_fixed",    "Campaign mode only: if >0, inject exactly this many bit errors per event instead of sampling from the mode's [lo,hi] span.", "0"},
-        {"campaign_force_multi_chip", "Campaign mode only: when true (or campaign_mode='multi_chip'), distribute chipkill errors across at least three x4 chips.", "false"},
+        {"campaign_errors_fixed",    "Campaign mode only: if >0, inject exactly this many bit errors per event instead of sampling from the mode's [lo,hi] span, capped at payload bits. Forced multi-chip campaigns require a fixed count of at least 3 when the effective access policy uses chipkill.", "0"},
+        {"campaign_force_multi_chip", "Campaign mode only: when true (or campaign_mode='multi_chip') and the effective access policy uses chipkill, sample at least three errors and keep errors together across at least three x4 chips in one protection word. Explicit fixed counts below 3 are rejected for chipkill. This flag does not change SECDED or unprotected draws.", "false"},
         {"addr_filter_region",       "If set (e.g. 'action_queue'), only inject faults on MemEvents whose virtual address overlaps that published region. Empty disables filtering.", ""},
         {"addr_filter_len",          "When addr_filter_region is set, limit injection to the first N bytes of that region (0 = entire region).", "0"},
         {"inject_addr_start",        "Raw injection-window base (physical/SST address). When inject_addr_len>0, inject ONLY on events overlapping [inject_addr_start, inject_addr_start+inject_addr_len). Needs no published region, unlike addr_filter_region.", "0"},
@@ -188,12 +188,16 @@ public:
         // classification. Outer index = word, inner index = chip within word.
         // Only populated when scheme == CHIPKILL_x4.
         std::vector<std::vector<uint8_t>> per_word_chip_errors;
-        // Payload-relative faulty-cell bit positions (resident model). When
-        // non-empty, escape/DUE paths flip exactly these bits.
+        // Payload-relative faulty-cell bit positions (resident model).
+        // Escape/DUE paths flip only these bits, even when none are returned.
         std::vector<uint32_t> exact_bits;
+        // Offset of payload byte zero within the first resident ECC word.
+        uint32_t word_offset_bytes = 0;
     };
 
 private:
+    friend class EccFaultModelTest;
+
     void handleHighlink(SST::Event* ev);
     void handleLowlink(SST::Event* ev);
     void handleSelf(SST::Event* ev);
