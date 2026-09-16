@@ -1,0 +1,236 @@
+{
+  "source": "45eabc54a94a719b5f459de3e6b4f8b16cd1bf79",
+  "new": "90bb733bcb445fbae57addd43725f391af776290",
+  "source_parents": [
+    "a4f2a207861b41bfa4c6e6f57f6a12ac81782d7b"
+  ],
+  "mapped_parents": [
+    "a4f2a207861b41bfa4c6e6f57f6a12ac81782d7b"
+  ],
+  "source_gitlinks": {},
+  "mapped_gitlinks": {},
+  "source_changed_paths": [
+    "src/sst/elements/quetz/BSP-COMPATIBILITY.md",
+    "src/sst/elements/quetz/Makefile.am",
+    "src/sst/elements/quetz/QUETZ_OUTLINE.md",
+    "src/sst/elements/quetz/README.md",
+    "src/sst/elements/quetz/profiles/mcf5208-init.json",
+    "src/sst/elements/quetz/profiles/raptor-init.json",
+    "src/sst/elements/quetz/qemu-overlay/apply-qemu-overlay.sh",
+    "src/sst/elements/quetz/qemu-overlay/hw/misc/mcf_bsp_compat.c",
+    "src/sst/elements/quetz/qemu-overlay/hw/misc/mcf_dtimer.c",
+    "src/sst/elements/quetz/qemu-overlay/hw/misc/mcf_gpio.c",
+    "src/sst/elements/quetz/qemu-overlay/hw/misc/raptor_bsp_blocks.h",
+    "src/sst/elements/quetz/qemu-overlay/hw/misc/raptor_dtimer_blocks.h",
+    "src/sst/elements/quetz/qemu-overlay/hw/misc/raptor_gpio_blocks.h",
+    "src/sst/elements/quetz/quetz_launcher.cc",
+    "src/sst/elements/quetz/tests/sysmode/firmware/bsp_torture",
+    "src/sst/elements/quetz/tests/sysmode/firmware/bsp_torture.c",
+    "src/sst/elements/quetz/tests/sysmode/firmware/build.sh",
+    "src/sst/elements/quetz/tests/sysmode/firmware/coldfire_fault.h",
+    "src/sst/elements/quetz/tests/sysmode/firmware/coldfire_gpio",
+    "src/sst/elements/quetz/tests/sysmode/firmware/coldfire_gpio.c",
+    "src/sst/elements/quetz/tests/testsuite_default_quetz.py",
+    "src/sst/elements/quetz/tests/unit/test_bsp_profile.py",
+    "src/sst/elements/quetz/tools/bsp_profile.py",
+    "src/sst/elements/quetz/tools/gen_bsp_compat_blocks.py"
+  ],
+  "retained_changed_paths": [
+    "src/sst/elements/quetz/Makefile.am",
+    "src/sst/elements/quetz/profiles/mcf5208-init.json",
+    "src/sst/elements/quetz/profiles/raptor-init.json",
+    "src/sst/elements/quetz/qemu-overlay/apply-qemu-overlay.sh",
+    "src/sst/elements/quetz/qemu-overlay/hw/misc/mcf_bsp_compat.c",
+    "src/sst/elements/quetz/qemu-overlay/hw/misc/mcf_dtimer.c",
+    "src/sst/elements/quetz/qemu-overlay/hw/misc/mcf_gpio.c",
+    "src/sst/elements/quetz/qemu-overlay/hw/misc/raptor_bsp_blocks.h",
+    "src/sst/elements/quetz/qemu-overlay/hw/misc/raptor_dtimer_blocks.h",
+    "src/sst/elements/quetz/qemu-overlay/hw/misc/raptor_gpio_blocks.h",
+    "src/sst/elements/quetz/quetz_launcher.cc",
+    "src/sst/elements/quetz/tests/sysmode/firmware/bsp_torture",
+    "src/sst/elements/quetz/tests/sysmode/firmware/bsp_torture.c",
+    "src/sst/elements/quetz/tests/sysmode/firmware/build.sh",
+    "src/sst/elements/quetz/tests/sysmode/firmware/coldfire_fault.h",
+    "src/sst/elements/quetz/tests/sysmode/firmware/coldfire_gpio",
+    "src/sst/elements/quetz/tests/sysmode/firmware/coldfire_gpio.c",
+    "src/sst/elements/quetz/tests/testsuite_default_quetz.py",
+    "src/sst/elements/quetz/tests/unit/test_bsp_profile.py",
+    "src/sst/elements/quetz/tools/bsp_profile.py",
+    "src/sst/elements/quetz/tools/gen_bsp_compat_blocks.py"
+  ],
+  "comment_cleanup_paths": [
+    "src/sst/elements/quetz/qemu-overlay/hw/misc/mcf_dtimer.c",
+    "src/sst/elements/quetz/qemu-overlay/hw/misc/mcf_gpio.c",
+    "src/sst/elements/quetz/quetz_launcher.cc",
+    "src/sst/elements/quetz/tests/sysmode/firmware/bsp_torture.c",
+    "src/sst/elements/quetz/tests/sysmode/firmware/coldfire_gpio.c",
+    "src/sst/elements/quetz/tests/unit/test_bsp_profile.py",
+    "src/sst/elements/quetz/tools/gen_bsp_compat_blocks.py"
+  ],
+  "review_findings": [
+    "Generated board tables partition compat, DTIMER and GPIO ownership; fixed width handlers and masked GPIO value writes match BSP contracts.",
+    "Historical DTMR live-clock switch does not yet bank the prior rate; corrected in source 8f566ef4b4e2, retained in source order."
+  ],
+  "intentional_deviations": [
+    "Baseline Markdown restored; new or modified source comments shortened; executable semantics unchanged."
+  ],
+  "checks": [
+    {
+      "check": "bash -n",
+      "path": "src/sst/elements/quetz/qemu-overlay/apply-qemu-overlay.sh",
+      "result": "passed"
+    },
+    {
+      "check": "bash -n",
+      "path": "src/sst/elements/quetz/tests/sysmode/firmware/build.sh",
+      "result": "passed"
+    },
+    {
+      "check": "Python AST syntax",
+      "path": "src/sst/elements/quetz/tests/testsuite_default_quetz.py",
+      "result": "passed"
+    },
+    {
+      "check": "Python AST syntax",
+      "path": "src/sst/elements/quetz/tests/unit/test_bsp_profile.py",
+      "result": "passed"
+    },
+    {
+      "check": "Python AST syntax",
+      "path": "src/sst/elements/quetz/tools/bsp_profile.py",
+      "result": "passed"
+    },
+    {
+      "check": "Python AST syntax",
+      "path": "src/sst/elements/quetz/tools/gen_bsp_compat_blocks.py",
+      "result": "passed"
+    },
+    {
+      "check": "BSP profile unit tests",
+      "result": "passed with parent-dependent skips",
+      "log": "/private/tmp/raptor-replay-evidence-20260916/sst-stage-01.log"
+    },
+    {
+      "check": "Markdown policy, unchanged blob/mode identity, parent mapping, author/date and git diff --check",
+      "result": "passed"
+    },
+    {
+      "check": "Final comment audit; source token/AST identity and exact prior tested executable tokens",
+      "result": "passed"
+    }
+  ],
+  "pending_integration_checks": [
+    "Paired parent board/profile and generated-table tests at each dependency step.",
+    "Rebuild QEMU overlay, plugin and SST from cleaned sources; run boot/eDMA/native cache/cached multicore/FFT integration gates with parent."
+  ],
+  "preservation_evidence": [
+    {
+      "path": "src/sst/elements/quetz/Makefile.am",
+      "source_sha256": "fd26792dd6a6cefb417d0d9c0387ffca7fe084f1fd4970629469c238ba3536d9",
+      "clean_sha256": "fd26792dd6a6cefb417d0d9c0387ffca7fe084f1fd4970629469c238ba3536d9",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/profiles/raptor-init.json",
+      "source_sha256": "bd940d4e37444650dd50b9874b3b550d24d375ac36b086600fdf41c44de806ff",
+      "clean_sha256": "bd940d4e37444650dd50b9874b3b550d24d375ac36b086600fdf41c44de806ff",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/qemu-overlay/apply-qemu-overlay.sh",
+      "source_sha256": "d45ef7890c4e8953a45a27c65dc93ca5bdf82a87f39f354ef7e15283d3e1eae1",
+      "clean_sha256": "d45ef7890c4e8953a45a27c65dc93ca5bdf82a87f39f354ef7e15283d3e1eae1",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/qemu-overlay/hw/misc/mcf_bsp_compat.c",
+      "source_sha256": "162026b2104beba5e21aba268e6ca43804beb3d77c64dcf9809c330c9dd4538e",
+      "clean_sha256": "162026b2104beba5e21aba268e6ca43804beb3d77c64dcf9809c330c9dd4538e",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/qemu-overlay/hw/misc/mcf_dtimer.c",
+      "source_sha256": "092c737786cfd13c195be04e2bf64689cff482e84eb9ccd8deec0cf82433f4d3",
+      "clean_sha256": "8b160f5c24a6c82db6987e52130a5e1dec4e5601d368db6e93e9b360d9fd883b",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/qemu-overlay/hw/misc/mcf_gpio.c",
+      "source_sha256": "0d26cde5cda791bb8dc2a1937d63afad7392ac70c709225e31721f5f9acfce4a",
+      "clean_sha256": "25c7e0449ae821af5a3b4c61d4e1e8d968809fbdf3b2bafe0691cffb58f739f4",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/qemu-overlay/hw/misc/raptor_bsp_blocks.h",
+      "source_sha256": "0afe7803141ce8a13f089369ffbb91ca6c55eac9387d67889eba564dbe3631fa",
+      "clean_sha256": "0afe7803141ce8a13f089369ffbb91ca6c55eac9387d67889eba564dbe3631fa",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/qemu-overlay/hw/misc/raptor_dtimer_blocks.h",
+      "source_sha256": "2b6f34d77d2f570189aa392821a41cb238f065f2fbcf8a1f1d9ab9632290cfde",
+      "clean_sha256": "2b6f34d77d2f570189aa392821a41cb238f065f2fbcf8a1f1d9ab9632290cfde",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/qemu-overlay/hw/misc/raptor_gpio_blocks.h",
+      "source_sha256": "fc08234a66cff68fc5196ce82760f8634a13ceec4c058d65b469aa4f1ae0fa5d",
+      "clean_sha256": "fc08234a66cff68fc5196ce82760f8634a13ceec4c058d65b469aa4f1ae0fa5d",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/quetz_launcher.cc",
+      "source_sha256": "efbbdacf28a646d38b3998d78b80da2bd897f5f45cf6d17766eb16f84abbaaad",
+      "clean_sha256": "c865355ab7b7099a18da528b704c9d3efdd49582089d1e70b8e856214460357c",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/sysmode/firmware/bsp_torture.c",
+      "source_sha256": "19637269da4171102cfcda890d3e04bdf7b4319862aef75509b308b6d8cc2bcc",
+      "clean_sha256": "888aec13433d20f6ebcad2a6923ba92f03ad7aaae59015a7db87cf728db59bb0",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/sysmode/firmware/build.sh",
+      "source_sha256": "99f4ed0bc39b3f815338c8ebfac1babc8973797e2fdcbe188741d6811fe141ea",
+      "clean_sha256": "99f4ed0bc39b3f815338c8ebfac1babc8973797e2fdcbe188741d6811fe141ea",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/sysmode/firmware/coldfire_fault.h",
+      "source_sha256": "fa9aaefde97db6930381eac5f6951cb77283d8a2f17634e70f73e9d8548facec",
+      "clean_sha256": "fa9aaefde97db6930381eac5f6951cb77283d8a2f17634e70f73e9d8548facec",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/sysmode/firmware/coldfire_gpio.c",
+      "source_sha256": "150c68a94ef716165452e8976225f679b5ff5e0ee3cd09202a6c451eccab7e8e",
+      "clean_sha256": "48e843f7547345024aafbeb254c27b15638f06552caa8b85e960c77ba0e2ca8e",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/testsuite_default_quetz.py",
+      "source_sha256": "6298ff7e91b02c26d23a442a6f41c07e65af84062b8cecdf85f57ea39cb8f744",
+      "clean_sha256": "6298ff7e91b02c26d23a442a6f41c07e65af84062b8cecdf85f57ea39cb8f744",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/unit/test_bsp_profile.py",
+      "source_sha256": "6852f510635c48603ca6f672184d4fec8072bba766ea82c1737751a5de2bc7a9",
+      "clean_sha256": "350fce81be06592ad03766ea4ecd3e140cc2fe379750b2b316c420a30adbaf46",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/tools/bsp_profile.py",
+      "source_sha256": "07095965ac6360c5c6f7ee08fde57951ff8adf6193c0c87888ccdfa2bd5eb97c",
+      "clean_sha256": "07095965ac6360c5c6f7ee08fde57951ff8adf6193c0c87888ccdfa2bd5eb97c",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/tools/gen_bsp_compat_blocks.py",
+      "source_sha256": "1e77f1e828e7dadf5f9b3a5b069e7ed50b72ee1ee3dcb4fc4eb86679c34b481f",
+      "clean_sha256": "29f068f879df64bb66611d5b462c00d449e518b9f5bca2b98efe3c20ec8e2fba",
+      "equality": "comments-only"
+    }
+  ]
+}
