@@ -1,0 +1,577 @@
+{
+  "source": "156e23b80206ad6519c24745e27e948efcb47e72",
+  "new": "7f42b04127c5c342267e916a4ced4aa7a70195d0",
+  "source_parents": [
+    "316aff614f2de6cfa7e394801c8ff96d9de8f4cc"
+  ],
+  "mapped_parents": [
+    "772770eff112ae3e60b8b9be176df80e0e4ffd99"
+  ],
+  "source_gitlinks": {},
+  "mapped_gitlinks": {},
+  "source_changed_paths": [
+    "src/sst/elements/quetz/tests/sysmode/basic_quetz_raptor_fft_cached.py"
+  ],
+  "retained_changed_paths": [
+    "src/sst/elements/quetz/tests/sysmode/basic_quetz_raptor_fft_cached.py"
+  ],
+  "comment_cleanup_paths": [
+    "src/sst/elements/quetz/qemu-overlay/apply-qemu-overlay.sh",
+    "src/sst/elements/quetz/qemu-overlay/hw/m68k/raptor.c",
+    "src/sst/elements/quetz/qemu-overlay/hw/m68k/raptor_boot.c",
+    "src/sst/elements/quetz/qemu-overlay/hw/m68k/raptor_boot.h",
+    "src/sst/elements/quetz/qemu-overlay/hw/m68k/raptor_multicore.c",
+    "src/sst/elements/quetz/qemu-overlay/hw/misc/mcf_dtimer.c",
+    "src/sst/elements/quetz/qemu-overlay/hw/misc/mcf_gpio.c",
+    "src/sst/elements/quetz/qemu-overlay/hw/misc/raptor_edma.c",
+    "src/sst/elements/quetz/qemu-overlay/include/quetz/quetz_ipc_types.h",
+    "src/sst/elements/quetz/qemu_plugin/instrument.cpp",
+    "src/sst/elements/quetz/quetz_accelerator_event_writer.h",
+    "src/sst/elements/quetz/quetz_cache_launch.h",
+    "src/sst/elements/quetz/quetz_fft.h",
+    "src/sst/elements/quetz/quetz_gpu_device.cc",
+    "src/sst/elements/quetz/quetz_gpu_device.h",
+    "src/sst/elements/quetz/quetz_ipc_types.h",
+    "src/sst/elements/quetz/quetz_launcher.cc",
+    "src/sst/elements/quetz/quetz_multicore_launch.h",
+    "src/sst/elements/quetz/quetz_shmem.h",
+    "src/sst/elements/quetz/quetz_window_cache.h",
+    "src/sst/elements/quetz/tests/manual/run_coldfire_cache_api_probe.py",
+    "src/sst/elements/quetz/tests/manual/run_raptor_boot_reset.py",
+    "src/sst/elements/quetz/tests/sysmode/basic_quetz_gpu_compute_coldfire.py",
+    "src/sst/elements/quetz/tests/sysmode/basic_quetz_raptor.py",
+    "src/sst/elements/quetz/tests/sysmode/basic_quetz_raptor_fft_reference.py",
+    "src/sst/elements/quetz/tests/sysmode/firmware/bsp_torture.c",
+    "src/sst/elements/quetz/tests/sysmode/firmware/build.sh",
+    "src/sst/elements/quetz/tests/sysmode/firmware/coldfire_bsp_startup.S",
+    "src/sst/elements/quetz/tests/sysmode/firmware/coldfire_bsp_startup.c",
+    "src/sst/elements/quetz/tests/sysmode/firmware/coldfire_gpio.c",
+    "src/sst/elements/quetz/tests/sysmode/firmware/coldfire_gpu_fft_offload.c",
+    "src/sst/elements/quetz/tests/sysmode/firmware/expanded/coldfire_xt_dma_escape.c",
+    "src/sst/elements/quetz/tests/sysmode/firmware/link_m68k_bsp_startup.ld",
+    "src/sst/elements/quetz/tests/sysmode/firmware/riscv_virt_gpu_fft_offload.c",
+    "src/sst/elements/quetz/tests/sysmode/template_system.py",
+    "src/sst/elements/quetz/tests/testsuite_default_quetz.py",
+    "src/sst/elements/quetz/tests/unit/test_bsp_profile.py",
+    "src/sst/elements/quetz/tests/unit/test_fft_compute.cc",
+    "src/sst/elements/quetz/tools/gen_bsp_compat_blocks.py"
+  ],
+  "review_findings": [
+    "Cached BSP deck composes cache, overlap and IRQ behavior through fixed underlying reference geometry."
+  ],
+  "intentional_deviations": [
+    "Baseline Markdown restored; new or modified source comments shortened; executable semantics unchanged."
+  ],
+  "checks": [
+    {
+      "check": "Python AST syntax",
+      "path": "src/sst/elements/quetz/tests/sysmode/basic_quetz_raptor_fft_cached.py",
+      "result": "passed"
+    },
+    {
+      "check": "BSP profile unit tests",
+      "result": "passed with parent-dependent skips",
+      "log": "/private/tmp/raptor-replay-evidence-20260916/sst-stage-11.log"
+    },
+    {
+      "check": "Markdown policy, unchanged blob/mode identity, parent mapping, author/date and git diff --check",
+      "result": "passed"
+    },
+    {
+      "check": "Final comment audit; source token/AST identity and exact prior tested executable tokens",
+      "result": "passed"
+    }
+  ],
+  "pending_integration_checks": [
+    "Paired parent board/profile and generated-table tests at each dependency step.",
+    "Rebuild QEMU overlay, plugin and SST from cleaned sources; run boot/eDMA/native cache/cached multicore/FFT integration gates with parent."
+  ],
+  "preservation_evidence": [
+    {
+      "path": "src/sst/elements/quetz/Makefile.am",
+      "source_sha256": "c05382996ab56f0dda61320ecf408b849baa21749f2fab7c3dba78327c89dfe8",
+      "clean_sha256": "c05382996ab56f0dda61320ecf408b849baa21749f2fab7c3dba78327c89dfe8",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/profiles/raptor-init.json",
+      "source_sha256": "bd940d4e37444650dd50b9874b3b550d24d375ac36b086600fdf41c44de806ff",
+      "clean_sha256": "bd940d4e37444650dd50b9874b3b550d24d375ac36b086600fdf41c44de806ff",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/qemu-overlay/apply-qemu-overlay.sh",
+      "source_sha256": "4dfa40d070916f81ab19476e5d222ff620f92c588caa6efa1845833912e44fe4",
+      "clean_sha256": "43f90d872c95e4a42895162bcfc440c3ea6456e845f10d53542d75ebf84796fb",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/qemu-overlay/hw/m68k/raptor.c",
+      "source_sha256": "2f3e4f5cc38020609c1611d31fc6a972dd6d788b88fcfe20c28041e3ca682de5",
+      "clean_sha256": "ff405b3017cef0180148fc43a197618dc63afa0140018497e9bdaf236ae6f313",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/qemu-overlay/hw/m68k/raptor_boot.c",
+      "source_sha256": "66a7f178771e8b1bd2f46a99ea8a3db82a226da6b27577783d1f26e43409f488",
+      "clean_sha256": "2f775c2c7ba9c41b95e48ed4c0c7ba62dc40535a4a4a7df0a8a7111db81e29d5",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/qemu-overlay/hw/m68k/raptor_boot.h",
+      "source_sha256": "ed8828fd8b54fc6ca13fee2d670c1a092419b01311a66837d2785ad8037dab80",
+      "clean_sha256": "82d325cbe0fb9fbba1971e1455b5d10d75e048d00108c712c19c76840aacc0e9",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/qemu-overlay/hw/m68k/raptor_multicore.c",
+      "source_sha256": "9dd130138bdddf000be27b01763fd38bc28ea86be482774513b66171f4e3133e",
+      "clean_sha256": "aef42aa37652ff0daa62ac788a04845563ba1251095ecc452bc73a0706032a63",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/qemu-overlay/hw/m68k/raptor_multicore.h",
+      "source_sha256": "5ef1c5a2478554d216f2bc2836596a56e836907f880d275fc199a0bd53b0299a",
+      "clean_sha256": "5ef1c5a2478554d216f2bc2836596a56e836907f880d275fc199a0bd53b0299a",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/qemu-overlay/hw/misc/mcf_bsp_compat.c",
+      "source_sha256": "b8ba5ea57aa336902b994aaccf932dd759995881083d5bf399e4269113614de6",
+      "clean_sha256": "b8ba5ea57aa336902b994aaccf932dd759995881083d5bf399e4269113614de6",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/qemu-overlay/hw/misc/mcf_dtimer.c",
+      "source_sha256": "ed3b20ad83a31b7cea3eaa758c3b8a1b5118a5dd94d399e68e075f0fe600d4eb",
+      "clean_sha256": "3e074cfa015e04bf4c71c35fe126251c47ba7318760fa6d44eed13e12112a6b8",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/qemu-overlay/hw/misc/mcf_gpio.c",
+      "source_sha256": "30cc7597701c7248f787a786a5c94972ce202f045f4012773b12b1d336ab2655",
+      "clean_sha256": "cb4a7d83e5e78799df3c347af757fbeb4199cbe140fa9997193acbc352e254d3",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/qemu-overlay/hw/misc/raptor_bsp_blocks.h",
+      "source_sha256": "0afe7803141ce8a13f089369ffbb91ca6c55eac9387d67889eba564dbe3631fa",
+      "clean_sha256": "0afe7803141ce8a13f089369ffbb91ca6c55eac9387d67889eba564dbe3631fa",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/qemu-overlay/hw/misc/raptor_dtimer_blocks.h",
+      "source_sha256": "2b6f34d77d2f570189aa392821a41cb238f065f2fbcf8a1f1d9ab9632290cfde",
+      "clean_sha256": "2b6f34d77d2f570189aa392821a41cb238f065f2fbcf8a1f1d9ab9632290cfde",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/qemu-overlay/hw/misc/raptor_edma.c",
+      "source_sha256": "300acd9905b09a20218e03e0d5bd16270aedcc089909fc594599eb383bbe6021",
+      "clean_sha256": "c041f1861746e71aed2e513a55373197cd8799758bad72a55c41be2b75fa690d",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/qemu-overlay/hw/misc/raptor_gpio_blocks.h",
+      "source_sha256": "fc08234a66cff68fc5196ce82760f8634a13ceec4c058d65b469aa4f1ae0fa5d",
+      "clean_sha256": "fc08234a66cff68fc5196ce82760f8634a13ceec4c058d65b469aa4f1ae0fa5d",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/qemu-overlay/hw/misc/sst_mmio_bridge.c",
+      "source_sha256": "a57695858cae9b82200997bebccb12d980b9fa34ce4af9803d33826c9925e40a",
+      "clean_sha256": "a57695858cae9b82200997bebccb12d980b9fa34ce4af9803d33826c9925e40a",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/qemu-overlay/include/quetz/quetz_ipc_client.h",
+      "source_sha256": "55b885d1303ee181bc752e79c00882d8e7364e58629aa838f1fd40342c1ed448",
+      "clean_sha256": "55b885d1303ee181bc752e79c00882d8e7364e58629aa838f1fd40342c1ed448",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/qemu-overlay/include/quetz/quetz_ipc_types.h",
+      "source_sha256": "2885fe81a8215e6c45ca6658a32cbd00bd48ffe17be109e452038a4e94510e54",
+      "clean_sha256": "2fd74e5972825d1f5eeda4525dc86a44549892d4b2ecf29295235ca0cc481c1e",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/qemu-overlay/quetz_ipc_client.c",
+      "source_sha256": "6f07db8e62b28000a7cb1904089f7544cdcd1ffc276ddb181756b790b6558c96",
+      "clean_sha256": "6f07db8e62b28000a7cb1904089f7544cdcd1ffc276ddb181756b790b6558c96",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/qemu_plugin/coldfire_cache_ops.h",
+      "source_sha256": "159f82e970a388c376faf70cd56a45af53f552777d4940af0cb0d118e6afe9a5",
+      "clean_sha256": "159f82e970a388c376faf70cd56a45af53f552777d4940af0cb0d118e6afe9a5",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/qemu_plugin/instrument.cpp",
+      "source_sha256": "5fcfed9006c19f51adc7eae1ff9e500d5cbc2a928c1ccc8c0af84c960430f50b",
+      "clean_sha256": "c8ecd2cdd226563eddfa5c88263d348bfd239dca23e43d2a25ec07ebdbb34ed4",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/qemu_plugin/plugin_main.cpp",
+      "source_sha256": "0b73d45bb2315d0fbde9de8420172d12c21f7dbc44b7849d4dd4e02c0ddd82cf",
+      "clean_sha256": "0b73d45bb2315d0fbde9de8420172d12c21f7dbc44b7849d4dd4e02c0ddd82cf",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/qemu_plugin/plugin_state.cpp",
+      "source_sha256": "c7062738470414fffae92c55849c33ff49ffde142b065fdaceaf4148dc270d11",
+      "clean_sha256": "c7062738470414fffae92c55849c33ff49ffde142b065fdaceaf4148dc270d11",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/qemu_plugin/plugin_state.h",
+      "source_sha256": "eed1887888204ff1717801e3b13778b9ed4ada3ab548dbcf5d6cdc00d8a8d4f6",
+      "clean_sha256": "eed1887888204ff1717801e3b13778b9ed4ada3ab548dbcf5d6cdc00d8a8d4f6",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/quetz_accelerator_event_writer.h",
+      "source_sha256": "8d87da8709ae980d7ad63db1a4f7b266adcd64ec6d9fe64089f45b16e9d4a2b7",
+      "clean_sha256": "8f84b73262696df65ae021f8b8347a61495efbb4949999848ac04c236f25b4db",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/quetz_cache_launch.h",
+      "source_sha256": "00946c57b0e7e2d67614542ba49b9313bb4a7882f0b9f208d115ea05b196344e",
+      "clean_sha256": "191f888a7034926ab45b4a48fbcae0b4e9feb04427efbbf474d4595556e8ba9f",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/quetz_config.cc",
+      "source_sha256": "052489faf029d3b6246dda6f1252da01456bf62e5dee4d10e8178527ca6539a8",
+      "clean_sha256": "052489faf029d3b6246dda6f1252da01456bf62e5dee4d10e8178527ca6539a8",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/quetz_config.h",
+      "source_sha256": "3f262fdffb9b8ce29516940f2aaf10d6b82c76067409d727236694aeaa44063d",
+      "clean_sha256": "3f262fdffb9b8ce29516940f2aaf10d6b82c76067409d727236694aeaa44063d",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/quetz_fft.h",
+      "source_sha256": "6adce93046e6e7641185074a6bc835d14146da983c3954320978d26945720ab1",
+      "clean_sha256": "d8abcc07bea6d63f4740cd26702181458bcd52ce95bb2fa83b2b6b384b786729",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/quetz_gpu_device.cc",
+      "source_sha256": "6b9c06ffc01a53029163691873542eb69ca1e9bb991beafa372aff245691ec7e",
+      "clean_sha256": "6081b788d413a57196f801cb9702beb985a78ffe415ec25c610cd1e31e045dc3",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/quetz_gpu_device.h",
+      "source_sha256": "203622e7345bbda5df1737ad22b5ffa12609df79aacf2fd3b46711bd081bc034",
+      "clean_sha256": "89f5bd070f6dd949fc809f191ea583641e3ac31e569b5c19302ee8397c1346e0",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/quetz_ipc_types.h",
+      "source_sha256": "580a39f78294c2ba4da3f96917351d19115bf92a9edeeec18b88ee27c31ec496",
+      "clean_sha256": "828a5ef5ae56f1a1f5faad8cf43cab9487a28ee4a47438ca8dc9267edf5fe61f",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/quetz_launcher.cc",
+      "source_sha256": "498059bbcc668a08222a560cbb602550ce1e5d2d6b1e14add9937671c3a16f64",
+      "clean_sha256": "2f3ba9ef88b0c6af0fcae15058225d591c17dce6bb621c1e798e8a0d5b731bf4",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/quetz_multicore_launch.h",
+      "source_sha256": "aef71e89a75063bc4b22f1898852271bb977886abb602a8e11feb6011939cb04",
+      "clean_sha256": "07cd5a6a5257ee94ca74a439528a5794b56094d3e997f3955401e2c117bca99d",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/quetz_shmem.h",
+      "source_sha256": "bef43886a3ce70a22cb6f3a074474a67f1f8eae66926a7b4dc84d432dcc764d4",
+      "clean_sha256": "039581a8266c9dd2410877d11bda4d32e36d480258d042443f57dcc746b36b3c",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/quetz_window_cache.h",
+      "source_sha256": "8a702d2d3a330ae0e04cf3082dd30e58bb2999daa5bac85630ac63f23ee3eab5",
+      "clean_sha256": "2774d2467ff47106fc7b91a7235afcaf3c0169014e087e018f973ef649c906ca",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/quetzcpu.cc",
+      "source_sha256": "4c509035e218ad1542d5f7c4a26bc566c52c107901062629cbfe5f244de77bc0",
+      "clean_sha256": "4c509035e218ad1542d5f7c4a26bc566c52c107901062629cbfe5f244de77bc0",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/quetzcpu.h",
+      "source_sha256": "375ebf58681f76c86e4c08535c52dafaee420546c16158b26be74e783f09633f",
+      "clean_sha256": "375ebf58681f76c86e4c08535c52dafaee420546c16158b26be74e783f09633f",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/quetzcpu_mmio_sync.cc",
+      "source_sha256": "3f5166c0369b4b3d963d19b2249ebcc8d083dfe163e9173de7f55715358ed7d8",
+      "clean_sha256": "3f5166c0369b4b3d963d19b2249ebcc8d083dfe163e9173de7f55715358ed7d8",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/expanded_coldfire_tests.py",
+      "source_sha256": "c2fe61e7de8d256aca0734f55db7cbb24e3a570755d293e7a0b52367f213639b",
+      "clean_sha256": "c2fe61e7de8d256aca0734f55db7cbb24e3a570755d293e7a0b52367f213639b",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/manual/coldfire_cache_api_probe.S",
+      "source_sha256": "0ede773e7ab0a507e4f07d9aa07a5f8b4d6fe7bb5c93281ad014acbe200495b5",
+      "clean_sha256": "0ede773e7ab0a507e4f07d9aa07a5f8b4d6fe7bb5c93281ad014acbe200495b5",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/manual/coldfire_cache_api_probe.cpp",
+      "source_sha256": "70dd4a7e67a2f0d8cda1eed397144ee9e65af36f152bd2521517407026c92b0a",
+      "clean_sha256": "70dd4a7e67a2f0d8cda1eed397144ee9e65af36f152bd2521517407026c92b0a",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/manual/run_coldfire_cache_api_probe.py",
+      "source_sha256": "2a4c0530c5f5e726945d8206d61be817926f0f46f21687bc7fbcf5cb5e3c9746",
+      "clean_sha256": "656269a6f461da9e3301e17cb099fa4d3696cbd2c5d1632a6fea4cf0c4b56562",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/manual/run_raptor_boot_reset.py",
+      "source_sha256": "c43660efa79bffd3d1d9a09c4d380339be5cc2f68967b9d1956c43e1ff1fa584",
+      "clean_sha256": "5503bc1c3334b20990a5da38a640b3daae287d0663cb1a96140911083506616f",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/manual/run_raptor_bsp_reboot.py",
+      "source_sha256": "11530b521b335d0d56488667f29f9f7a1f66067f8f1479db2a712f8fb8eede18",
+      "clean_sha256": "11530b521b335d0d56488667f29f9f7a1f66067f8f1479db2a712f8fb8eede18",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/sysmode/basic_quetz_gpu_compute.py",
+      "source_sha256": "2ee2657f6470b1c651038ef64e8839497905db91592ffedf96709f6486663050",
+      "clean_sha256": "2ee2657f6470b1c651038ef64e8839497905db91592ffedf96709f6486663050",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/sysmode/basic_quetz_gpu_compute_coldfire.py",
+      "source_sha256": "38d90f6acf7b4bd80e538b8415b06502483e610d936c157a0d7fd86cad2f1d75",
+      "clean_sha256": "07188f93b71e0e3a1df175f51f65a037643ac27e7155353fa5626220eca963f2",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/sysmode/basic_quetz_raptor.py",
+      "source_sha256": "a35daeafa0f4a6277ab4f6fef214218d762708a488c410a95fd94994f63c7c16",
+      "clean_sha256": "2e3ae582604a363622c6160c9965a338850f09d13e4f066a1cd5f4c77d679f62",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/sysmode/basic_quetz_raptor_cache_dma.py",
+      "source_sha256": "dba93adae43992dcb558cd1911e45d514012fb0ed465f4745fd0cdfe88e8052e",
+      "clean_sha256": "dba93adae43992dcb558cd1911e45d514012fb0ed465f4745fd0cdfe88e8052e",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/sysmode/basic_quetz_raptor_fft_cached.py",
+      "source_sha256": "05faf7be00795b25f40ab0dc06efc573f7ba8f290d9366e5913c210868ad8d44",
+      "clean_sha256": "05faf7be00795b25f40ab0dc06efc573f7ba8f290d9366e5913c210868ad8d44",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/sysmode/basic_quetz_raptor_fft_interrupt.py",
+      "source_sha256": "32484b776a505704e41247e6cff25f7ca12f442e42bc35490da830a154f51e3d",
+      "clean_sha256": "32484b776a505704e41247e6cff25f7ca12f442e42bc35490da830a154f51e3d",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/sysmode/basic_quetz_raptor_fft_overlap.py",
+      "source_sha256": "0ba3d60856e24279234fd52d5327c70e3fdfd73032e94d274851ab798dd94854",
+      "clean_sha256": "0ba3d60856e24279234fd52d5327c70e3fdfd73032e94d274851ab798dd94854",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/sysmode/basic_quetz_raptor_fft_reference.py",
+      "source_sha256": "647e0d0a2646179fd5a21b26b6fcf78b54464fbf812bd232e02e0f3ad5212ab2",
+      "clean_sha256": "3d00b0ee66a0e90c23cacf0b3fb43faf43888fc28f8c6a65187794728d7ce00f",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/sysmode/basic_quetz_raptor_multicore.py",
+      "source_sha256": "cfe2f5cf364854a5cce834c01246d9a99c8dcfdac028b148ac15077f41302db4",
+      "clean_sha256": "cfe2f5cf364854a5cce834c01246d9a99c8dcfdac028b148ac15077f41302db4",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/sysmode/firmware/bsp_torture.c",
+      "source_sha256": "19637269da4171102cfcda890d3e04bdf7b4319862aef75509b308b6d8cc2bcc",
+      "clean_sha256": "888aec13433d20f6ebcad2a6923ba92f03ad7aaae59015a7db87cf728db59bb0",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/sysmode/firmware/build.sh",
+      "source_sha256": "183eb5ea5fc5e87d0950b6e63b5bd70265d52a524ead8a38caee821b63e72416",
+      "clean_sha256": "b0f0abe12a00622e4511309a198edd20b3f82c3c0baa526c322c2a27b2504f20",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/sysmode/firmware/coldfire_bsp_startup.S",
+      "source_sha256": "fc503de92b0454cbce1585dcf336e6f977064239bf295e042dd1b72b2100df3e",
+      "clean_sha256": "b3f411c4d541f28c32790adde5dbc25a76ef80f8e197dff3359ea46eccf220d7",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/sysmode/firmware/coldfire_bsp_startup.c",
+      "source_sha256": "b5e16e2326551bfae26459ade7806e1b1178e2814cdbf342382eb8cc73fbb61d",
+      "clean_sha256": "a3fe55a42e350e2901bc5d49f6b88f8910c6b86d4dca31ce0d3f78629cc93a32",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/sysmode/firmware/coldfire_fault.h",
+      "source_sha256": "fa9aaefde97db6930381eac5f6951cb77283d8a2f17634e70f73e9d8548facec",
+      "clean_sha256": "fa9aaefde97db6930381eac5f6951cb77283d8a2f17634e70f73e9d8548facec",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/sysmode/firmware/coldfire_gpio.c",
+      "source_sha256": "150c68a94ef716165452e8976225f679b5ff5e0ee3cd09202a6c451eccab7e8e",
+      "clean_sha256": "48e843f7547345024aafbeb254c27b15638f06552caa8b85e960c77ba0e2ca8e",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/sysmode/firmware/coldfire_gpu_fft_offload.c",
+      "source_sha256": "0c604279b24e5cf8d08ef3703d364e6384bf376ed8fb6ff88d00374b71c4d510",
+      "clean_sha256": "b0ec0b32f9cb435e3c77c3cdbc9060ab327899dcfc7d21393ec4216f05b0d964",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/sysmode/firmware/coldfire_intc.h",
+      "source_sha256": "80ccef1d01d7ba7f74a3a95db491461d839688fa0cb0435814551dcfa2928cb5",
+      "clean_sha256": "80ccef1d01d7ba7f74a3a95db491461d839688fa0cb0435814551dcfa2928cb5",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/sysmode/firmware/expanded/coldfire_xt_dma_escape.c",
+      "source_sha256": "32e9aac0b62e5f791420d6884aac03cfcf4a472435179e450e20f2329bfc5f26",
+      "clean_sha256": "c0bb921618fc484eb7e399d900b5d0be31decc557ce49babe56a6cf012a5daa1",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/sysmode/firmware/link_m68k_bsp_startup.ld",
+      "source_sha256": "77f6071d69e483fe4f575ece1e74dacb789d1cb33a99d34074c250e38f92b7a6",
+      "clean_sha256": "a04cb598c1d31df9a13e3860a1de1d88852439f3fd5a05d704803175ab74c008",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/sysmode/firmware/raptor_dual_core0.S",
+      "source_sha256": "6d314049770ea20f2dd4ea568d581f1a004fd9370d1c5140dc650431de1a1059",
+      "clean_sha256": "6d314049770ea20f2dd4ea568d581f1a004fd9370d1c5140dc650431de1a1059",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/sysmode/firmware/raptor_dual_core1.S",
+      "source_sha256": "c3afd53092ef56b7e4d1ec66c3394aff54e06d5be4f85b6c6fd417c130ff5bb1",
+      "clean_sha256": "c3afd53092ef56b7e4d1ec66c3394aff54e06d5be4f85b6c6fd417c130ff5bb1",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/sysmode/firmware/raptor_dual_sst0.S",
+      "source_sha256": "3929d497b5a95612ef095b9925d0ab2a6505eb10c018714019195758d14f3314",
+      "clean_sha256": "3929d497b5a95612ef095b9925d0ab2a6505eb10c018714019195758d14f3314",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/sysmode/firmware/raptor_dual_sst1.S",
+      "source_sha256": "10df04b14e2baccfc4f6d8c0baf28c1cc801498b9754ca04e2e2b02fb9d0c7a7",
+      "clean_sha256": "10df04b14e2baccfc4f6d8c0baf28c1cc801498b9754ca04e2e2b02fb9d0c7a7",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/sysmode/firmware/riscv_virt_gpu_fft_offload.c",
+      "source_sha256": "2f44f9bbf9fbf3c207c125e4ef58a357b0031995063164a51690a7123f6b590d",
+      "clean_sha256": "c7c972cb7fa025ecc4c82c8394543c75ff6aaab68cba31fc5e8245634fe1a434",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/sysmode/template_system.py",
+      "source_sha256": "c190eba5946786c754dfdfa92f042ccc16e9423130cfcb5ab2aa342807fbae43",
+      "clean_sha256": "7dad35f56738211ad4c96e150f05eb3114fd24cf0cb4c786980d4d9c2249fea6",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/testsuite_default_quetz.py",
+      "source_sha256": "f92daf60b32648bae385e3ece13248bd25c557baf0826c924a2decc9df695bda",
+      "clean_sha256": "b08acaf5fb92fae5cd756a3ac91b97e90e7549327667781b818bb944b376e612",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/unit/run_unit_tests.sh",
+      "source_sha256": "fb8653a6dac279b22accaa2d2ee3ff664c4ec1478fe19d25893a117c1f6889c1",
+      "clean_sha256": "fb8653a6dac279b22accaa2d2ee3ff664c4ec1478fe19d25893a117c1f6889c1",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/unit/test_accelerator_event_writer.cc",
+      "source_sha256": "6c5a7dfd2e1a9060968ceed8fff4478068ea92bb5063a61458d48bb3e91b5f64",
+      "clean_sha256": "6c5a7dfd2e1a9060968ceed8fff4478068ea92bb5063a61458d48bb3e91b5f64",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/unit/test_bsp_profile.py",
+      "source_sha256": "ea9972eef548c4e1dace707b4f44ac20caef56488efa72be7ab07367b93aa031",
+      "clean_sha256": "42324047a1c7a47e81d90e3f0621c2183698ec7e634fa071d4f5721ee004d0a9",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/unit/test_cache_launch.cc",
+      "source_sha256": "1b8497cf82ee355da0ff18f4fc9ed1f36b944ed855f53528ce26d995b87fe92b",
+      "clean_sha256": "1b8497cf82ee355da0ff18f4fc9ed1f36b944ed855f53528ce26d995b87fe92b",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/unit/test_coldfire_cache_ops.cc",
+      "source_sha256": "effe3190d230c5ab17c71b44374e6e7a52d803926018c08000c44278c905c6ed",
+      "clean_sha256": "effe3190d230c5ab17c71b44374e6e7a52d803926018c08000c44278c905c6ed",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/unit/test_fft_compute.cc",
+      "source_sha256": "61fca814d76224db0f8520f280e86b5fff670c121c442a74f60fb9e869e9ee37",
+      "clean_sha256": "4808889627cf605b01047a1e0ac39ab5c175348457003872dbdb8a044a665247",
+      "equality": "comments-only"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/unit/test_multicore_launch.cc",
+      "source_sha256": "c01fe8bba0f8ec0751352abb6106d6cef34583452f80c990046a69925a03e6e3",
+      "clean_sha256": "c01fe8bba0f8ec0751352abb6106d6cef34583452f80c990046a69925a03e6e3",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/tests/unit/test_window_cache.cc",
+      "source_sha256": "6c7ea6d409e21701b42484e867b1a643f16be9d14e613ed68747aede93706b16",
+      "clean_sha256": "6c7ea6d409e21701b42484e867b1a643f16be9d14e613ed68747aede93706b16",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/tools/bsp_profile.py",
+      "source_sha256": "aa76323a13bca0d5444449dcf29d8cd0edb3351e26c0727dbd7d2cd183452f8b",
+      "clean_sha256": "aa76323a13bca0d5444449dcf29d8cd0edb3351e26c0727dbd7d2cd183452f8b",
+      "equality": "byte-identical"
+    },
+    {
+      "path": "src/sst/elements/quetz/tools/gen_bsp_compat_blocks.py",
+      "source_sha256": "eddf296b5cd34f8bf55e3f6c079c508a907d3fbec014d473b76cfbbf28f18cc3",
+      "clean_sha256": "d74d21cbe72538fc8e41db5cdfa9058f22a5a0696fe3f07d7a19b89f01213d11",
+      "equality": "comments-only"
+    }
+  ]
+}
