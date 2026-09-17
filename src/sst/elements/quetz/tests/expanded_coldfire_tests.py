@@ -712,11 +712,7 @@ class testcase_expanded_coldfire(SSTTestCase):
 
     # -------------------------------------------------------------------------
     def test_xt_smp_guard_fatal(self):
-        """system_mode=1 with vcpu_count=2 must fatal at construction with a
-        clear message (the sync-MMIO bridge is wired to mailbox slot 0 only;
-        two MTTCG vCPU threads would race one request slot). Reuses the
-        trivial coldfire_hello binary -- it is never executed, since the
-        fatal fires before QEMU is even spawned."""
+        """Reject unsupported multicore machines before launching QEMU."""
         test_path = self.get_testsuite_dir()
         sst_prefix, sst_bindir, sst_libexec, qemu_bin = self._qemu_system_m68k()
         exe_abs = os.path.normpath(os.path.join(
@@ -738,8 +734,7 @@ class testcase_expanded_coldfire(SSTTestCase):
         os.environ["QUETZ_PLUGIN"] = os.path.join(sst_libexec, "libqemu_sst_plugin.so")
         os.environ["SST_HOME"] = sst_prefix
         os.environ["QUETZ_VCPU_COUNT"] = "2"
-        # The deck refuses to load without payload delivery; the SMP guard
-        # fatal we're probing fires later (at construction, before QEMU).
+        # Enable payload delivery for the deck.
         enable_mmio_payload_delivery()
 
         try:
@@ -752,8 +747,10 @@ class testcase_expanded_coldfire(SSTTestCase):
         self.assertIn("FATAL", raw,
             "system_mode=1 with vcpu_count=2 should fatal (SMP sync-MMIO "
             "guard) instead of silently running")
-        self.assertIn("vcpu_count=1", raw,
-            "fatal message should name the single-vCPU requirement")
+        self.assertIn("requires raptor-core2 with secondary-kernel", raw,
+            "fatal message should name the supported multicore configuration")
+        self.assertNotIn("Segmentation fault", raw,
+            "construction failure should shut down safely")
         self.assertNotIn("TESTFINISH", raw,
             "the guest should never have started executing")
 

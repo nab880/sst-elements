@@ -283,7 +283,7 @@ void QuetzCPU::finish() {
 }
 
 void QuetzCPU::emergencyShutdown() {
-    frontend_->forceKill();
+    if (frontend_) frontend_->forceKill();
     delete frontend_;
     frontend_ = nullptr;
 }
