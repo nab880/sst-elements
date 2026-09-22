@@ -30,6 +30,8 @@ libmerlin_la_SOURCES = \
 	target_generator/uniform.h \
 	test/nic.h \
 	test/nic.cc \
+	test/request_ownership/cloneTrackingEvent.h \
+	test/request_ownership/requestOwnershipTest.cc \
 	test/collective/contractTest.cc \
 	test/route_test/route_test.h \
 	test/route_test/route_test.cc \
@@ -127,6 +129,7 @@ EXTRA_DIST = \
 	tests/dragon_128_test_deferred.py \
 	tests/polarfly_455_test.py \
 	tests/polarstar_504_test.py \
+	tests/request_ownership.py \
 	tests/refFiles/test_merlin_dragon_128_platform_test.out \
 	tests/refFiles/test_merlin_dragon_128_platform_test_cm.out \
 	tests/refFiles/test_merlin_dragon_128_test.out \
@@ -140,6 +143,7 @@ EXTRA_DIST = \
 	tests/refFiles/test_merlin_torus_5_trafficgen.out \
 	tests/refFiles/test_merlin_torus_64_test.out \
 	tests/refFiles/test_merlin_polarfly_455_test.out \
+	tests/refFiles/test_merlin_request_ownership.out \
 	tests/refFiles/test_merlin_polarstar_504_test.out
 
 sstdir = $(includedir)/sst/elements/merlin

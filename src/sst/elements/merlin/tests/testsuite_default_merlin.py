@@ -27,8 +27,7 @@ class testcase_merlin_Component(SSTTestCase):
         # Put test based teardown code here. it is called once after every test
         super(type(self), self).tearDown()
 
-
-#####
+    #####
 
     def test_merlin_dragon_128(self):
         self.merlin_test_template("dragon_128_test")
@@ -49,10 +48,10 @@ class testcase_merlin_Component(SSTTestCase):
         self.merlin_test_template("torus_5_trafficgen")
 
     def test_merlin_torus_64(self):
-         self.merlin_test_template("torus_64_test")
+        self.merlin_test_template("torus_64_test")
 
     def test_merlin_hyperx_128(self):
-         self.merlin_test_template("hyperx_128_test")
+        self.merlin_test_template("hyperx_128_test")
 
     def test_merlin_dragon_128_platform(self):
         self.merlin_test_template("dragon_128_platform_test", True)
@@ -66,6 +65,8 @@ class testcase_merlin_Component(SSTTestCase):
     def test_merlin_dragon_128_deferred(self):
         self.merlin_test_template("dragon_128_test_deferred")
 
+    def test_merlin_request_ownership(self):
+        self.merlin_test_template("request_ownership", exact=True, strict_stderr=True)
 
     @unittest.skipIf(not(('sympy.polys.galoistools' in sys.modules) and ('sympy.polys.domains' in sys.modules)), "Polarfly construction requires sympy")
     def test_merlin_polarfly_455(self):
@@ -106,14 +107,14 @@ class testcase_merlin_Component(SSTTestCase):
 
 #####
 
-    def merlin_test_template(self, testcase, cwd=False):
+    def merlin_test_template(self, testcase, cwd=False, exact=False, strict_stderr=False):
         # Get the path to the test files
         test_path = self.get_testsuite_dir()
         outdir = self.get_test_output_run_dir()
         tmpdir = self.get_test_output_tmp_dir()
 
         # Set the various file paths
-        testDataFileName="test_merlin_{0}".format(testcase)
+        testDataFileName = "test_merlin_{0}".format(testcase)
 
         sdlfile = "{0}/{1}.py".format(test_path, testcase)
         reffile = "{0}/refFiles/{1}.out".format(test_path, testDataFileName)
@@ -122,7 +123,9 @@ class testcase_merlin_Component(SSTTestCase):
         mpioutfiles = "{0}/{1}.testfile".format(outdir, testDataFileName)
 
         if cwd:
-            self.run_sst(sdlfile, outfile, errfile, mpi_out_files=mpioutfiles, set_cwd=test_path)
+            self.run_sst(
+                sdlfile, outfile, errfile, mpi_out_files=mpioutfiles, set_cwd=test_path
+            )
         else:
             self.run_sst(sdlfile, outfile, errfile, mpi_out_files=mpioutfiles)
 
@@ -133,10 +136,22 @@ class testcase_merlin_Component(SSTTestCase):
 
         # Perform the tests
         if os_test_file(errfile, "-s"):
-            log_testing_note("merlin test {0} has a Non-Empty Error File {1}".format(testDataFileName, errfile))
+            log_testing_note(
+                "merlin test {0} has a Non-Empty Error File {1}".format(
+                    testDataFileName, errfile
+                )
+            )
+            if strict_stderr:
+                self.fail("merlin test {} produced stderr: {}".format(testDataFileName, errfile))
 
-        cmp_result = testing_compare_sorted_diff(testcase, outfile, reffile)
-        if (cmp_result == False):
+        cmp_result = testing_compare_diff(testcase, outfile, reffile) if exact else \
+            testing_compare_sorted_diff(testcase, outfile, reffile)
+        if cmp_result == False:
             diffdata = testing_get_diff_data(testcase)
             log_failure(diffdata)
-        self.assertTrue(cmp_result, "Sorted Output file {0} does not match sorted Reference File {1}".format(outfile, reffile))
+        self.assertTrue(
+            cmp_result,
+            "Output file {0} does not match Reference File {1}".format(
+                outfile, reffile
+            ),
+        )

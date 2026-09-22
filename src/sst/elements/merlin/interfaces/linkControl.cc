@@ -88,16 +88,21 @@ LinkControl::serialize_order(SST::Core::Serialization::serializer& ser) {
     SST_SER(SST::Core::Serialization::array(input_queues, req_vns));
 
     if ( ser.mode() == SST::Core::Serialization::serializer::UNPACK ) {
-        vn_remap_out = new output_queue_bundle_t*[req_vns];
-        if ( vn_out_map != nullptr ) {
-            for ( int i = 0; i < req_vns; ++i ) {
-                vn_remap_out[i] = &output_queues[vn_out_map[i]];
-            }
+        vn_remap_out = new output_queue_bundle_t*[req_vns]();
+    }
+    // Preserve the actual queue-bundle projection, including unsupported
+    // logical VNs and many-to-one remaps, without a parallel validity vector.
+    for ( int i = 0; i < req_vns; ++i ) {
+        int output_index = -1;
+        if ( ser.mode() != SST::Core::Serialization::serializer::UNPACK &&
+             vn_remap_out != nullptr && vn_remap_out[i] != nullptr && output_queues != nullptr ) {
+            const auto index = vn_remap_out[i] - output_queues;
+            if ( index >= 0 && index < used_vns ) output_index = static_cast<int>(index);
         }
-        else {
-            for ( int i = 0; i < req_vns; ++i ) {
-                vn_remap_out[i] = &output_queues[i];
-            }
+        SST_SER(output_index);
+        if ( ser.mode() == SST::Core::Serialization::serializer::UNPACK &&
+             output_index >= 0 && output_index < used_vns ) {
+            vn_remap_out[i] = &output_queues[output_index];
         }
     }
 
@@ -140,7 +145,7 @@ LinkControl::LinkControl(ComponentId_t cid, Params &params, int vns) :
     req_vns(vns), used_vns(0), total_vns(0), vn_out_map(nullptr),
     vn_remap_out(nullptr), output_queues(nullptr), router_credits(nullptr),
     router_return_credits(nullptr), input_queues(nullptr),
-    id(-1), logical_nid(-1), use_nid_map(false), job_id(0),
+    id(-1), logical_nid(-1), job_id(0), use_nid_map(false),
     curr_out_vn(0), waiting(true), have_packets(false), start_block(0),
     idle_start(0), is_idle(true),
     receiveFunctor(nullptr), sendFunctor(nullptr),
@@ -416,7 +421,7 @@ void LinkControl::init(unsigned int phase)
 
         // Instance the output queues
         int count = 0;
-        vn_remap_out = new output_queue_bundle_t*[req_vns];
+        vn_remap_out = new output_queue_bundle_t*[req_vns]();
         output_queues = new output_queue_bundle_t[used_vns];
         for ( int i = 0; i < total_vns; ++i ) {
             if ( vn_count[i] > 0 ) {
@@ -535,7 +540,8 @@ void LinkControl::finish(void)
 // otherwise.
 bool LinkControl::send(SimpleNetwork::Request* req, int vn) {
     // Check to see if the VN is in range
-    if ( vn >= req_vns ) return false;
+    if ( req == nullptr || vn < 0 || vn >= req_vns || vn_remap_out == nullptr ||
+         vn_remap_out[vn] == nullptr ) return false;
     req->vn = vn;
 
     // Check to see if we need to do a nid translation
@@ -550,7 +556,11 @@ bool LinkControl::send(SimpleNetwork::Request* req, int vn) {
     // Create a router event using id and original vn
     RtrEvent* ev = new RtrEvent(req,id,real_vn);
     // Fill in the number of flits
-    ev->computeSizeInFlits(flit_size);
+    if ( !ev->computeSizeInFlits(flit_size) ) {
+        ev->takeRequest();
+        delete ev;
+        return false;
+    }
     int flits = ev->getSizeInFlits();
 
     // Check to see if there are enough credits to send
@@ -585,7 +595,9 @@ bool LinkControl::send(SimpleNetwork::Request* req, int vn) {
 // Returns true if there is space in the output buffer and false
 // otherwise.
 bool LinkControl::spaceToSend(int vn, int bits) {
-    if ( vn_remap_out[vn]->credits * flit_size < bits) return false;
+    if ( vn < 0 || vn >= req_vns || bits < 0 || vn_remap_out == nullptr ||
+         vn_remap_out[vn] == nullptr ) return false;
+    if ( static_cast<int64_t>(vn_remap_out[vn]->credits) * static_cast<int64_t>(flit_size) < bits ) return false;
     return true;
 }
 
@@ -710,9 +722,16 @@ void LinkControl::handle_input(Event* ev)
     }
     else {
         RtrEvent* event = static_cast<RtrEvent*>(ev);
+        if ( !event->hasValidTransportMetadata() ) {
+            merlin_abort_full.fatal(CALL_INFO, 1, "LinkControl received a timed packet with invalid transport metadata\n");
+        }
         // Simply put the event into the right virtual network queue
         // int orig_vn = event->getOriginalVN();
         int vn = event->getLogicalVN();
+        if ( vn < 0 || vn >= req_vns ) {
+            merlin_abort_full.fatal(CALL_INFO, 1,
+                "LinkControl received logical VN %d outside configured range [0, %d)\n", vn, req_vns);
+        }
         // event->request->vn = orig_vn;
 
         input_queues[vn].push(event);

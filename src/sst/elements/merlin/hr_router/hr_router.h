@@ -29,7 +29,7 @@
 
 #include <queue>
 
-#include "sst/elements/merlin/router.h"
+#include "../router.h"
 
 using namespace SST;
 

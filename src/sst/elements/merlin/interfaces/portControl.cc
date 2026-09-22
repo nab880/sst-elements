@@ -889,8 +889,10 @@ PortControl::init(unsigned int phase) {
         while ( ( ev = port_link->recvUntimedData() ) != NULL ) {
             credit_event* ce = dynamic_cast<credit_event*>(ev);
             if ( ce != NULL ) {
-                if ( ce->vc >= num_vcs ) {
-                    // _abort(PortControl, "Received Credit Event for VC %d.  I only know of VCS[0-%d]\n", ce->vc, num_vcs-1);
+                const int credit_channels = host_port ? num_vns : num_vcs;
+                if ( ce->vc < 0 || ce->vc >= credit_channels || ce->credits < 0 ) {
+                    merlin_abort.fatal(CALL_INFO, 1,
+                        "PortControl received invalid initial credits for VC %d\n", ce->vc);
                 }
                 port_out_credits[ce->vc] += ce->credits;
                 delete ev;
@@ -1059,6 +1061,10 @@ PortControl::handle_input_n2r(Event* ev)
 	case BaseRtrEvent::PACKET:
 	{
 	    RtrEvent* event = static_cast<RtrEvent*>(ev);
+	    if ( !event->hasValidTransportMetadata() || event->getRouteVN() < 0 ||
+             event->getRouteVN() >= num_vns ) {
+	        output.fatal(CALL_INFO, 1, "PortControl received a timed packet with invalid transport metadata\n");
+	    }
 	    // Simply put the event into the right virtual network queue
 
 	    // Need to process input and do the routing
@@ -1068,12 +1074,13 @@ PortControl::handle_input_n2r(Event* ev)
         rtr_event->setCreditReturnVC(vn);
         int curr_vc = rtr_event->getVC();
 
+	    const bool was_empty = input_buf[curr_vc].empty();
 	    input_buf[curr_vc].push(rtr_event);
 	    input_buf_count[curr_vc]++;
 
 	    // If this becomes vc_head we need to put it into the vc_heads
 	    // array and do the routing decision here using route_packet()
-	    if ( vc_heads[curr_vc] == NULL ) {
+	    if ( was_empty ) {
             topo->route_packet(port_number, rtr_event->getVC(), rtr_event);
             vc_heads[curr_vc] = rtr_event;
             parent->inc_vcs_with_data();
@@ -1145,18 +1152,23 @@ PortControl::handle_input_r2r(Event* ev)
 	case BaseRtrEvent::INTERNAL:
     {
 	    internal_router_event* event = static_cast<internal_router_event*>(ev);
+        if ( !event->hasValidTransportMetadata() || event->getVN() < 0 || event->getVN() >= num_vns ||
+             event->getVC() < 0 || event->getVC() >= num_vcs ) {
+            output.fatal(CALL_INFO, 1, "PortControl received an invalid timed internal packet\n");
+        }
         if ( enable_congestion_management ) parent->reportIncomingEvent(event);
 	    // Simply put the event into the right virtual network queue
 
 	    // Need to do the routing
 	    int curr_vc = event->getVC();
 
+	    const bool was_empty = input_buf[curr_vc].empty();
 	    input_buf[curr_vc].push(event);
 	    input_buf_count[curr_vc]++;
 
 	    // If this becomes vc_head (there isn't an event already
 	    // in the array) we need to put it into the vc_heads array
-	    if ( vc_heads[curr_vc] == NULL ) {
+	    if ( was_empty ) {
             topo->route_packet(port_number, event->getVC(), event);
             vc_heads[curr_vc] = event;
             parent->inc_vcs_with_data();
@@ -1275,8 +1287,7 @@ PortControl::handle_output(Event* ev) {
             if ( enable_congestion_management ) {
                 updateCongestionState(send_event);
             }
-            port_link->send(1,send_event->getEncapsulatedEvent());
-            send_event->setEncapsulatedEvent(NULL);
+	        port_link->send(1,send_event->takeEncapsulatedEvent());
             delete send_event;
 	    }
 	    else {

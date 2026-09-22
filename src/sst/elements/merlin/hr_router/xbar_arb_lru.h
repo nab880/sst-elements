@@ -44,21 +44,19 @@ public:
 
 
 private:
-    int num_ports;
-    int num_vcs;
+    int num_ports = 0;
+    int num_vcs = 0;
 
 #if VERIFY_DECLOCKING
     int rr_port_shadow;
 #endif
 
     typedef std::pair<uint16_t,uint16_t> priority_entry_t;
-    priority_entry_t* priority[2];
-    priority_entry_t* cur_list;
-    priority_entry_t* next_list;
+    priority_entry_t* priority[2] = { nullptr, nullptr };
+    priority_entry_t* cur_list = nullptr;
+    priority_entry_t* next_list = nullptr;
 
-    int total_entries;
-
-    internal_router_event** vc_heads;
+    int total_entries = 0;
 
     // PortControl** ports;
 
@@ -72,6 +70,8 @@ public:
     }
 
     ~xbar_arb_lru() {
+        delete[] priority[0];
+        delete[] priority[1];
     }
 
     void serialize_order(SST::Core::Serialization::serializer& ser) override {
@@ -92,16 +92,14 @@ public:
             cur_list = priority[cur_idx];
             next_list = priority[1 - cur_idx];
         }
-        // vc_heads is a non-owning scratch buffer, re-allocated on UNPACK
-        if ( ser.mode() == SST::Core::Serialization::serializer::UNPACK ) {
-            vc_heads = new internal_router_event*[num_vcs];
-        }
     }
     ImplementSerializable(SST::Merlin::xbar_arb_lru)
 
     void setPorts(int num_ports_s, int num_vcs_s) override
     {
         num_ports = num_ports_s;
+        delete[] priority[0];
+        delete[] priority[1];
         num_vcs = num_vcs_s;
 
         total_entries = num_ports * num_vcs;
@@ -114,12 +112,10 @@ public:
         int index = 0;
         for ( int i = 0; i < num_ports; i++ ) {
             for ( int j = 0; j < num_vcs; j++ ) {
-                cur_list[index++] = priority_entry_t(i,j);
+                cur_list[index] = next_list[index] = priority_entry_t(i,j);
+                ++index;
             }
         }
-
-
-        vc_heads = new internal_router_event*[num_vcs];
     }
 
     // Naming convention is from point of view of the xbar.  So,
@@ -162,7 +158,7 @@ public:
 
             // std::cout << check.first << ", " << check.second << std::endl;
 
-            vc_heads = ports[port]->getVCHeads();
+            internal_router_event** vc_heads = ports[port]->getVCHeads();
 
             // if the output of this port is busy or if there is no
             // event to be processed, nothing to do.

@@ -83,12 +83,10 @@ public:
         SST_SER(rr_port_shadow);
 #endif
 
-        SST_SER(SST::Core::Serialization::array(rr_vcs, num_vcs));
+        SST_SER(SST::Core::Serialization::array(rr_vcs, num_ports));
 
-        // vc_heads is a non-owning scratch buffer, re-allocated on UNPACK
-        if ( ser.mode() == SST::Core::Serialization::serializer::UNPACK ) {
-            vc_heads = new internal_router_event*[num_vcs];
-        }
+        // vc_heads is a non-owning scratch alias set during arbitration.
+        if ( ser.mode() == SST::Core::Serialization::serializer::UNPACK ) vc_heads = nullptr;
     }
     ImplementSerializable(SST::Merlin::xbar_arb_rr)
 
@@ -106,7 +104,7 @@ public:
 #if VERIFY_DECLOCKING
         rr_port_shadow = 0;
 #endif
-        vc_heads = new internal_router_event*[num_vcs];
+        vc_heads = nullptr;
     }
 
     // Naming convention is from point of view of the xbar.  So,

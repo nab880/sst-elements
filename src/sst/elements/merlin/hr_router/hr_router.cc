@@ -568,7 +568,6 @@ hr_router::init(unsigned int phase)
                 // Ignore failed links during init
                 case Topology::FAILED: {
                     internal_router_event *new_ire = ire->clone();
-                    new_ire->setEncapsulatedEvent(ire->getEncapsulatedEvent()->clone());
                     ports[*j]->sendUntimedData(new_ire);
                     break;
                 }
@@ -618,7 +617,6 @@ hr_router::complete(unsigned int phase)
                 // Ignore failed links during init
                 case Topology::FAILED: {
                     internal_router_event *new_ire = ire->clone();
-                    new_ire->setEncapsulatedEvent(ire->getEncapsulatedEvent()->clone());
                     ports[*j]->sendUntimedData(new_ire);
                     break;
                 }

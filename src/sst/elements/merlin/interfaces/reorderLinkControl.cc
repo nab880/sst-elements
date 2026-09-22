@@ -120,7 +120,7 @@ void ReorderLinkControl::finish(void)
 // Returns true if there is space in the output buffer and false
 // otherwise.
 bool ReorderLinkControl::send(SimpleNetwork::Request* req, int vn) {
-    if ( vn >= vns ) return false;
+    if ( req == nullptr || vn < 0 || vn >= vns ) return false;
     if ( !link_control->spaceToSend(vn, req->size_in_bits) ) return false;
 
     Merlin::ExtendedRequest* ext_req = new Merlin::ExtendedRequest(req);
