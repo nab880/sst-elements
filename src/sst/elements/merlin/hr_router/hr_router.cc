@@ -138,6 +138,7 @@ void hr_router::serialize_order(SST::Core::Serialization::serializer& ser) {
 
     SST_SER(topo);
     SST_SER(arb);
+    SST_SER(network_service_processor);
 
     size_t total_vcs = num_ports * num_vcs;
     SST_SER(SST::Core::Serialization::array(xbar_in_credits, total_vcs));
@@ -196,6 +197,7 @@ void hr_router::serialize_order(SST::Core::Serialization::serializer& ser) {
 
         topo->setOutputBufferCreditArray(xbar_in_credits, num_vcs);
         topo->setOutputQueueLengthsArray(output_queue_lengths, num_vcs);
+        if ( network_service_processor ) network_service_processor->bindHost(this);
     }
 }
 
@@ -367,6 +369,18 @@ hr_router::hr_router(ComponentId_t cid, Params& params) :
     }
     params.enableVerify(true);
 
+    network_service_processor = loadUserSubComponent<NetworkServiceProcessor>(
+        "network_service", ComponentInfo::SHARE_NONE, this);
+    if ( network_service_processor ) {
+        if ( network_service_processor->getServiceID() == SimpleNetwork::NETWORK_SERVICE_NONE ||
+             !network_service_processor->getRequestContract().valid() ||
+             network_service_processor->getRequestContract().service_id !=
+                 network_service_processor->getServiceID() ) {
+            merlin_abort.fatal(CALL_INFO, 1,
+                "Network service processor requires a nonzero service ID and a matching request contract\n");
+        }
+    }
+
     // Get the Xbar arbitration
     std::string xbar_arb = params.find<std::string>("xbar_arb","merlin.xbar_arb_lru");
 
@@ -431,6 +445,20 @@ hr_router::notifyEvent()
 #endif
     // Report skipped cycles to arbitration unit.
     arb->reportSkippedCycles(elapsed_cycles);
+}
+
+NetworkServiceID
+hr_router::getNetworkServiceID() const
+{
+    return network_service_processor == nullptr ? SimpleNetwork::NETWORK_SERVICE_NONE :
+                                                  network_service_processor->getServiceID();
+}
+
+NetworkServiceRequestContract
+hr_router::getNetworkServiceRequestContract() const
+{
+    return network_service_processor == nullptr ? NetworkServiceRequestContract{} :
+                                                  network_service_processor->getRequestContract();
 }
 
 void

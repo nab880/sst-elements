@@ -14,6 +14,9 @@ libmerlin_la_SOURCES = \
 	merlin.h \
 	merlin.cc \
 	router.h \
+	networkService.h \
+	networkService.cc \
+	networkServicePass.h \
 	services/collective/collectiveTypes.h \
 	services/collective/collectiveServiceData.h \
 	services/collective/collectiveEndpoint.h \
@@ -30,6 +33,10 @@ libmerlin_la_SOURCES = \
 	target_generator/uniform.h \
 	test/nic.h \
 	test/nic.cc \
+	test/network_service/networkServiceTest.h \
+	test/network_service/networkServiceTest.cc \
+	test/network_service/pr2IntegrationFixture.h \
+	test/network_service/pr2IntegrationFixture.cc \
 	test/request_ownership/cloneTrackingEvent.h \
 	test/request_ownership/requestOwnershipTest.cc \
 	test/collective/contractTest.cc \
@@ -130,6 +137,11 @@ EXTRA_DIST = \
 	tests/polarfly_455_test.py \
 	tests/polarstar_504_test.py \
 	tests/request_ownership.py \
+	tests/network_service_contract.py \
+	tests/network_service_missing_processor.py \
+	tests/network_service_pass_tagged.py \
+	tests/network_service_pass_baseline.py \
+	tests/network_service_vn_remap.py \
 	tests/refFiles/test_merlin_dragon_128_platform_test.out \
 	tests/refFiles/test_merlin_dragon_128_platform_test_cm.out \
 	tests/refFiles/test_merlin_dragon_128_test.out \
@@ -144,11 +156,15 @@ EXTRA_DIST = \
 	tests/refFiles/test_merlin_torus_64_test.out \
 	tests/refFiles/test_merlin_polarfly_455_test.out \
 	tests/refFiles/test_merlin_request_ownership.out \
+	tests/refFiles/test_merlin_network_service_contract.out \
+	tests/refFiles/test_merlin_network_service_missing_processor.out \
+	tests/refFiles/test_merlin_network_service_pass_tagged.out \
 	tests/refFiles/test_merlin_polarstar_504_test.out
 
 sstdir = $(includedir)/sst/elements/merlin
 nobase_sst_HEADERS = \
 	router.h \
+	networkService.h \
 	services/collective/collectiveTypes.h \
 	services/collective/collectiveServiceData.h \
 	services/collective/collectiveEndpoint.h \

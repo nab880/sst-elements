@@ -38,7 +38,7 @@ namespace Merlin {
 
 class PortControlBase;
 
-class hr_router : public Router {
+class hr_router : public Router, public NetworkServiceHost {
 
 public:
 
@@ -87,7 +87,8 @@ public:
     SST_ELI_DOCUMENT_SUBCOMPONENT_SLOTS(
         {"topology", "Topology object to control routing", "SST::Merlin::Topology" },
         {"XbarArb", "Crossbar arbitration", "SST::Merlin::XbarArbitration" },
-        {"portcontrol", "PortControl blocks", "SST::Merlin::PortInterface" }
+        {"portcontrol", "PortControl blocks", "SST::Merlin::PortInterface" },
+        {"network_service", "Optional generic packet service processor", "SST::Merlin::NetworkServiceProcessor" }
     )
 
 private:
@@ -103,6 +104,7 @@ private:
     XbarArbitration* arb;
 
     PortInterface** ports;
+    NetworkServiceProcessor* network_service_processor = nullptr; // framework-owned subcomponent
     internal_router_event** vc_heads;
     int* xbar_in_credits;
     int* output_queue_lengths;
@@ -158,6 +160,8 @@ public:
     void printStatus(Output& out) override;
 
     void reportIncomingEvent(internal_router_event* ev) override;
+    NetworkServiceID getNetworkServiceID() const override;
+    NetworkServiceRequestContract getNetworkServiceRequestContract() const override;
 
     void serialize_order(SST::Core::Serialization::serializer& ser) override;
     ImplementSerializable(SST::Merlin::hr_router)

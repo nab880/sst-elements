@@ -30,6 +30,7 @@
 #include <sst/core/statapi/stataccumulator.h>
 
 #include <cstring>
+#include <memory>
 
 #include "../router.h"
 
@@ -185,6 +186,12 @@ private:
 
     int* port_ret_credits = nullptr;
     int* port_out_credits = nullptr;
+    // Present only when the parent router hosts a network service.  Carries
+    // the host whose contract is advertised on REPORT_ID.
+    struct NetworkServicePortContext {
+        NetworkServiceHost* host = nullptr; // non-owning opt-in extension
+    };
+    std::unique_ptr<NetworkServicePortContext> network_service;
 
     // Represents the start of when a port was idle
     // If the buffer was empty we instantiate this to the current time

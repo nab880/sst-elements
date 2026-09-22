@@ -20,6 +20,8 @@
 #include "output_arb_basic.h"
 #include "output_arb_qos_multi.h"
 
+#include <stdexcept>
+
 #define TRACK 0
 #define TRACK_ID 131
 #define TRACK_PORT 4
@@ -258,6 +260,19 @@ PortControl::serialize_order(SST::Core::Serialization::serializer& ser) {
     SST_SER(remote_rtr_id);
     SST_SER(remote_port_number);
     SST_SER(connected);
+    bool has_network_service = network_service != nullptr;
+    SST_SER(has_network_service);
+    if ( ser.mode() == SST::Core::Serialization::serializer::UNPACK ) {
+        if ( has_network_service ) {
+            network_service.reset(new NetworkServicePortContext());
+            network_service->host = dynamic_cast<NetworkServiceHost*>(parent);
+            if ( network_service->host == nullptr ) {
+                throw std::runtime_error(
+                    "Serialized Merlin service port has no NetworkServiceHost parent");
+            }
+        }
+        else network_service.reset();
+    }
 
     if ( ser.mode() == SST::Core::Serialization::serializer::UNPACK ) {
         if ( connected ) {
@@ -594,6 +609,16 @@ PortControl::initVCs(int vns, int* vcs_per_vn, internal_router_event** vc_heads_
     for ( int i = 0; i < vns; ++i ) {
         num_vcs += vcs_per_vn[i];
     }
+    NetworkServiceHost* service_host = dynamic_cast<NetworkServiceHost*>(parent);
+    const bool has_network_service = connected && service_host != nullptr &&
+        service_host->getNetworkServiceID() != SST::Interfaces::SimpleNetwork::NETWORK_SERVICE_NONE;
+    if ( has_network_service ) {
+        network_service.reset(new NetworkServicePortContext());
+        network_service->host = service_host;
+    }
+    else {
+        network_service.reset();
+    }
 
     // If the port is not connected, we still need to initialize
     // vc_heads entries to NULL
@@ -760,6 +785,11 @@ PortControl::init(unsigned int phase) {
             RtrInitEvent* ev = new RtrInitEvent();
             ev->command = RtrInitEvent::REPORT_ID;
             ev->int_value = topo->getEndpointID(port_number);
+            // Preserve the legacy three-frame host-port phase-0 sequence.
+            // Service information rides on the existing REPORT_ID frame.
+            if ( network_service ) {
+                ev->network_service_contract = network_service->host->getNetworkServiceRequestContract();
+            }
             port_link->sendUntimedData(ev);
         }
         else {

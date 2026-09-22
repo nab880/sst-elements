@@ -82,6 +82,7 @@ public:
     bool isNetworkInitialized() const override;
     nid_t getEndpointID() const override;
     const UnitAlgebra& getLinkBW() const override;
+    bool queryServiceCapability(NetworkServiceID id, NetworkServiceCapability& out) const override;
 
 protected:
     // Virtual methods for child classes to for NIC-specific functionality

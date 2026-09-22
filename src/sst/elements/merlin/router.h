@@ -27,6 +27,8 @@
 #include <sst/core/unitAlgebra.h>
 #include <sst/core/interfaces/simpleNetwork.h>
 
+#include "networkService.h"
+
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -432,6 +434,7 @@ public:
     Commands command;
     int int_value;
     UnitAlgebra ua_value;
+    NetworkServiceRequestContract network_service_contract;
 
     RtrInitEvent() :
         BaseRtrEvent(BaseRtrEvent::INITIALIZATION)
@@ -449,6 +452,12 @@ public:
         SST_SER(command);
         SST_SER(int_value);
         SST_SER(ua_value);
+        if ( command == REPORT_ID ) {
+            SST_SER(network_service_contract);
+        }
+        else if ( ser.mode() == SST::Core::Serialization::serializer::UNPACK ) {
+            network_service_contract = {};
+        }
     }
 
 

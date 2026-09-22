@@ -3,6 +3,8 @@
 from sst_unittest import *
 from sst_unittest_support import *
 
+from pathlib import Path
+
 try:
     from sympy.polys.domains import ZZ
 except:
@@ -67,6 +69,51 @@ class testcase_merlin_Component(SSTTestCase):
 
     def test_merlin_request_ownership(self):
         self.merlin_test_template("request_ownership", exact=True, strict_stderr=True)
+
+    def test_merlin_network_service_contract(self):
+        self.merlin_test_template("network_service_contract", exact=True)
+
+    def test_merlin_network_service_missing_processor(self):
+        test_path = self.get_testsuite_dir()
+        outdir = self.get_test_output_run_dir()
+        outfile = "{}/test_merlin_network_service_missing_processor.out".format(outdir)
+        errfile = "{}/test_merlin_network_service_missing_processor.err".format(outdir)
+        self.run_sst("{}/network_service_missing_processor.py".format(test_path), outfile, errfile,
+            expected_rc=1, timeout_sec=5)
+        combined = Path(outfile).read_text(encoding="utf-8") + Path(errfile).read_text(encoding="utf-8")
+        self.assertIn("has no matching attached router processor", combined)
+
+    def test_merlin_network_service_pass_tagged(self):
+        self.merlin_test_template("network_service_pass_tagged", exact=True, strict_stderr=True)
+
+    def test_merlin_network_service_vn_remap(self):
+        test_path = self.get_testsuite_dir()
+        outdir = self.get_test_output_run_dir()
+        outfile = f"{outdir}/test_merlin_network_service_vn_remap.out"
+        errfile = f"{outdir}/test_merlin_network_service_vn_remap.err"
+        self.run_sst(f"{test_path}/network_service_vn_remap.py", outfile, errfile,
+                     timeout_sec=30)
+        self.assertFalse(os_test_file(errfile, "-s"))
+        text = Path(outfile).read_text(encoding="utf-8")
+        self.assertEqual(1, text.count("Simulation is complete"))
+        for scenario in ("permutation", "alias", "negotiated", "no_identity"):
+            self.assertEqual(1, text.count(f"Merlin VN remap {scenario}: PASS"))
+
+    def test_merlin_network_service_pass_baseline(self):
+        test_path = self.get_testsuite_dir()
+        outdir = self.get_test_output_run_dir()
+        sdlfile = "{}/network_service_pass_baseline.py".format(test_path)
+        disabled_out = "{}/test_merlin_network_service_pass_baseline_disabled.out".format(outdir)
+        disabled_err = "{}/test_merlin_network_service_pass_baseline_disabled.err".format(outdir)
+        enabled_out = "{}/test_merlin_network_service_pass_baseline_enabled.out".format(outdir)
+        enabled_err = "{}/test_merlin_network_service_pass_baseline_enabled.err".format(outdir)
+
+        self.run_sst(sdlfile, disabled_out, disabled_err)
+        self.run_sst(sdlfile, enabled_out, enabled_err, other_args='--model-options="pass"')
+        self.assertFalse(os_test_file(disabled_err, "-s"), "disabled baseline produced stderr")
+        self.assertFalse(os_test_file(enabled_err, "-s"), "PASS baseline produced stderr")
+        self.assertEqual(Path(disabled_out).read_bytes(), Path(enabled_out).read_bytes(),
+            "installing the PASS processor changed ordinary traffic output or timing")
 
     @unittest.skipIf(not(('sympy.polys.galoistools' in sys.modules) and ('sympy.polys.domains' in sys.modules)), "Polarfly construction requires sympy")
     def test_merlin_polarfly_455(self):
