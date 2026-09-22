@@ -42,6 +42,47 @@ PR2IntegrationProcessor::PR2IntegrationProcessor(
     }
 }
 
+NetworkServiceDecision
+PR2IntegrationProcessor::inspect(const NetworkServiceIngress& ingress) const
+{
+    if ( ingress.input_port < 0 || ingress.input_vn < 0 || ingress.event == nullptr ) {
+        return { NetworkServiceDisposition::Reject, 1 };
+    }
+
+    const auto* request = ingress.event->inspectRequest();
+    const auto* data = request == nullptr ? nullptr : request->inspectServiceDataAs<PR2IntegrationServiceData>();
+    if ( data == nullptr ) return { NetworkServiceDisposition::Reject, 2 };
+
+    switch ( data->action() ) {
+    case PR2IntegrationAction::Pass:
+        // Pass traffic travels on the unowned VN and never reaches inspect().
+        return { NetworkServiceDisposition::Reject, 5 };
+    case PR2IntegrationAction::AcceptEcho:
+        return { NetworkServiceDisposition::Accept };
+    case PR2IntegrationAction::BusyUntilEcho:
+        return { getCurrentSimTimeNano() < BUSY_RELEASE_NS ? NetworkServiceDisposition::Busy :
+                                                            NetworkServiceDisposition::Accept };
+    case PR2IntegrationAction::SyntheticEcho:
+        return { NetworkServiceDisposition::Reject, 3 };
+    }
+    return { NetworkServiceDisposition::Reject, 4 };
+}
+
+void
+PR2IntegrationProcessor::consume(NetworkServiceOwnedIngress ingress) noexcept
+{
+    const auto* request = ingress.event == nullptr ? nullptr : ingress.event->inspectRequest();
+    const auto* data = request == nullptr ? nullptr : request->inspectServiceDataAs<PR2IntegrationServiceData>();
+    if ( ingress.input_port < 0 || ingress.input_vn < 0 || data == nullptr ||
+         (data->action() != PR2IntegrationAction::AcceptEcho &&
+          data->action() != PR2IntegrationAction::BusyUntilEcho) ) {
+        getSimulationOutput().fatal(CALL_INFO, 1,
+            "PR2 integration processor consumed an invalid accepted ingress\n");
+    }
+    const uint32_t sequence = data->sequence();
+    emitEcho(std::move(ingress.event), sequence);
+}
+
 void
 PR2IntegrationProcessor::handleTrigger(SST::Event* event)
 {
@@ -63,6 +104,40 @@ PR2IntegrationProcessor::handleTrigger(SST::Event* event)
     if ( !host()->tryEnqueueNetworkServiceOutput(PR2_INTEGRATION_SERVICE_ID, packet) ) {
         getSimulationOutput().fatal(CALL_INFO, 1,
             "PR2 integration processor could not enqueue externally triggered synthetic work\n");
+    }
+}
+
+void
+PR2IntegrationProcessor::emitEcho(
+    std::unique_ptr<internal_router_event> event, uint32_t sequence) noexcept
+{
+    if ( event == nullptr || event->inspectRequest() == nullptr ) {
+        getSimulationOutput().fatal(CALL_INFO, 1, "PR2 integration processor committed an empty event\n");
+    }
+
+    const auto* original = event->inspectRequest();
+    const auto* original_data = original->inspectServiceDataAs<PR2IntegrationServiceData>();
+    if ( original_data == nullptr ||
+         (original_data->action() != PR2IntegrationAction::AcceptEcho &&
+          original_data->action() != PR2IntegrationAction::BusyUntilEcho) ||
+         original_data->sequence() != sequence ) {
+        getSimulationOutput().fatal(CALL_INFO, 1, "PR2 integration processor committed changed service data\n");
+    }
+
+    auto echo = std::make_unique<SST::Interfaces::SimpleNetwork::Request>(
+        original->src, original->dest, original->size_in_bits, true, true);
+    echo->vn = original->vn;
+    echo->allow_adaptive = original->allow_adaptive;
+    echo->giveServiceData(new PR2IntegrationServiceData(PR2IntegrationAction::SyntheticEcho, sequence));
+
+    NetworkServiceSyntheticPacket packet;
+    packet.trusted_src = echo->src;
+    packet.route_vn = event->getVN();
+    packet.output_port = static_cast<int>(echo->dest);
+    packet.request = std::move(echo);
+
+    if ( !host()->tryEnqueueNetworkServiceOutput(PR2_INTEGRATION_SERVICE_ID, packet) ) {
+        getSimulationOutput().fatal(CALL_INFO, 1, "PR2 integration processor could not enqueue its synthetic echo\n");
     }
 }
 
@@ -119,7 +194,9 @@ PR2IntegrationEndpoint::setup()
         new SimpleNetwork::Handler<PR2IntegrationEndpoint, &PR2IntegrationEndpoint::handleReceive>(this));
 
     if ( endpoint_id_ == 0 ) {
-        // Nothing to send yet: processor-owned ingress arrives in a later layer.
+        pending_[0] = makeRequest(PR2IntegrationAction::BusyUntilEcho, 3, 1, 0);
+        pending_[1] = makeRequest(PR2IntegrationAction::AcceptEcho, 2, 1, 0);
+        pending_count_ = 2;
         trigger_timer_->send(1, nullptr);
         drain_->send(1, nullptr);
     }
@@ -176,7 +253,8 @@ PR2IntegrationEndpoint::handleReceive(int vn)
     }
 
     // Before the drain each VN's one-flit input buffer admits exactly one
-    // packet: the Pass packet on VN 1 and the ordinary packet on VN 0.
+    // packet: the Pass packet on VN 1 and whichever of the ordinary packet
+    // and the first echo arrives first on VN 0.  The rest wait for credits.
     if ( endpoint_id_ == 0 && !drain_enabled_ ) {
         if ( ++pre_drain_notifications_ > 2 ) {
             getSimulationOutput().fatal(CALL_INFO, 1,
@@ -252,8 +330,8 @@ PR2IntegrationEndpoint::handleDeadline(SST::Event* event)
 {
     delete event;
     const bool passed = endpoint_id_ == 0 ?
-        (sent_ == 0 && next_to_send_ == pending_count_ && pass_received_ == 1 && echo_received_ == 1 &&
-            ordinary_received_ == 1 && echo_sequence_mask_ == (1u << 4)) :
+        (sent_ == 2 && next_to_send_ == pending_count_ && pass_received_ == 1 && echo_received_ == 3 &&
+            ordinary_received_ == 1 && echo_sequence_mask_ == ((1u << 2) | (1u << 3) | (1u << 4))) :
         (sent_ == 2 && next_to_send_ == pending_count_ && pass_received_ == 0 && echo_received_ == 0 &&
             ordinary_received_ == 0);
     if ( !passed ) {

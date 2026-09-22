@@ -90,10 +90,11 @@ private:
 };
 
 std::unique_ptr<internal_router_event>
-makeArbitrationEvent(int next_port = 0, int flits = 1)
+makeArbitrationEvent(int next_port = 0, bool service_tagged = false, int flits = 1)
 {
     auto* request = new SST::Interfaces::SimpleNetwork::Request(0, 0, 64, true, true);
     request->vn = 0;
+    if ( service_tagged ) request->giveServiceData(new PR2IntegrationServiceData(PR2IntegrationAction::Pass, 0));
     auto* envelope = new RtrEvent(request, 0, 0);
     require(envelope->setSyntheticTransportMetadata(flits, 0), "could not create arbitration envelope");
     auto event = std::make_unique<internal_router_event>(envelope);
@@ -402,10 +403,79 @@ testRoundRobinRejectsActiveService()
 {
     xbar_arb_rr arbiter;
     XbarArbitration& api = arbiter;
-    require(!api.setNetworkServiceInputs(3, 2, 2, true),
+    require(!api.setNetworkServiceInputs(3, 2, 2, { 1, 0 }, PR2_INTEGRATION_SERVICE_ID, false),
+        "RR accepted processor-owned VCs");
+    require(!api.setNetworkServiceInputs(3, 2, 2, { 0, 0 }, PR2_INTEGRATION_SERVICE_ID, true),
         "RR accepted a processor that emits synthetic packets");
-    require(api.setNetworkServiceInputs(3, 2, 2, false),
+    require(api.setNetworkServiceInputs(3, 2, 2, { 0, 0 }, PR2_INTEGRATION_SERVICE_ID, false),
         "RR rejected a dormant pass processor");
+}
+
+void
+testOwnedVCsAreNeverArbitratedForPhysicalInputs()
+{
+    // Two VCs; the processor owns VC 0.  A physical head tagged for the
+    // service on VC 0 must never be granted, a physical head on VC 1 must,
+    // and the synthetic input may use VC 0 because it carries processor
+    // output.  An untagged head on VC 0 is ordinary traffic and must move.
+    auto owned_event = makeArbitrationEvent(1, true);
+    auto free_event = makeArbitrationEvent(1);
+    auto synthetic_event = makeArbitrationEvent(0);
+    FakeXbarPort2 port0;
+    FakeXbarPort2 port1;
+    FakeXbarPort2 synthetic;
+    port0.setHead(0, owned_event.get());
+    port1.setHead(1, free_event.get());
+    synthetic.setHead(0, synthetic_event.get());
+    NetworkServicePortXbarInput input0(&port0);
+    NetworkServicePortXbarInput input1(&port1);
+    NetworkServicePortXbarInput synthetic_input(&synthetic);
+    XbarInput* inputs[3] = { &input0, &input1, &synthetic_input };
+    PortInterface* outputs[2] = { &port0, &port1 };
+    xbar_arb_lru arbiter;
+    XbarArbitration& arbiter_api = arbiter;
+    require(!arbiter_api.setNetworkServiceInputs(3, 2, 2, std::vector<uint8_t>(1, 0), PR2_INTEGRATION_SERVICE_ID, true),
+        "owned-VC mask with the wrong length was accepted");
+    require(!arbiter_api.setNetworkServiceInputs(3, 2, 2, std::vector<uint8_t> { 1, 0 },
+                SST::Interfaces::SimpleNetwork::NETWORK_SERVICE_NONE, true),
+        "owned VCs were accepted without a service ID to recognize their heads");
+    require(arbiter_api.setNetworkServiceInputs(3, 2, 2, std::vector<uint8_t> { 1, 0 }, PR2_INTEGRATION_SERVICE_ID, true),
+        "service LRU rejected an owned-VC mask");
+
+    int owned_grants = 0;
+    int free_grants = 0;
+    int synthetic_grants = 0;
+    for ( int cycle = 0; cycle < 12; ++cycle ) {
+        int input_busy[3] = { 0, 0, 0 };
+        int output_busy[2] = { 0, 0 };
+        int progress[3] = { -1, -1, -1 };
+        require(arbiter_api.arbitrateNetworkService(inputs, outputs, input_busy, output_busy, progress),
+            "owned-VC arbitration failed");
+        require(progress[0] != -2, "an owned VC head counted as a stalled physical input");
+        owned_grants += progress[0] >= 0;
+        free_grants += progress[1] == 1;
+        synthetic_grants += progress[2] == 0;
+    }
+    require(owned_grants == 0, "a physical head on a processor-owned VC was granted");
+    require(free_grants == 12, "a physical head on an unowned VC was not granted every cycle");
+    require(synthetic_grants > 0, "the synthetic input was denied a processor-owned VC");
+
+    // Replace the service head with an untagged one on the same owned VC and
+    // leave output 0 uncontended: the arbiter must treat it as ordinary.
+    auto ordinary_event = makeArbitrationEvent(0);
+    port0.setHead(0, ordinary_event.get());
+    synthetic.setHead(0, nullptr);
+    int ordinary_grants = 0;
+    for ( int cycle = 0; cycle < 12; ++cycle ) {
+        int input_busy[3] = { 0, 0, 0 };
+        int output_busy[2] = { 0, 0 };
+        int progress[3] = { -1, -1, -1 };
+        require(arbiter_api.arbitrateNetworkService(inputs, outputs, input_busy, output_busy, progress),
+            "untagged owned-VC arbitration failed");
+        ordinary_grants += progress[0] == 0;
+    }
+    require(ordinary_grants == 12,
+        "an untagged head on a processor-owned VC was not arbitrated as ordinary traffic");
 }
 
 void
@@ -432,7 +502,7 @@ testIndependentOutputProgress()
         PortInterface* outputs[2] = { &port0, &port1 };
         xbar_arb_lru arbiter;
         XbarArbitration& api = arbiter;
-        require(api.setNetworkServiceInputs(3, 2, 1, true),
+        require(api.setNetworkServiceInputs(3, 2, 1, std::vector<uint8_t>(1, 0), PR2_INTEGRATION_SERVICE_ID, true),
             "independent-output LRU rejected a valid input split");
 
         int grants[2] = { 0, 0 };
@@ -483,7 +553,7 @@ testMixedVCDestinations()
     PortInterface* outputs[2] = { &port0, &port1 };
     xbar_arb_lru arbiter;
     XbarArbitration& api = arbiter;
-    require(api.setNetworkServiceInputs(3, 2, 2, true),
+    require(api.setNetworkServiceInputs(3, 2, 2, std::vector<uint8_t>(2, 0), PR2_INTEGRATION_SERVICE_ID, true),
         "mixed-destination LRU rejected a valid input split");
 
     int last_grant[3] = { -1, -1, -1 };
@@ -525,7 +595,7 @@ testSyntheticLRUFairness()
     PortInterface* outputs[2] = { &port0, &port1 };
     xbar_arb_lru arbiter;
     XbarArbitration& arbiter_api = arbiter;
-    require(arbiter_api.setNetworkServiceInputs(3, 2, 1, true),
+    require(arbiter_api.setNetworkServiceInputs(3, 2, 1, { 0 }, PR2_INTEGRATION_SERVICE_ID, true),
         "service LRU rejected a valid input split");
     int grants[3] = { 0, 0, 0 };
     int last_grant[3] = { -1, -1, -1 };
@@ -573,7 +643,7 @@ testDormantSyntheticLRUMatchesOrdinary()
     XbarArbitration& ordinary_api = ordinary;
     XbarArbitration& service_api = service;
     ordinary_api.setPorts(2, 2);
-    require(service_api.setNetworkServiceInputs(3, 2, 2, true),
+    require(service_api.setNetworkServiceInputs(3, 2, 2, { 0, 0 }, PR2_INTEGRATION_SERVICE_ID, true),
         "dormant-synthetic LRU rejected a valid input split");
     for ( int cycle = 0; cycle < 100; ++cycle ) {
         port0.setHead(0, cycle % 7 ? event00.get() : nullptr);
@@ -648,15 +718,15 @@ testLongPacketLRUFairness()
         storage.emplace_back(new NetworkServicePortXbarInput(&ports[index]));
         inputs[index] = storage.back().get();
     }
-    auto physical = makeArbitrationEvent(0, count);
-    auto synthetic = makeArbitrationEvent(0, count);
+    auto physical = makeArbitrationEvent(0, false, count);
+    auto synthetic = makeArbitrationEvent(0, false, count);
     ports[0].setHead(physical.get());
     ports[count - 1].setHead(synthetic.get());
     std::array<PortInterface*, count - 1> outputs {};
     for ( int index = 0; index < count - 1; ++index ) outputs[index] = &ports[index];
     xbar_arb_lru arbiter;
     XbarArbitration& arbiter_api = arbiter;
-    require(arbiter_api.setNetworkServiceInputs(count, count - 1, 1, true),
+    require(arbiter_api.setNetworkServiceInputs(count, count - 1, 1, std::vector<uint8_t>(1, 0), PR2_INTEGRATION_SERVICE_ID, true),
         "long-packet LRU rejected a valid input split");
     int input_busy[count] = {};
     int output_busy[count - 1] = {};
@@ -696,6 +766,7 @@ NetworkServiceTest::NetworkServiceTest(SST::ComponentId_t id, SST::Params& param
         testExtendedRequestCopyExceptionSafety();
         testLegacyRouterEventAndEnvelopeOwnership();
         testRoundRobinRejectsActiveService();
+        testOwnedVCsAreNeverArbitratedForPhysicalInputs();
         testIndependentOutputProgress();
         testMixedVCDestinations();
         testSyntheticLRUFairness();

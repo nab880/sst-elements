@@ -14,8 +14,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 namespace SST::Merlin {
+
+class internal_router_event;
 
 using NetworkServiceID = SST::Interfaces::SimpleNetwork::NetworkServiceID;
 using NetworkServiceDataToken = SST::Interfaces::SimpleNetwork::NetworkServiceDataToken;
@@ -52,6 +55,42 @@ struct NetworkServiceRequestContract
         SST_SER(min_schema_version);
         SST_SER(max_schema_version);
     }
+};
+
+/**
+ * Disposition for one head on a VN the processor owns.  Accept transfers
+ * the dequeued head to consume() and returns its ingress credits normally.
+ * Busy leaves the head where it is; only that VC waits.  Reject is terminal:
+ * the router fails the simulation and reports the opaque diagnostic.
+ */
+enum class NetworkServiceDisposition : uint8_t { Accept = 1, Busy = 2, Reject = 3 };
+
+inline constexpr bool isValid(NetworkServiceDisposition disposition)
+{
+    return disposition >= NetworkServiceDisposition::Accept && disposition <= NetworkServiceDisposition::Reject;
+}
+
+/** Non-owning view passed to a service processor during inspect(). */
+struct NetworkServiceIngress
+{
+    int input_port = -1;
+    int input_vn   = -1;
+    const internal_router_event* event = nullptr;
+};
+
+/** Read-only disposition for the current head. */
+struct NetworkServiceDecision
+{
+    NetworkServiceDisposition disposition = NetworkServiceDisposition::Reject;
+    uint64_t                  opaque_diagnostic = 0;
+};
+
+/** Exact dequeued head whose ownership is transferred after Accept. */
+struct NetworkServiceOwnedIngress
+{
+    int input_port = -1;
+    int input_vn   = -1;
+    std::unique_ptr<internal_router_event> event;
 };
 
 /**
@@ -114,10 +153,14 @@ public:
 /**
  * Service-neutral Merlin processor API.
  *
- * A processor names one network service and the request shape it accepts,
- * and may emit synthetic packets through its host's bounded requester, which
- * the crossbar arbitrates like a fresh injection.  Tagged packets travel as
- * ordinary Merlin traffic; a later layer adds processor-owned ingress.
+ * A processor owns a fixed set of router VNs.  The router maps each owned VN
+ * to the VCs the topology assigns it; the crossbar never arbitrates a head
+ * carrying the processor's service ID on one of those VCs.  Instead the
+ * router offers each such head to inspect() every cycle and dequeues it into
+ * consume() on Accept.  Every other head is ordinary Merlin traffic: packets
+ * on VNs the processor does not own, whether or not they carry a service
+ * tag, and untagged packets on owned VNs, which the crossbar routes normally
+ * without ever reaching inspect().
  */
 class NetworkServiceProcessor : public SST::SubComponent
 {
@@ -137,15 +180,22 @@ public:
     {
         return { getServiceID(), 0, 0, 0 };
     }
+    /** Router VNs this processor owns for the life of the simulation; empty owns nothing. */
+    virtual std::vector<int> ownedVNs() const = 0;
     /**
      * False only for a processor that never calls tryEnqueueNetworkServiceOutput.
-     * A dormant processor only advertises its service, so an arbiter without
-     * synthetic-input support (merlin.xbar_arb_rr) can host it.  The router
-     * refuses synthetic output from a processor that reports false.
+     * A processor that owns no VNs and does not emit is dormant: it only
+     * advertises its service, so an arbiter without synthetic-input support
+     * (merlin.xbar_arb_rr) can host it.  The router refuses synthetic output
+     * from a processor that reports false.
      */
     virtual bool emitsSyntheticPackets() const { return true; }
     /** Re-check transport facts learned during init before timed execution. */
     virtual bool validateInstalledTransport() const { return true; }
+    /** Inspect only; implementations must not mutate processor or router state. */
+    virtual NetworkServiceDecision inspect(const NetworkServiceIngress& ingress) const = 0;
+    /** Terminal ownership transfer after the router dequeues the accepted head. */
+    virtual void consume(NetworkServiceOwnedIngress ingress) noexcept = 0;
     virtual bool hasScheduledWork() const = 0;
     /** Driven by the router clock while hasScheduledWork(); returns true once nothing remains. */
     virtual bool progress() { return true; }

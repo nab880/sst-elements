@@ -48,6 +48,8 @@ private:
     int num_ports = 0;
     int num_output_ports = 0;
     int num_vcs = 0;
+    std::vector<uint8_t> owned_vcs;
+    NetworkServiceID service_id = SST::Interfaces::SimpleNetwork::NETWORK_SERVICE_NONE;
 
 #if VERIFY_DECLOCKING
     int rr_port_shadow;
@@ -82,6 +84,8 @@ public:
         XbarArbitration::serialize_order(ser);
         SST_SER(num_ports);
         SST_SER(num_output_ports);
+        SST_SER(owned_vcs);
+        SST_SER(service_id);
         SST_SER(num_vcs);
         SST_SER(total_entries);
 
@@ -104,6 +108,8 @@ public:
     {
         num_ports = num_ports_s;
         num_output_ports = num_ports_s;
+        owned_vcs.clear();
+        service_id = SST::Interfaces::SimpleNetwork::NETWORK_SERVICE_NONE;
         delete[] priority[0];
         delete[] priority[1];
         num_vcs = num_vcs_s;
@@ -127,11 +133,17 @@ public:
 
     }
 
-    bool setNetworkServiceInputs(int num_inputs, int num_outputs, int vc_count, bool /*processor_emits*/) override
+    bool setNetworkServiceInputs(int num_inputs, int num_outputs, int vc_count,
+        const std::vector<uint8_t>& owned, NetworkServiceID id, bool /*processor_emits*/) override
     {
-        if ( num_inputs != num_outputs + 1 || num_outputs <= 0 || vc_count <= 0 ) return false;
+        const bool any_owned = std::any_of(owned.begin(), owned.end(), [](uint8_t flag) { return flag != 0; });
+        if ( num_inputs != num_outputs + 1 || num_outputs <= 0 || vc_count <= 0 ||
+             owned.size() != static_cast<size_t>(vc_count) ||
+             (any_owned && id == SST::Interfaces::SimpleNetwork::NETWORK_SERVICE_NONE) ) return false;
         setPorts(num_inputs, vc_count);
         num_output_ports = num_outputs;
+        owned_vcs = owned;
+        service_id = id;
         return true;
     }
 
@@ -160,7 +172,9 @@ public:
 
 private:
     // One LRU policy for physical and synthetic inputs.  Empty synthetic
-    // entries never change the relative priority of ordinary requests.
+    // entries never change the relative priority of ordinary requests.  A
+    // head on an owned VC belongs to the processor only when it carries the
+    // service ID; untagged heads there are ordinary traffic.
     template <class Input>
     void arbitrateInputs(Input** inputs, PortInterface** outputs, int* input_busy,
         int* output_busy, int* progress_vc)
@@ -173,7 +187,9 @@ private:
             const int port = entry.first;
             const int vc = entry.second;
             auto* event = inputs[port]->getVCHeads()[vc];
-            if ( input_busy[port] <= 0 && event != nullptr ) {
+            const bool processor_owned = !owned_vcs.empty() && port < num_output_ports && owned_vcs[vc] &&
+                                         event != nullptr && event->carriesNetworkService(service_id);
+            if ( input_busy[port] <= 0 && event != nullptr && !processor_owned ) {
                 const int output = event->getNextPort();
                 const int output_vc = event->getVC();
                 if ( output < 0 || output >= num_output_ports || output_vc < 0 || output_vc >= num_vcs ) {

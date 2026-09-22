@@ -83,10 +83,34 @@ struct NetworkServiceRouterContext {
     NetworkServiceProcessor* processor = nullptr; // framework-owned
     std::unique_ptr<NetworkServiceSyntheticRequester> requester;
     uint32_t output_queue_depth = 0;
+    uint64_t scan_cursor = 0;
+    uint32_t ingress_width = 1;
+    uint32_t ingress_flits_per_cycle = 1;
+    bool shared_ingress = true;
+    std::vector<uint32_t> ingress_busy;
+    // A provisional transfer pins one owned VC head per physical port.
+    std::vector<int> ingress_vcs;
+    // Per-port index into owned_vcs at which the next ingress scan starts.
+    std::vector<uint32_t> ingress_next_owned;
+    bool hasIngressWork() const
+    {
+        for ( int vc : ingress_vcs ) if ( vc >= 0 ) return true;
+        return false;
+    }
+
+    // VCs of the VNs the processor owns.  The arbiter never moves a head
+    // carrying the processor's service ID on one of them; the router offers
+    // every such head to the processor.  Untagged heads on those VCs are
+    // ordinary traffic and are arbitrated normally.
+    std::vector<uint8_t> owned_vc_mask;
+    std::vector<int> owned_vcs;
 
     std::vector<std::unique_ptr<NetworkServicePortXbarInput>> port_inputs;
     std::vector<XbarInput*> xbar_inputs;
 
+    Statistic<uint64_t>* accept = nullptr;
+    Statistic<uint64_t>* busy = nullptr;
+    Statistic<uint64_t>* reject = nullptr;
     Statistic<uint64_t>* synthetic = nullptr;
     Statistic<uint64_t>* synthetic_stall = nullptr;
 
@@ -135,7 +159,10 @@ public:
         {"vn_remap",           "Array that specifies the vn remapping for each node in the systsm."},
         {"vn_remap_shm",       "Name of shared memory region for vn remapping.  If empty, no remapping is done", ""},
         {"debug",              "Turn on debugging for router. Set to 1 for on, 0 for off.", "0"},
-        {"network_service_output_queue_depth", "Maximum synthetic packets retained across all output/VC queues.", "8"}
+        {"network_service_output_queue_depth", "Maximum synthetic packets retained across all output/VC queues.", "8"},
+        {"network_service_ingress_width", "Maximum service input transfers started and packets committed per router cycle.", "1"},
+        {"network_service_ingress_flits_per_cycle", "Service ingress transfer bandwidth per physical input, in flits per router cycle.", "1"},
+        {"network_service_shared_ingress", "Service transfers reserve the same physical input as ordinary crossbar traffic; false models a separate read path.", "true"}
     )
 
     SST_ELI_DOCUMENT_STATISTICS(
@@ -145,6 +172,9 @@ public:
         { "xbar_stalls",        "Count number of cycles the xbar is stalled", "cycles", 1},
         { "idle_time",          "Amount of time spent idle for a given port", "units of core timebase", 1},
         { "width_adj_count",    "Number of times that link width was increased or decreased", "width adjustment count", 1},
+        {"network_service_accept", "Heads on processor-owned VNs consumed by the service processor", "packets", 1},
+        {"network_service_busy", "Heads on processor-owned VNs held because the service processor was busy", "packets", 1},
+        {"network_service_reject", "Heads on processor-owned VNs rejected before terminal failure", "packets", 1},
         {"network_service_synthetic", "Synthetic packets granted through the crossbar", "packets", 1},
         {"network_service_synthetic_stall", "Cycles a synthetic head was unable to progress", "cycles", 1}
     )
@@ -197,6 +227,8 @@ private:
     std::vector<std::string> inspector_names;
 
     bool clock_handler(Cycle_t cycle);
+    void serviceOwnedHeads();
+    void resolveOwnedVNs();
     int firstVCForVN(int vn) const;
     int networkServiceFlits(size_t bits) const;
     int numXbarInputs() const { return num_ports + (network_service ? 1 : 0); }

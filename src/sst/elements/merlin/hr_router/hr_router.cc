@@ -256,8 +256,17 @@ void hr_router::serialize_order(SST::Core::Serialization::serializer& ser) {
         else network_service.reset();
     }
     if ( has_network_service ) {
+        // A staged ingress transfer is ordinary state: the head stays in its
+        // PortControl input buffer and the counters below restore it.
+        SST_SER(network_service->ingress_width);
+        SST_SER(network_service->ingress_flits_per_cycle);
+        SST_SER(network_service->shared_ingress);
+        SST_SER(network_service->ingress_busy);
+        SST_SER(network_service->ingress_vcs);
+        SST_SER(network_service->ingress_next_owned);
         SST_SER(network_service->processor);
         SST_SER(network_service->output_queue_depth);
+        SST_SER(network_service->scan_cursor);
 
         if ( ser.mode() == SST::Core::Serialization::serializer::UNPACK ) {
             network_service->requester.reset(new NetworkServiceSyntheticRequester(
@@ -265,6 +274,9 @@ void hr_router::serialize_order(SST::Core::Serialization::serializer& ser) {
         }
         network_service->requester->serialize_order(ser);
 
+        SST_SER(network_service->accept);
+        SST_SER(network_service->busy);
+        SST_SER(network_service->reject);
         SST_SER(network_service->synthetic);
         SST_SER(network_service->synthetic_stall);
     }
@@ -331,6 +343,7 @@ void hr_router::serialize_order(SST::Core::Serialization::serializer& ser) {
         if ( network_service ) {
             network_service->rebuildInputs(ports, num_ports);
             network_service->processor->bindHost(this);
+            resolveOwnedVNs();
         }
     }
 }
@@ -511,9 +524,20 @@ hr_router::hr_router(ComponentId_t cid, Params& params) :
         network_service.reset(new NetworkServiceRouterContext());
         network_service->processor = network_service_processor;
         network_service->output_queue_depth = network_service_output_queue_depth;
+        network_service->ingress_width = params.find<uint32_t>("network_service_ingress_width", 1);
+        network_service->ingress_flits_per_cycle =
+            params.find<uint32_t>("network_service_ingress_flits_per_cycle", 1);
+        network_service->shared_ingress = params.find<bool>("network_service_shared_ingress", true);
+        if ( network_service->ingress_width == 0 || network_service->ingress_flits_per_cycle == 0 ) {
+            merlin_abort.fatal(CALL_INFO, 1, "Network service ingress width and bandwidth must be positive\n");
+        }
+        network_service->ingress_busy.assign(static_cast<size_t>(num_ports), 0);
+        network_service->ingress_vcs.assign(static_cast<size_t>(num_ports), -1);
+        network_service->ingress_next_owned.assign(static_cast<size_t>(num_ports), 0);
         network_service->requester.reset(
             new NetworkServiceSyntheticRequester(num_vcs, network_service_output_queue_depth));
         network_service->rebuildInputs(ports, num_ports);
+        resolveOwnedVNs();
     }
 
     std::string xbar_arb = params.find<std::string>("xbar_arb", "merlin.xbar_arb_lru");
@@ -558,6 +582,9 @@ hr_router::hr_router(ComponentId_t cid, Params& params) :
         xbar_stalls[i] = registerStatistic<uint64_t>("xbar_stalls",port_name);
     }
     if ( network_service ) {
+        network_service->accept = registerStatistic<uint64_t>("network_service_accept");
+        network_service->busy = registerStatistic<uint64_t>("network_service_busy");
+        network_service->reject = registerStatistic<uint64_t>("network_service_reject");
         network_service->synthetic = registerStatistic<uint64_t>("network_service_synthetic");
         network_service->synthetic_stall = registerStatistic<uint64_t>("network_service_synthetic_stall");
     }
@@ -728,12 +755,141 @@ hr_router::printStatus(Output& out)
 }
 
 
+// The processor names VNs; the router owns the VN-to-VC mapping, so every
+// VC the topology assigns to an owned VN belongs to the processor.
+void
+hr_router::resolveOwnedVNs()
+{
+    NetworkServiceRouterContext& service = *network_service;
+    service.owned_vc_mask.assign(static_cast<size_t>(num_vcs), 0);
+    service.owned_vcs.clear();
+    std::vector<uint8_t> owned_vn(static_cast<size_t>(num_vns), 0);
+    for ( int vn : service.processor->ownedVNs() ) {
+        if ( vn < 0 || vn >= num_vns || owned_vn[static_cast<size_t>(vn)] != 0 ) {
+            merlin_abort.fatal(CALL_INFO, 1,
+                "Network service processor owns VN %d, which is repeated or outside this router's %d VNs\n",
+                vn, num_vns);
+        }
+        owned_vn[static_cast<size_t>(vn)] = 1;
+        const int first_vc = firstVCForVN(vn);
+        for ( int vc = first_vc; vc < first_vc + vcs_per_vn[static_cast<size_t>(vn)]; ++vc ) {
+            service.owned_vc_mask[static_cast<size_t>(vc)] = 1;
+            service.owned_vcs.push_back(vc);
+        }
+    }
+    std::sort(service.owned_vcs.begin(), service.owned_vcs.end());
+}
+
+// Transfer service heads through bounded per-port ingress resources.  The
+// packet stays in PortControl until transfer completion returns its credits.
+void
+hr_router::serviceOwnedHeads()
+{
+    NetworkServiceRouterContext& service = *network_service;
+    if ( service.owned_vcs.empty() ) return;
+    const NetworkServiceID service_id = service.processor->getServiceID();
+
+    const int start = static_cast<int>(service.scan_cursor % static_cast<uint64_t>(num_ports));
+    const auto accepts = [&](int port, int vc, internal_router_event* head) {
+        const NetworkServiceDecision decision = service.processor->inspect({ port, head->getVN(), head });
+        if ( !isValid(decision.disposition) ) {
+            output.fatal(CALL_INFO, 1, "Merlin router %d received an invalid network-service disposition\n", id);
+        }
+        if ( decision.disposition == NetworkServiceDisposition::Busy ) {
+            if ( service.busy ) service.busy->addData(1);
+            return false;
+        }
+        if ( decision.disposition == NetworkServiceDisposition::Reject ) {
+            if ( service.reject ) service.reject->addData(1);
+            const SimpleNetwork::Request* request = head->inspectRequest();
+            output.fatal(CALL_INFO, 1,
+                "Merlin router %d rejected a packet on service VC %d from port %d (service %u, opaque "
+                "diagnostic 0x%016" PRIx64 ")\n",
+                id, vc, port, request == nullptr ? 0u : static_cast<unsigned>(request->getServiceID()),
+                decision.opaque_diagnostic);
+        }
+        return true;
+    };
+
+    // Tick only transfers launched in earlier cycles.  The head stays in its
+    // physical input queue, retaining its credits and ownership until commit.
+    for ( int port = 0; port < num_ports; ++port ) {
+        if ( service.ingress_vcs[port] >= 0 && service.ingress_busy[port] != 0 ) {
+            --service.ingress_busy[port];
+        }
+    }
+
+    uint32_t committed = 0;
+    for ( int count = 0; count < num_ports && committed < service.ingress_width; ++count ) {
+        const int port = (start + count) % num_ports;
+        const int vc = service.ingress_vcs[port];
+        if ( vc < 0 || service.ingress_busy[port] != 0 ) continue;
+        internal_router_event* head = ports[port]->getVCHeads()[vc];
+        if ( head == nullptr ) {
+            output.fatal(CALL_INFO, 1, "Merlin router %d lost a staged service head on port %d VC %d\n", id, port, vc);
+        }
+        // Initial inspect() did not reserve processor state.  Re-check after
+        // the transfer because another port may have changed that state.
+        // Busy cancels this provisional transfer, leaving the head untouched;
+        // another VC on this port can then carry traffic needed to unblock it.
+        service.ingress_vcs[port] = -1;
+        if ( !accepts(port, vc, head) ) continue;
+
+        const int vn = head->getVN();
+        internal_router_event* dequeued = ports[port]->recv(vc);
+        if ( dequeued != head ) {
+            output.fatal(CALL_INFO, 1, "Merlin router %d dequeued a different head than it inspected\n", id);
+        }
+        if ( service.accept ) service.accept->addData(1);
+        NetworkServiceOwnedIngress owned;
+        owned.input_port = port;
+        owned.input_vn = vn;
+        owned.event.reset(dequeued);
+        service.processor->consume(std::move(owned));
+        ++committed;
+    }
+
+    uint32_t started = 0;
+    for ( int count = 0; count < num_ports && started < service.ingress_width; ++count ) {
+        const int port = (start + count) % num_ports;
+        if ( service.ingress_vcs[port] >= 0 ||
+             (service.shared_ingress && in_port_busy[port] != 0) ) continue;
+        internal_router_event** heads = ports[port]->getVCHeads();
+        // Scan owned VCs round-robin per port so one busy owned VC cannot
+        // starve the others on the same physical input.
+        const size_t owned_count = service.owned_vcs.size();
+        const size_t first_index = service.ingress_next_owned[port] % owned_count;
+        for ( size_t offset = 0; offset < owned_count; ++offset ) {
+            const size_t index = (first_index + offset) % owned_count;
+            const int vc = service.owned_vcs[index];
+            internal_router_event* head = heads[vc];
+            // Only heads tagged for this service belong to the processor;
+            // anything else on an owned VC is ordinary traffic for the arbiter.
+            if ( head == nullptr || !head->carriesNetworkService(service_id) || !accepts(port, vc, head) ) continue;
+            const int flits = head->getFlitCount();
+            if ( flits <= 0 ) {
+                output.fatal(CALL_INFO, 1, "Merlin router %d received a service packet with invalid flit count\n", id);
+            }
+            const uint32_t cycles = 1 + (static_cast<uint32_t>(flits) - 1) / service.ingress_flits_per_cycle;
+            service.ingress_vcs[port] = vc;
+            service.ingress_busy[port] = cycles;
+            service.ingress_next_owned[port] = static_cast<uint32_t>(index + 1);
+            // The normal end-of-cycle decrement accounts for this first
+            // transfer cycle.  Private service reads use their own resource.
+            if ( service.shared_ingress ) in_port_busy[port] = static_cast<int>(cycles);
+            ++started;
+            break;
+        }
+    }
+    service.scan_cursor = static_cast<uint64_t>(start) + 1;
+}
+
 bool
 hr_router::clock_handler(Cycle_t cycle)
 {
     NetworkServiceRouterContext* const service = network_service.get();
     const bool service_work =
-        service != nullptr && (service->requester->hasWork() || service->processor->hasScheduledWork());
+        service != nullptr && (service->hasIngressWork() || service->requester->hasWork() || service->processor->hasScheduledWork());
 
     // If there are no events in the input queues, then we can remove
     // ourselves from the clock queue, as long as the arbitration unit
@@ -760,10 +916,13 @@ hr_router::clock_handler(Cycle_t cycle)
     }
 
     if ( service != nullptr ) {
-        // Synthetic packets the processor creates in progress() are visible
-        // to this same cycle's arbitration; only the requester's queue depth
-        // bounds their admission.
+        // Service ingress runs before arbitration so a transfer staged this
+        // cycle reserves its physical input before the arbiter scans it.
+        // Synthetic packets the processor creates in progress() or consume()
+        // are visible to this same cycle's arbitration; only the requester's
+        // queue depth bounds their admission.
         if ( service->processor->hasScheduledWork() ) service->processor->progress();
+        serviceOwnedHeads();
         service->requester->selectReadyHeads(ports, out_port_busy);
 #if VERIFY_DECLOCKING
         const bool arbitrated = arb->arbitrateNetworkService(
@@ -989,8 +1148,8 @@ hr_router::init_vcs()
     // Now that we have the number of VCs we can finish initializing
     // arbitration logic
     if ( network_service ) {
-        if ( !arb->setNetworkServiceInputs(numXbarInputs(), num_ports, num_vcs,
-                 network_service->processor->emitsSyntheticPackets()) ) {
+        if ( !arb->setNetworkServiceInputs(numXbarInputs(), num_ports, num_vcs, network_service->owned_vc_mask,
+                 network_service->processor->getServiceID(), network_service->processor->emitsSyntheticPackets()) ) {
             merlin_abort.fatal(CALL_INFO, 1,
                 "Configured crossbar arbiter does not support active network services; use merlin.xbar_arb_lru\n");
         }

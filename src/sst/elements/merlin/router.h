@@ -564,6 +564,11 @@ public:
 
     inline SST::Interfaces::SimpleNetwork::Request* inspectRequest() { return encap_ev->request; }
     inline const SST::Interfaces::SimpleNetwork::Request* inspectRequest() const { return encap_ev->request; }
+    /** True when the encapsulated request is tagged for network service @p id. */
+    inline bool carriesNetworkService(NetworkServiceID id) const {
+        return id != SST::Interfaces::SimpleNetwork::NETWORK_SERVICE_NONE && encap_ev != nullptr &&
+               encap_ev->request != nullptr && encap_ev->request->getServiceID() == id;
+    }
 
     inline int getDest() const {return encap_ev->request->dest;}
     inline int getSrc() const {return encap_ev->getTrustedSrc();}
@@ -803,17 +808,17 @@ public:
     // Keep optional extensions after every released virtual so existing
     // external XbarArbitration vtable slots retain their positions.
     /**
-     * Optional input/output split for a bounded synthetic requester: inputs
-     * are the physical ports followed by the requester.  processor_emits is
+     * Optional input/output split for a bounded synthetic requester.  Heads
+     * carrying service_id on VCs flagged in owned_vcs belong to the service
+     * processor and must never be granted for a physical input.  Every other
+     * head, tagged or not, is ordinary traffic on any VC.  processor_emits is
      * false only for a processor that never produces synthetic packets; an
-     * arbiter that cannot arbitrate the synthetic input may accept only such
-     * a dormant processor.  The default preserves compatibility and refuses
-     * service enablement.
+     * arbiter that cannot arbitrate the synthetic input may accept only such a
+     * dormant processor with no owned VCs.  The default preserves
+     * compatibility and refuses service enablement.
      */
-    virtual bool setNetworkServiceInputs(int num_inputs, int num_outputs, int num_vcs, bool processor_emits)
-    {
-        return false;
-    }
+    virtual bool setNetworkServiceInputs(int num_inputs, int num_outputs, int num_vcs,
+        const std::vector<uint8_t>& owned_vcs, NetworkServiceID service_id, bool processor_emits) { return false; }
 #if VERIFY_DECLOCKING
     virtual bool arbitrateNetworkService(XbarInput** inputs, PortInterface** outputs, int* input_busy,
         int* output_busy, int* progress_vc, bool clocking) { return false; }

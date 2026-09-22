@@ -22,6 +22,7 @@
 #include <sst/core/link.h>
 #include <sst/core/timeConverter.h>
 
+#include <algorithm>
 #include <vector>
 
 #include "sst/elements/merlin/router.h"
@@ -107,13 +108,16 @@ public:
         vc_heads = nullptr;
     }
 
-    // A dormant processor, one that never emits synthetic packets, can
-    // advertise transparent carriage without changing ordinary RR
-    // arbitration.  Anything that emits is refused here, at configuration,
+    // A dormant processor, one that owns no VNs and never emits synthetic
+    // packets, can advertise transparent carriage without changing ordinary
+    // RR arbitration.  Anything active is refused here, at configuration,
     // because this arbiter cannot arbitrate the synthetic input.
-    bool setNetworkServiceInputs(int num_inputs, int num_outputs, int num_vcs_s, bool processor_emits) override
+    bool setNetworkServiceInputs(int num_inputs, int num_outputs, int num_vcs_s,
+        const std::vector<uint8_t>& owned_vcs, NetworkServiceID, bool processor_emits) override
     {
-        if ( num_inputs != num_outputs + 1 || num_outputs <= 0 || num_vcs_s <= 0 || processor_emits ) return false;
+        if ( num_inputs != num_outputs + 1 || num_outputs <= 0 || num_vcs_s <= 0 ||
+             owned_vcs.size() != static_cast<size_t>(num_vcs_s) || processor_emits ||
+             std::any_of(owned_vcs.begin(), owned_vcs.end(), [](uint8_t owned) { return owned != 0; }) ) return false;
         setPorts(num_outputs, num_vcs_s);
         return true;
     }

@@ -61,7 +61,7 @@ private:
     ImplementSerializable(SST::Merlin::PR2IntegrationServiceData);
 };
 
-/** Router-side fixture: emits one synthetic echo when its external trigger fires. */
+/** Router-side fixture: owns VN 0, ACCEPTs or holds heads there, and echoes accepted ones back. */
 class PR2IntegrationProcessor final : public NetworkServiceProcessor
 {
 public:
@@ -78,15 +78,21 @@ public:
     PR2IntegrationProcessor(ComponentId_t id, Params& params, NetworkServiceHost* host);
 
     NetworkServiceID getServiceID() const override { return PR2_INTEGRATION_SERVICE_ID; }
+    std::vector<int> ownedVNs() const override { return { 0 }; }
     NetworkServiceRequestContract getRequestContract() const override
     {
         return { PR2IntegrationServiceData::SERVICE_ID, PR2IntegrationServiceData::DATA_TOKEN,
             PR2IntegrationServiceData::MIN_SCHEMA_VERSION,
             PR2IntegrationServiceData::MAX_SCHEMA_VERSION };
     }
+    NetworkServiceDecision inspect(const NetworkServiceIngress& ingress) const override;
+    void consume(NetworkServiceOwnedIngress ingress) noexcept override;
     bool hasScheduledWork() const override { return false; }
 
 private:
+    static constexpr SimTime_t BUSY_RELEASE_NS = 4;
+
+    void emitEcho(std::unique_ptr<internal_router_event> event, uint32_t sequence) noexcept;
     void handleTrigger(SST::Event* event);
 
     SST::Link* trigger_ = nullptr;

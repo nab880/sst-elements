@@ -35,4 +35,11 @@ NetworkServicePassProcessor::NetworkServicePassProcessor(
     service_id_ = static_cast<NetworkServiceID>(configured_id);
 }
 
+NetworkServiceDecision
+NetworkServicePassProcessor::inspect(const NetworkServiceIngress&) const
+{
+    // Owns no VN, so the router never offers it a head.
+    return { NetworkServiceDisposition::Reject, 1 };
+}
+
 } // namespace SST::Merlin

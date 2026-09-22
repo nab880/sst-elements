@@ -10,6 +10,8 @@
 
 #include "networkService.h"
 
+#include <exception>
+
 namespace SST::Merlin {
 
 /**
@@ -32,7 +34,10 @@ public:
     NetworkServicePassProcessor() = default;
 
     NetworkServiceID getServiceID() const override { return service_id_; }
+    std::vector<int> ownedVNs() const override { return {}; }
     bool emitsSyntheticPackets() const override { return false; }
+    NetworkServiceDecision inspect(const NetworkServiceIngress& ingress) const override;
+    void consume(NetworkServiceOwnedIngress) noexcept override { std::terminate(); }
     bool hasScheduledWork() const override { return false; }
 
     void serialize_order(SST::Core::Serialization::serializer& ser) override
