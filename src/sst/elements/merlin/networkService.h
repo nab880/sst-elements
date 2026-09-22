@@ -11,7 +11,9 @@
 #include <sst/core/interfaces/simpleNetwork.h>
 #include <sst/core/subcomponent.h>
 
+#include <cstddef>
 #include <cstdint>
+#include <memory>
 
 namespace SST::Merlin {
 
@@ -52,12 +54,56 @@ struct NetworkServiceRequestContract
     }
 };
 
+/**
+ * Move-only fresh packet offered to the router's bounded synthetic requester.
+ * The router chooses the VC: service egress enters on the first VC of
+ * route_vn, exactly like a fresh injection from an endpoint.
+ */
+struct NetworkServiceSyntheticPacket
+{
+    std::unique_ptr<SST::Interfaces::SimpleNetwork::Request> request;
+    SST::Interfaces::SimpleNetwork::nid_t trusted_src = -1;
+    int      route_vn       = -1;
+    int      output_port    = -1;
+
+    bool valid(NetworkServiceID service_id) const;
+};
+
+/** Immutable transport requirements used to reject bad static routes before timed execution. */
+struct NetworkServiceOutputSpec
+{
+    int    route_vn      = -1;
+    int    output_port   = -1;
+    size_t size_in_bits  = 0;
+
+    constexpr bool valid() const
+    {
+        return route_vn >= 0 && output_port >= 0 && size_in_bits > 0;
+    }
+};
+
 class NetworkServiceHost
 {
 public:
     virtual ~NetworkServiceHost() = default;
 
-    /** Router-side discovery hooks used to advertise one service to attached endpoints. */
+    /** Pure validation: no queue-capacity check and no ownership transfer. */
+    virtual bool supportsNetworkServiceOutput(const NetworkServiceOutputSpec& spec) const = 0;
+
+    /** Advisory readiness check for lazy packet construction; transfers no ownership. */
+    virtual bool canEnqueueNetworkServiceOutput(const NetworkServiceOutputSpec& spec) const
+    {
+        return supportsNetworkServiceOutput(spec);
+    }
+
+    /** Consumes packet.request only on success. */
+    virtual bool tryEnqueueNetworkServiceOutput(
+        NetworkServiceID service_id, NetworkServiceSyntheticPacket& packet) = 0;
+
+    /** Required after asynchronous work becomes ready while the router may be declocked. */
+    virtual void wakeNetworkServiceProcessor() = 0;
+
+    /** Optional router-side discovery hooks. */
     virtual NetworkServiceID getNetworkServiceID() const
     {
         return SST::Interfaces::SimpleNetwork::NETWORK_SERVICE_NONE;
@@ -68,11 +114,10 @@ public:
 /**
  * Service-neutral Merlin processor API.
  *
- * A processor names one network service and the request shape it accepts.
- * The router advertises both to every attached endpoint during init, and
- * endpoints negotiate against them before sending tagged requests.  Tagged
- * packets travel as ordinary Merlin traffic; later layers add synthetic
- * egress and processor-owned ingress.
+ * A processor names one network service and the request shape it accepts,
+ * and may emit synthetic packets through its host's bounded requester, which
+ * the crossbar arbitrates like a fresh injection.  Tagged packets travel as
+ * ordinary Merlin traffic; a later layer adds processor-owned ingress.
  */
 class NetworkServiceProcessor : public SST::SubComponent
 {
@@ -92,6 +137,18 @@ public:
     {
         return { getServiceID(), 0, 0, 0 };
     }
+    /**
+     * False only for a processor that never calls tryEnqueueNetworkServiceOutput.
+     * A dormant processor only advertises its service, so an arbiter without
+     * synthetic-input support (merlin.xbar_arb_rr) can host it.  The router
+     * refuses synthetic output from a processor that reports false.
+     */
+    virtual bool emitsSyntheticPackets() const { return true; }
+    /** Re-check transport facts learned during init before timed execution. */
+    virtual bool validateInstalledTransport() const { return true; }
+    virtual bool hasScheduledWork() const = 0;
+    /** Driven by the router clock while hasScheduledWork(); returns true once nothing remains. */
+    virtual bool progress() { return true; }
 
     void serialize_order(SST::Core::Serialization::serializer& ser) override
     {

@@ -99,6 +99,20 @@ class testcase_merlin_Component(SSTTestCase):
         for scenario in ("permutation", "alias", "negotiated", "no_identity"):
             self.assertEqual(1, text.count(f"Merlin VN remap {scenario}: PASS"))
 
+    def test_merlin_network_service_pr2_integration(self):
+        self.merlin_test_template("network_service_pr2_integration", exact=True, strict_stderr=True)
+
+    def test_merlin_network_service_rejects_active_rr(self):
+        test_path = self.get_testsuite_dir()
+        outdir = self.get_test_output_run_dir()
+        output = f"{outdir}/network_service_active_rr.out"
+        error = f"{outdir}/network_service_active_rr.err"
+        self.run_sst(f"{test_path}/network_service_pr2_integration.py", output, error,
+                     other_args='--model-options="rr"', expected_rc=1, timeout_sec=5)
+        combined = Path(output).read_text() + Path(error).read_text()
+        self.assertIn("does not support active network services; use merlin.xbar_arb_lru", combined)
+        self.assertNotIn("Simulation is complete", combined)
+
     def test_merlin_network_service_pass_baseline(self):
         test_path = self.get_testsuite_dir()
         outdir = self.get_test_output_run_dir()

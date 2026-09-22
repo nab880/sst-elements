@@ -107,6 +107,36 @@ public:
         vc_heads = nullptr;
     }
 
+    // A dormant processor, one that never emits synthetic packets, can
+    // advertise transparent carriage without changing ordinary RR
+    // arbitration.  Anything that emits is refused here, at configuration,
+    // because this arbiter cannot arbitrate the synthetic input.
+    bool setNetworkServiceInputs(int num_inputs, int num_outputs, int num_vcs_s, bool processor_emits) override
+    {
+        if ( num_inputs != num_outputs + 1 || num_outputs <= 0 || num_vcs_s <= 0 || processor_emits ) return false;
+        setPorts(num_outputs, num_vcs_s);
+        return true;
+    }
+
+#if VERIFY_DECLOCKING
+    bool arbitrateNetworkService(XbarInput** inputs, PortInterface** outputs, int* input_busy,
+        int* output_busy, int* progress_vc, bool clocking) override
+#else
+    bool arbitrateNetworkService(XbarInput** inputs, PortInterface** outputs, int* input_busy,
+        int* output_busy, int* progress_vc) override
+#endif
+    {
+        auto** synthetic_heads = inputs[num_ports]->getVCHeads();
+        for ( int vc = 0; vc < num_vcs; ++vc ) if ( synthetic_heads[vc] != nullptr ) return false;
+        progress_vc[num_ports] = -1;
+#if VERIFY_DECLOCKING
+        arbitrate(outputs, input_busy, output_busy, progress_vc, clocking);
+#else
+        arbitrate(outputs, input_busy, output_busy, progress_vc);
+#endif
+        return true;
+    }
+
     // Naming convention is from point of view of the xbar.  So,
     // in_port_busy is >0 if someone is writing to that xbar port and
     // out_port_busy is >0 if that xbar port being read.

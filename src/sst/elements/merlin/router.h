@@ -33,6 +33,7 @@
 #include <limits>
 #include <memory>
 #include <queue>
+#include <vector>
 
 namespace SST {
 namespace Merlin {
@@ -193,6 +194,12 @@ public:
                              static_cast<size_t>(flit_size);
         if ( flits > static_cast<size_t>(std::numeric_limits<int>::max()) ) return false;
         size_in_flits = static_cast<int>(flits);
+        return true;
+    }
+    inline bool setSyntheticTransportMetadata(int flits, SimTime_t time) {
+        if ( request == nullptr || route_vn < 0 || flits <= 0 ) return false;
+        size_in_flits = flits;
+        injectionTime = time;
         return true;
     }
     inline bool hasValidTransportMetadata() const {
@@ -668,6 +675,14 @@ protected:
 };
 
 
+/** Input-only seam used by physical ports and bounded synthetic requesters. */
+class XbarInput {
+public:
+    virtual ~XbarInput() = default;
+    virtual internal_router_event* recv(int vc) = 0;
+    virtual internal_router_event** getVCHeads() = 0;
+};
+
 // Class to manage link between NIC and router.  A single NIC can have
 // more than one link_control (and thus link to router).
 class PortInterface : public SubComponent{
@@ -727,6 +742,14 @@ public:
     }
     ImplementVirtualSerializable(SST::Merlin::PortInterface)
 
+    // Keep optional extensions after every released virtual so existing
+    // external PortInterface vtable slots retain their positions.
+    /** Construction-time facts used to reject static service routes that can never progress. */
+    virtual bool isConnected() const { return true; }
+    virtual int getFixedOutputCapacityInFlits() const { return std::numeric_limits<int>::max(); }
+    /** -1 before initialization; otherwise the immutable initial downstream credits for this VC. */
+    virtual int getFixedDownstreamCapacityInFlits(int) const { return -1; }
+
     class OutputArbitration : public SubComponent {
     public:
 
@@ -776,6 +799,28 @@ public:
         SST::SubComponent::serialize_order(ser);
     }
     ImplementVirtualSerializable(SST::Merlin::XbarArbitration)
+
+    // Keep optional extensions after every released virtual so existing
+    // external XbarArbitration vtable slots retain their positions.
+    /**
+     * Optional input/output split for a bounded synthetic requester: inputs
+     * are the physical ports followed by the requester.  processor_emits is
+     * false only for a processor that never produces synthetic packets; an
+     * arbiter that cannot arbitrate the synthetic input may accept only such
+     * a dormant processor.  The default preserves compatibility and refuses
+     * service enablement.
+     */
+    virtual bool setNetworkServiceInputs(int num_inputs, int num_outputs, int num_vcs, bool processor_emits)
+    {
+        return false;
+    }
+#if VERIFY_DECLOCKING
+    virtual bool arbitrateNetworkService(XbarInput** inputs, PortInterface** outputs, int* input_busy,
+        int* output_busy, int* progress_vc, bool clocking) { return false; }
+#else
+    virtual bool arbitrateNetworkService(XbarInput** inputs, PortInterface** outputs, int* input_busy,
+        int* output_busy, int* progress_vc) { return false; }
+#endif
 };
 
 }

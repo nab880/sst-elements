@@ -140,6 +140,7 @@ EXTRA_DIST = \
 	tests/network_service_contract.py \
 	tests/network_service_missing_processor.py \
 	tests/network_service_pass_tagged.py \
+	tests/network_service_pr2_integration.py \
 	tests/network_service_pass_baseline.py \
 	tests/network_service_vn_remap.py \
 	tests/refFiles/test_merlin_dragon_128_platform_test.out \
@@ -159,6 +160,7 @@ EXTRA_DIST = \
 	tests/refFiles/test_merlin_network_service_contract.out \
 	tests/refFiles/test_merlin_network_service_missing_processor.out \
 	tests/refFiles/test_merlin_network_service_pass_tagged.out \
+	tests/refFiles/test_merlin_network_service_pr2_integration.out \
 	tests/refFiles/test_merlin_polarstar_504_test.out
 
 sstdir = $(includedir)/sst/elements/merlin

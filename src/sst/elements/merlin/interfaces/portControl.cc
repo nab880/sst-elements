@@ -107,6 +107,26 @@ PortControl::spaceToSend(int vc, int flits)
 	return true;
 }
 
+int
+PortControl::getFixedOutputCapacityInFlits() const
+{
+    if ( !connected || flit_size.getValue().toDouble() <= 0.0 ) return 0;
+    const int64_t capacity = (output_buf_size / flit_size).getRoundedValue();
+    return capacity > 0 && capacity <= std::numeric_limits<int>::max() ? static_cast<int>(capacity) : 0;
+}
+
+int
+PortControl::getFixedDownstreamCapacityInFlits(int vc) const
+{
+    if ( !connected ) return 0;
+    if ( num_vcs < 0 ) return -1;
+    if ( !network_service || network_service->fixed_downstream_capacity.empty() ) return 0;
+    if ( !network_service->fixed_downstream_capacity_ready ) return -1;
+    if ( vc < 0 || vc >= num_vcs ||
+         network_service->fixed_downstream_capacity.size() != static_cast<size_t>(num_vcs) ) return 0;
+    return network_service->fixed_downstream_capacity[static_cast<size_t>(vc)];
+}
+
 internal_router_event*
 PortControl::recv(int vc)
 {
@@ -272,6 +292,10 @@ PortControl::serialize_order(SST::Core::Serialization::serializer& ser) {
             }
         }
         else network_service.reset();
+    }
+    if ( has_network_service ) {
+        SST_SER(network_service->fixed_downstream_capacity);
+        SST_SER(network_service->fixed_downstream_capacity_ready);
     }
 
     if ( ser.mode() == SST::Core::Serialization::serializer::UNPACK ) {
@@ -647,6 +671,10 @@ PortControl::initVCs(int vns, int* vcs_per_vn, internal_router_event** vc_heads_
     // Initialize credit arrays
     port_ret_credits = new int[num_vcs];
     port_out_credits = new int[num_vcs];
+    if ( network_service ) {
+        network_service->fixed_downstream_capacity.assign(static_cast<size_t>(num_vcs), 0);
+        network_service->fixed_downstream_capacity_ready = false;
+    }
 
     // Figure out how large the buffers are in flits
 
@@ -698,6 +726,10 @@ PortControl::~PortControl() {
 void
 PortControl::setup() {
     if ( !connected ) return;
+    if ( network_service ) {
+        network_service->fixed_downstream_capacity_ready =
+            !network_service->fixed_downstream_capacity.empty();
+    }
     if ( topo->getPortState(port_number) == Topology::FAILED ) {
         port_link->replaceFunctor(new Event::Handler<PortControl,&PortControl::handle_failed>(this));
         output_timing->replaceFunctor(new Event::Handler<PortControl,&PortControl::handle_failed>(this));
@@ -925,6 +957,31 @@ PortControl::init(unsigned int phase) {
                         "PortControl received invalid initial credits for VC %d\n", ce->vc);
                 }
                 port_out_credits[ce->vc] += ce->credits;
+                if ( network_service && !network_service->fixed_downstream_capacity.empty() ) {
+                    int first_vc = ce->vc;
+                    int vc_count = 1;
+                    if ( host_port ) {
+                        // Hosts advertise one shared credit pool per VN;
+                        // router links advertise a separate pool per VC.
+                        // Normalize the fixed capability by VC here so its
+                        // runtime query uses the same index on either link.
+                        std::vector<int> vcs_per_vn(num_vns);
+                        topo->getVCsPerVN(vcs_per_vn);
+                        first_vc = 0;
+                        for ( int vn = 0; vn < ce->vc; ++vn ) first_vc += vcs_per_vn[vn];
+                        vc_count = vcs_per_vn[ce->vc];
+                    }
+                    for ( int vc = first_vc; vc < first_vc + vc_count; ++vc ) {
+                        const int64_t capacity = static_cast<int64_t>(
+                            network_service->fixed_downstream_capacity[static_cast<size_t>(vc)]) + ce->credits;
+                        if ( capacity > std::numeric_limits<int>::max() ) {
+                            merlin_abort.fatal(CALL_INFO, 1,
+                                "PortControl initial downstream credit capacity overflow\n");
+                        }
+                        network_service->fixed_downstream_capacity[static_cast<size_t>(vc)] =
+                            static_cast<int>(capacity);
+                    }
+                }
                 delete ev;
             }
             else {

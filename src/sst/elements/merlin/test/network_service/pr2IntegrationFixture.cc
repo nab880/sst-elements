@@ -7,11 +7,15 @@
 
 #include <sst_config.h>
 
-#include "sst/elements/merlin/test/network_service/pr2IntegrationFixture.h"
+#include "pr2IntegrationFixture.h"
+
+#include "../../hr_router/hr_router.h"
+#include "../../router.h"
 
 #include <sst/core/output.h>
 
 #include <algorithm>
+#include <inttypes.h>
 #include <utility>
 #include <vector>
 
@@ -22,6 +26,277 @@ PR2IntegrationServiceData::serialize_order(SST::Core::Serialization::serializer&
 {
     SST_SER(action_);
     SST_SER(sequence_);
+}
+
+PR2IntegrationProcessor::PR2IntegrationProcessor(
+    ComponentId_t id, Params&, NetworkServiceHost* host) :
+    NetworkServiceProcessor(id, host)
+{
+    if ( host == nullptr ) {
+        getSimulationOutput().fatal(CALL_INFO, 1, "PR2 integration processor requires a network-service host\n");
+    }
+    trigger_ = configureLink("trigger",
+        new SST::Event::Handler<PR2IntegrationProcessor, &PR2IntegrationProcessor::handleTrigger>(this));
+    if ( trigger_ == nullptr ) {
+        getSimulationOutput().fatal(CALL_INFO, 1, "PR2 integration processor requires its trigger port\n");
+    }
+}
+
+void
+PR2IntegrationProcessor::handleTrigger(SST::Event* event)
+{
+    delete event;
+    auto* router = dynamic_cast<hr_router*>(host());
+    if ( router == nullptr || !router->getRequestNotifyOnEvent() ) {
+        getSimulationOutput().fatal(CALL_INFO, 1,
+            "PR2 integration external work arrived before the router declocked\n");
+    }
+    auto echo = std::make_unique<SST::Interfaces::SimpleNetwork::Request>(0, 1, 64, true, true);
+    echo->vn = 0;
+    echo->giveServiceData(new PR2IntegrationServiceData(PR2IntegrationAction::SyntheticEcho, 4));
+
+    NetworkServiceSyntheticPacket packet;
+    packet.request = std::move(echo);
+    packet.trusted_src = 1;
+    packet.route_vn = 0;
+    packet.output_port = 0;
+    if ( !host()->tryEnqueueNetworkServiceOutput(PR2_INTEGRATION_SERVICE_ID, packet) ) {
+        getSimulationOutput().fatal(CALL_INFO, 1,
+            "PR2 integration processor could not enqueue externally triggered synthetic work\n");
+    }
+}
+
+PR2IntegrationEndpoint::PR2IntegrationEndpoint(ComponentId_t id, Params& params) :
+    Component(id),
+    endpoint_id_(params.find<int>("id", -1))
+{
+    if ( endpoint_id_ != 0 && endpoint_id_ != 1 ) {
+        getSimulationOutput().fatal(CALL_INFO, 1, "PR2 integration endpoint id must be 0 or 1\n");
+    }
+
+    // VN 0 is owned by the processor; VN 1 carries ordinary tagged traffic.
+    network_ = loadUserSubComponent<SimpleNetwork>("networkIF", ComponentInfo::SHARE_NONE, 2);
+    if ( network_ == nullptr ) {
+        getSimulationOutput().fatal(CALL_INFO, 1, "PR2 integration endpoint requires a networkIF subcomponent\n");
+    }
+
+    deadline_ = configureSelfLink("pr2_deadline", endpoint_id_ == 0 ? "120ns" : "110ns",
+        new SST::Event::Handler<PR2IntegrationEndpoint, &PR2IntegrationEndpoint::handleDeadline>(this));
+    if ( endpoint_id_ == 0 ) {
+        drain_ = configureSelfLink("pr2_drain", "50ns",
+            new SST::Event::Handler<PR2IntegrationEndpoint, &PR2IntegrationEndpoint::handleDrain>(this));
+        trigger_ = configureLink("service_trigger");
+        if ( trigger_ == nullptr ) {
+            getSimulationOutput().fatal(CALL_INFO, 1,
+                "PR2 integration endpoint 0 requires its service_trigger port\n");
+        }
+        trigger_timer_ = configureSelfLink("pr2_trigger_timer", "70ns",
+            new SST::Event::Handler<PR2IntegrationEndpoint, &PR2IntegrationEndpoint::handleTriggerTimer>(this));
+    }
+
+    registerAsPrimaryComponent();
+    primaryComponentDoNotEndSim();
+}
+
+void
+PR2IntegrationEndpoint::init(unsigned int phase)
+{
+    network_->init(phase);
+}
+
+void
+PR2IntegrationEndpoint::setup()
+{
+    network_->setup();
+    if ( network_->getEndpointID() != endpoint_id_ ) {
+        getSimulationOutput().fatal(CALL_INFO, 1,
+            "PR2 integration endpoint ID mismatch: configured %d, network reports %" PRI_NID "\n",
+            endpoint_id_, network_->getEndpointID());
+    }
+    validateCapability();
+
+    network_->setNotifyOnReceive(
+        new SimpleNetwork::Handler<PR2IntegrationEndpoint, &PR2IntegrationEndpoint::handleReceive>(this));
+
+    if ( endpoint_id_ == 0 ) {
+        // Nothing to send yet: processor-owned ingress arrives in a later layer.
+        trigger_timer_->send(1, nullptr);
+        drain_->send(1, nullptr);
+    }
+    else {
+        pending_[0] = makeRequest(PR2IntegrationAction::Pass, 1, 0, 1);
+        // An untagged packet on the processor-owned VN 0 must route as
+        // ordinary traffic instead of reaching the processor.
+        pending_[1] = std::make_unique<SimpleNetwork::Request>(0, endpoint_id_, 64, true, true);
+        pending_[1]->vn = 0;
+        pending_count_ = 2;
+    }
+    if ( handleSend(0) ) {
+        network_->setNotifyOnSend(
+            new SimpleNetwork::Handler<PR2IntegrationEndpoint, &PR2IntegrationEndpoint::handleSend>(this));
+    }
+
+    deadline_->send(1, nullptr);
+}
+
+void
+PR2IntegrationEndpoint::complete(unsigned int phase)
+{
+    network_->complete(phase);
+}
+
+void
+PR2IntegrationEndpoint::finish()
+{
+    network_->finish();
+}
+
+bool
+PR2IntegrationEndpoint::handleSend(int vn)
+{
+    if ( vn != 0 && vn != 1 ) {
+        getSimulationOutput().fatal(CALL_INFO, 1, "PR2 integration endpoint received an invalid send notification\n");
+    }
+
+    while ( next_to_send_ < pending_count_ ) {
+        auto& request = pending_[next_to_send_];
+        if ( !network_->send(request.get(), request->vn) ) return true;
+        request.release();
+        ++next_to_send_;
+        ++sent_;
+    }
+    return false;
+}
+
+bool
+PR2IntegrationEndpoint::handleReceive(int vn)
+{
+    if ( vn != 0 && vn != 1 ) {
+        getSimulationOutput().fatal(CALL_INFO, 1, "PR2 integration endpoint received on an invalid VN\n");
+    }
+
+    // Before the drain each VN's one-flit input buffer admits exactly one
+    // packet: the Pass packet on VN 1 and the ordinary packet on VN 0.
+    if ( endpoint_id_ == 0 && !drain_enabled_ ) {
+        if ( ++pre_drain_notifications_ > 2 ) {
+            getSimulationOutput().fatal(CALL_INFO, 1,
+                "PR2 integration endpoint exceeded one credited receive per VN before its drain\n");
+        }
+        return true;
+    }
+
+    while ( network_->requestToReceive(vn) ) {
+        std::unique_ptr<SimpleNetwork::Request> request(network_->recv(vn));
+        if ( request == nullptr ) {
+            getSimulationOutput().fatal(CALL_INFO, 1, "PR2 integration endpoint observed an empty receive queue head\n");
+        }
+
+        if ( request->size_in_bits != 64 || request->vn != vn || !request->head || !request->tail ) {
+            getSimulationOutput().fatal(CALL_INFO, 1, "PR2 integration endpoint received a malformed packet\n");
+        }
+        const auto* data = request->inspectServiceDataAs<PR2IntegrationServiceData>();
+        if ( data == nullptr ) {
+            if ( endpoint_id_ == 0 && vn == 0 && !request->hasService() && request->src == 1 &&
+                 request->dest == 0 ) {
+                ++ordinary_received_;
+                continue;
+            }
+            getSimulationOutput().fatal(CALL_INFO, 1,
+                "PR2 integration endpoint %d received an unexpected untagged packet on VN %d\n", endpoint_id_, vn);
+        }
+
+        if ( endpoint_id_ == 0 && vn == 1 && data->action() == PR2IntegrationAction::Pass &&
+             data->sequence() == 1 && request->src == 1 && request->dest == 0 ) {
+            ++pass_received_;
+        }
+        else if ( endpoint_id_ == 0 && vn == 0 && data->action() == PR2IntegrationAction::SyntheticEcho &&
+                  data->sequence() >= 2 && data->sequence() <= 4 &&
+                  request->src == 1 && request->dest == 0 ) {
+            const uint32_t bit = 1u << data->sequence();
+            if ( echo_sequence_mask_ & bit ) {
+                getSimulationOutput().fatal(CALL_INFO, 1, "PR2 integration endpoint received a duplicate echo\n");
+            }
+            echo_sequence_mask_ |= bit;
+            ++echo_received_;
+        }
+        else {
+            getSimulationOutput().fatal(CALL_INFO, 1,
+                "PR2 integration endpoint %d received an unexpected action or address\n", endpoint_id_);
+        }
+    }
+    return true;
+}
+
+void
+PR2IntegrationEndpoint::handleDrain(SST::Event* event)
+{
+    delete event;
+    if ( pre_drain_notifications_ != 2 ) {
+        getSimulationOutput().fatal(CALL_INFO, 1,
+            "PR2 integration endpoint expected exactly one credited receive per VN before its drain\n");
+    }
+    drain_enabled_ = true;
+    handleReceive(0);
+    handleReceive(1);
+}
+
+void
+PR2IntegrationEndpoint::handleTriggerTimer(SST::Event* event)
+{
+    delete event;
+    trigger_->send(new SST::Event());
+}
+
+void
+PR2IntegrationEndpoint::handleDeadline(SST::Event* event)
+{
+    delete event;
+    const bool passed = endpoint_id_ == 0 ?
+        (sent_ == 0 && next_to_send_ == pending_count_ && pass_received_ == 1 && echo_received_ == 1 &&
+            ordinary_received_ == 1 && echo_sequence_mask_ == (1u << 4)) :
+        (sent_ == 2 && next_to_send_ == pending_count_ && pass_received_ == 0 && echo_received_ == 0 &&
+            ordinary_received_ == 0);
+    if ( !passed ) {
+        getSimulationOutput().fatal(CALL_INFO, 1,
+            "PR2 integration endpoint %d failed: sent=%u pass=%u echo=%u ordinary=%u\n",
+            endpoint_id_, sent_, pass_received_, echo_received_, ordinary_received_);
+    }
+    getSimulationOutput().output(
+        "Merlin PR2 integration endpoint %d: sent=%u pass=%u echo=%u ordinary=%u PASS\n",
+        endpoint_id_, sent_, pass_received_, echo_received_, ordinary_received_);
+    primaryComponentOKToEndSim();
+}
+
+std::unique_ptr<PR2IntegrationEndpoint::SimpleNetwork::Request>
+PR2IntegrationEndpoint::makeRequest(
+    PR2IntegrationAction action, uint32_t sequence, SimpleNetwork::nid_t destination, int vn) const
+{
+    auto request = std::make_unique<SimpleNetwork::Request>(destination, endpoint_id_, 64, true, true);
+    request->vn = vn;
+    request->giveServiceData(new PR2IntegrationServiceData(action, sequence));
+    return request;
+}
+
+void
+PR2IntegrationEndpoint::validateCapability() const
+{
+    SimpleNetwork::NetworkServiceCapability capability;
+    const auto required = SimpleNetwork::SERVICE_FEATURE_SIDECAR_PRESERVATION |
+                          SimpleNetwork::SERVICE_FEATURE_TRANSACTIONAL_TIMED_SEND |
+                          SimpleNetwork::SERVICE_FEATURE_INTERMEDIATE_TERMINATION_SAFE |
+                          SimpleNetwork::SERVICE_FEATURE_FRESH_BASE_REQUEST_TAG_FIRST_RECEIVE;
+    if ( !network_->queryServiceCapability(PR2_INTEGRATION_SERVICE_ID, capability) ||
+         !capability.isValidFor(PR2_INTEGRATION_SERVICE_ID) ||
+         (capability.features & required) != required ||
+         capability.min_schema_version > PR2IntegrationServiceData::MIN_SCHEMA_VERSION ||
+         capability.max_schema_version < PR2IntegrationServiceData::MAX_SCHEMA_VERSION ||
+         capability.request_data_token != PR2IntegrationServiceData::DATA_TOKEN ||
+         capability.min_request_schema_version != PR2IntegrationServiceData::MIN_SCHEMA_VERSION ||
+         capability.max_request_schema_version != PR2IntegrationServiceData::MAX_SCHEMA_VERSION ||
+         capability.max_atomic_request_bits_by_vn.empty() ||
+         capability.max_atomic_request_bits_by_vn[0] < 64 ) {
+        getSimulationOutput().fatal(CALL_INFO, 1, "PR2 integration networkIF reported an invalid capability\n");
+    }
 }
 
 PR2MissingProcessorEndpoint::PR2MissingProcessorEndpoint(ComponentId_t id, Params& params) :

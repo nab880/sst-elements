@@ -13,6 +13,15 @@
 
 namespace SST::Merlin {
 
+bool
+NetworkServiceSyntheticPacket::valid(NetworkServiceID service_id) const
+{
+    return service_id != SST::Interfaces::SimpleNetwork::NETWORK_SERVICE_NONE && request &&
+           request->getServiceID() == service_id && request->src >= 0 && request->dest >= 0 && request->vn >= 0 &&
+           trusted_src >= 0 && route_vn >= 0 && output_port >= 0 &&
+           request->size_in_bits > 0;
+}
+
 NetworkServicePassProcessor::NetworkServicePassProcessor(
     ComponentId_t id, Params& params, NetworkServiceHost* host) :
     NetworkServiceProcessor(id, host)

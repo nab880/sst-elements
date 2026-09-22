@@ -32,6 +32,8 @@ public:
     NetworkServicePassProcessor() = default;
 
     NetworkServiceID getServiceID() const override { return service_id_; }
+    bool emitsSyntheticPackets() const override { return false; }
+    bool hasScheduledWork() const override { return false; }
 
     void serialize_order(SST::Core::Serialization::serializer& ser) override
     {

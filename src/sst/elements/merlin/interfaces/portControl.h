@@ -187,9 +187,12 @@ private:
     int* port_ret_credits = nullptr;
     int* port_out_credits = nullptr;
     // Present only when the parent router hosts a network service.  Carries
-    // the host whose contract is advertised on REPORT_ID.
+    // the contract negotiated on REPORT_ID and the initial downstream credits
+    // used to validate static synthetic outputs.
     struct NetworkServicePortContext {
         NetworkServiceHost* host = nullptr; // non-owning opt-in extension
+        std::vector<int> fixed_downstream_capacity;
+        bool fixed_downstream_capacity_ready = false;
     };
     std::unique_ptr<NetworkServicePortContext> network_service;
 
@@ -334,6 +337,9 @@ public:
     // Returns true if there is space in the output buffer and false
     // otherwise.
     bool spaceToSend(int vc, int flits) override;
+    bool isConnected() const override { return connected; }
+    int getFixedOutputCapacityInFlits() const override;
+    int getFixedDownstreamCapacityInFlits(int vc) const override;
     // Returns NULL if no event in input_buf[vc]. Otherwise, returns
     // the next event.
     internal_router_event* recv(int vc) override;

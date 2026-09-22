@@ -27,7 +27,7 @@ inline constexpr SST::Interfaces::SimpleNetwork::NetworkServiceID PR2_INTEGRATIO
 
 enum class PR2IntegrationAction : uint8_t { Pass = 1, AcceptEcho = 2, BusyUntilEcho = 3, SyntheticEcho = 4 };
 
-/** Test-owned, non-collective sidecar used by the Merlin network-service fixtures. */
+/** Test-owned, non-collective sidecar used by the PR2 Merlin integration fixture. */
 class PR2IntegrationServiceData final : public SST::Interfaces::SimpleNetwork::NetworkServiceData
 {
 public:
@@ -59,6 +59,95 @@ private:
     uint32_t sequence_ = 0;
 
     ImplementSerializable(SST::Merlin::PR2IntegrationServiceData);
+};
+
+/** Router-side fixture: emits one synthetic echo when its external trigger fires. */
+class PR2IntegrationProcessor final : public NetworkServiceProcessor
+{
+public:
+    SST_ELI_REGISTER_SUBCOMPONENT(PR2IntegrationProcessor, "merlin", "network_service_pr2_processor",
+        SST_ELI_ELEMENT_VERSION(1, 0, 0), "Generic PR2 network-service integration processor",
+        SST::Merlin::NetworkServiceProcessor)
+
+    SST_ELI_DOCUMENT_PARAMS()
+
+    SST_ELI_DOCUMENT_PORTS(
+        { "trigger", "External trigger used to prove synthetic wakeup after router declocking", { "SST::Event" } }
+    )
+
+    PR2IntegrationProcessor(ComponentId_t id, Params& params, NetworkServiceHost* host);
+
+    NetworkServiceID getServiceID() const override { return PR2_INTEGRATION_SERVICE_ID; }
+    NetworkServiceRequestContract getRequestContract() const override
+    {
+        return { PR2IntegrationServiceData::SERVICE_ID, PR2IntegrationServiceData::DATA_TOKEN,
+            PR2IntegrationServiceData::MIN_SCHEMA_VERSION,
+            PR2IntegrationServiceData::MAX_SCHEMA_VERSION };
+    }
+    bool hasScheduledWork() const override { return false; }
+
+private:
+    void handleTrigger(SST::Event* event);
+
+    SST::Link* trigger_ = nullptr;
+};
+
+/** Two-node endpoint driver for the real single-router integration test. */
+class PR2IntegrationEndpoint final : public SST::Component
+{
+public:
+    SST_ELI_REGISTER_COMPONENT(PR2IntegrationEndpoint, "merlin", "network_service_pr2_endpoint",
+        SST_ELI_ELEMENT_VERSION(1, 0, 0), "Endpoint for the PR2 network-service integration fixture",
+        COMPONENT_CATEGORY_NETWORK)
+
+    SST_ELI_DOCUMENT_PARAMS(
+        { "id", "Endpoint ID; this fixture requires IDs 0 and 1", "-1" }
+    )
+
+    SST_ELI_DOCUMENT_PORTS(
+        { "service_trigger", "External trigger link to the test processor", { "SST::Event" } }
+    )
+
+    SST_ELI_DOCUMENT_SUBCOMPONENT_SLOTS(
+        { "networkIF", "Merlin network interface", "SST::Interfaces::SimpleNetwork" }
+    )
+
+    PR2IntegrationEndpoint(ComponentId_t id, Params& params);
+    ~PR2IntegrationEndpoint() override = default;
+
+    void init(unsigned int phase) override;
+    void setup() override;
+    void complete(unsigned int phase) override;
+    void finish() override;
+
+private:
+    using SimpleNetwork = SST::Interfaces::SimpleNetwork;
+
+    bool handleReceive(int vn);
+    bool handleSend(int vn);
+    void handleDrain(SST::Event* event);
+    void handleTriggerTimer(SST::Event* event);
+    void handleDeadline(SST::Event* event);
+    std::unique_ptr<SimpleNetwork::Request> makeRequest(
+        PR2IntegrationAction action, uint32_t sequence, SimpleNetwork::nid_t destination, int vn) const;
+    void validateCapability() const;
+
+    int endpoint_id_ = -1;
+    SimpleNetwork* network_ = nullptr;
+    SST::Link* deadline_ = nullptr;
+    SST::Link* drain_ = nullptr;
+    SST::Link* trigger_ = nullptr;
+    SST::Link* trigger_timer_ = nullptr;
+    std::array<std::unique_ptr<SimpleNetwork::Request>, 3> pending_;
+    size_t pending_count_ = 0;
+    size_t next_to_send_ = 0;
+    uint32_t sent_ = 0;
+    uint32_t pass_received_ = 0;
+    uint32_t echo_received_ = 0;
+    uint32_t ordinary_received_ = 0;
+    uint32_t echo_sequence_mask_ = 0;
+    uint32_t pre_drain_notifications_ = 0;
+    bool drain_enabled_ = false;
 };
 
 /** Verifies that endpoint configuration cannot advertise a missing router processor. */
