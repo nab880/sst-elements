@@ -41,6 +41,14 @@ class testcase_balar_smoke(SSTTestCase):
             self.skipTest("balar element not built (configure without --with-gpgpusim)")
         self.assertIn("balarMMIO", text, "sst-info balar should list balar.balarMMIO")
 
+    def test_balar_doorbell_testcpu_registered(self):
+        """sst-info balar lists DoorbellTestCPU when the element is built."""
+        text, rc = self._sst_info_text()
+        if "UNABLE TO PROCESS LIBRARY" in text.upper() or rc != 0:
+            self.skipTest("balar element not built (configure without --with-gpgpusim)")
+        self.assertIn("DoorbellTestCPU", text, "sst-info balar should list balar.DoorbellTestCPU")
+
+
 class testcase_balar_simple(BalarTestCase):
     @BalarTestCase.balar_basic_unittest
     def test_balar_runvecadd_testcpu(self):
@@ -61,6 +69,24 @@ class testcase_balar_simple(BalarTestCase):
         self.balar_contract_testcpu_template(
             "wide_packet", "testBalar-wide-packet.py", "wide_memcpy_d2h.trace",
             testtimeout=60 * 20, min_d2h_ratio=1.0)
+
+    @BalarTestCase.balar_basic_unittest
+    def test_doorbellcpu_doorbell(self):
+        self.doorbell_contract_testcpu_template(
+            "doorbellcpu_doorbell", "testDoorbellCPU-doorbell.py", None, testtimeout=60 * 10)
+
+    @BalarTestCase.balar_basic_unittest
+    def test_doorbellcpu_malloc_free(self):
+        self.doorbell_contract_testcpu_template(
+            "doorbellcpu_malloc_free", "testDoorbellCPU-malloc-free.py", "malloc_free.trace",
+            testtimeout=60 * 15, min_cuda_calls_completed=3)
+
+    @BalarTestCase.balar_basic_unittest
+    def test_doorbellcpu_wide_packet(self):
+        self.doorbell_contract_testcpu_template(
+            "doorbellcpu_wide_packet", "testDoorbellCPU-wide-packet.py", "wide_memcpy_d2h.trace",
+            testtimeout=60 * 20, min_flush_count=64, min_cuda_calls_completed=5,
+            min_d2h_bytes=4096, min_d2h_ratio=1.0)
 
     @unittest.skipIf(
         os.getenv("LLVM_INSTALL_PATH") is None or os.getenv("RISCV_TOOLCHAIN_INSTALL_PATH") is None,

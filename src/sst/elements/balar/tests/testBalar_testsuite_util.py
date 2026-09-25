@@ -275,6 +275,66 @@ class BalarTestCase(SSTTestCase):
             "{0} {1}: {2} Min.f64 {3} < {4}".format(
                 test_kind, testcase, stat_name, min_ratio, min_d2h_ratio))
 
+    def doorbell_contract_testcpu_template(
+            self, testcase, sdl_name, trace_name, testtimeout=600, min_flush_count=0,
+            min_cuda_calls_completed=0, min_d2h_bytes=0, min_d2h_ratio=0.0):
+        """Doorbell-pattern contract test: DoorbellTestCPU with cache_link flush before mmio doorbell."""
+        missing_nvcc_path = os.getenv("NVCC_PATH") == None
+        self.assertFalse(missing_nvcc_path, "doorbell contract test: Requires NVCC_PATH.")
+
+        test_path = self.get_testsuite_dir()
+        outdir = self.get_test_output_run_dir()
+        testDataFileName = "test_gpgpu_{0}".format(testcase)
+        outfile = "{0}/{1}.out".format(outdir, testDataFileName)
+        errfile = "{0}/{1}.err".format(outdir, testDataFileName)
+        statsfile = "{0}/{1}.stats_out".format(outdir, testDataFileName)
+        sdlfile = "{0}/{1}".format(test_path, sdl_name)
+        vecAddBinary = "{0}/balar_trace/vectorAdd".format(self.testbalarDir)
+        gpuMemCfgfile = "{0}/gpu-v100-mem.cfg".format(self.testbalarDir)
+        if trace_name:
+            trace_path = "{0}/traces/{1}".format(self.testbalarDir, trace_name)
+            otherargs = '--model-options=\"-c {0} -s {1} -x {2} -t {3} -v 1"'.format(
+                gpuMemCfgfile, statsfile, vecAddBinary, trace_path)
+        else:
+            otherargs = '--model-options=\"-c {0} -s {1} -x {2} -v 1"'.format(
+                gpuMemCfgfile, statsfile, vecAddBinary)
+
+        cmd = self.run_sst(sdlfile, outfile, errfile, set_cwd=self.testbalarDir,
+                           other_args=otherargs, timeout_sec=testtimeout)
+        log_debug("cmd = {0}".format(cmd))
+
+        self.assertTrue(os_test_file(statsfile, "-e"),
+                        "doorbell contract {0}: missing stats file {1}".format(testcase, statsfile))
+        with open(outfile, "r", errors="replace") as fh:
+            out_text = fh.read()
+        self.assertIn("Test Completed Successfuly", out_text,
+                      "doorbell contract {0}: DoorbellTestCPU did not report success".format(testcase))
+        with open(errfile, "r", errors="replace") as fh:
+            err_text = fh.read()
+        self.assertNotIn("FATAL", err_text,
+                         "doorbell contract {0}: simulation fatal in stderr".format(testcase))
+
+        if min_cuda_calls_completed > 0:
+            calls_completed = self._stat_sum_u64(statsfile, "cuda_calls_completed")
+            self.assertGreaterEqual(
+                calls_completed, min_cuda_calls_completed,
+                "doorbell contract {0}: cuda_calls_completed {1} < {2}".format(
+                    testcase, calls_completed, min_cuda_calls_completed))
+        if min_d2h_bytes > 0:
+            d2h_bytes = self._stat_sum_u64(statsfile, "total_memD2H_bytes")
+            self.assertGreaterEqual(
+                d2h_bytes, min_d2h_bytes,
+                "doorbell contract {0}: total_memD2H_bytes {1} < {2}".format(
+                    testcase, d2h_bytes, min_d2h_bytes))
+        if min_d2h_ratio > 0.0:
+            self._assert_min_d2h_ratio(statsfile, testcase, "doorbell contract", min_d2h_ratio)
+        if min_flush_count > 0:
+            flush_total = self._stat_sum_u64(statsfile, "flush_count")
+            self.assertGreaterEqual(
+                flush_total, min_flush_count,
+                "doorbell contract {0}: flush_count {1} < {2}".format(
+                    testcase, flush_total, min_flush_count))
+
     def balar_vanadis_template(self, testcase, testtimeout=400):
         """Balar testcase template with vanadis with explicit CUDA api calls
 
@@ -522,6 +582,9 @@ class BalarTestCase(SSTTestCase):
             "testBalar-doorbell.py",
             "testBalar-malloc-free.py",
             "testBalar-wide-packet.py",
+            "testDoorbellCPU-doorbell.py",
+            "testDoorbellCPU-malloc-free.py",
+            "testDoorbellCPU-wide-packet.py",
         ):
             os_symlink_file(test_path, self.testbalarDir, sdl)
         # Copy the shared packet definition files from balar src
