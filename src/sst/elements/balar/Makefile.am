@@ -75,6 +75,13 @@ EXTRA_DIST = \
 	tests/testsuite_default_balar_wire.py \
 	tests/testBalar-testcpu.py \
 	tests/testBalar-vanadis.py \
+	tests/testBalar-doorbell.py \
+	tests/testBalar-malloc-free.py \
+	tests/testBalar-wide-packet.py \
+	tests/balar_test_topology.py \
+	tests/traces/doorbell_malloc.trace \
+	tests/traces/malloc_free.trace \
+	tests/traces/wide_memcpy_d2h.trace \
 	tests/testsuite_default_balar.py \
 	tests/utils.py \
 	tests/vanadisBlock.py \
