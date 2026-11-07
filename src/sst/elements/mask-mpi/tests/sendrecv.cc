@@ -46,6 +46,7 @@ Questions? Contact sst-macro-help@sandia.gov
 
 #include <stddef.h>
 #include <stdio.h>
+#include <string.h>
 #include <iostream>
 
 #include <mask_mpi.h>
@@ -59,15 +60,19 @@ int main(int argc, char** argv)
   MPI_Comm_size(MPI_COMM_WORLD, &size);
 
   const int nelems = 8;
+  // With the argument "vector", rank 0 sends every other element of its
+  // buffer as one strided MPI_Type_vector, so the send has to be packed.
+  bool vector = argc > 1 && strcmp(argv[1], "vector") == 0;
+  int stride = vector ? 2 : 1;
 #define VALIDATE_BUFFERS
 #ifdef VALIDATE_BUFFERS
-  int buf[nelems];
+  int buf[2*nelems];
   if (rank == 0){
-    for (int i=0; i < nelems; ++i){
+    for (int i=0; i < 2*nelems; ++i){
       buf[i] = i;
     }
   } else {
-    for (int i=0; i < nelems; ++i){
+    for (int i=0; i < 2*nelems; ++i){
       buf[i] = -1;
     }
   }
@@ -78,14 +83,22 @@ int main(int argc, char** argv)
   int tag = 42;
   if (rank == 0){
     int partner = 1;
-    MPI_Send(buf, nelems, MPI_INT, partner, tag, MPI_COMM_WORLD);
+    if (vector){
+      MPI_Datatype strided;
+      MPI_Type_vector(nelems, 1, stride, MPI_INT, &strided);
+      MPI_Type_commit(&strided);
+      MPI_Send(buf, 1, strided, partner, tag, MPI_COMM_WORLD);
+      MPI_Type_free(&strided);
+    } else {
+      MPI_Send(buf, nelems, MPI_INT, partner, tag, MPI_COMM_WORLD);
+    }
   } else {
     int partner = 0;
     MPI_Recv(buf, nelems, MPI_INT, partner, tag, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 #ifdef VALIDATE_BUFFERS
     for (int i=0; i < nelems; ++i){
-      if (buf[i] != i){
-        printf("A[%d] = %d != %d\n", i, buf[i], i);
+      if (buf[i] != stride*i){
+        printf("A[%d] = %d != %d\n", i, buf[i], stride*i);
       }
     }
     for (int i=0; i < nelems; ++i){

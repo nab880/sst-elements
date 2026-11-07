@@ -59,6 +59,7 @@ class MpiQueueRecvRequest  {
   friend class RendezvousGet;
   friend class Eager1;
   friend class Eager0;
+  friend class DirectPut;
 
  public:
   MpiQueueRecvRequest(SST::Hg::Timestamp start, MpiRequest* key, MpiQueue* queue,

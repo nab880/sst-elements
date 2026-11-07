@@ -240,10 +240,14 @@ class RendezvousGet final : public RendezvousProtocol
 };
 
 /**
- * @brief The rendezvous_get class
- * Encapsulates a rendezvous protocol. On MPI_Send, the source sends an RDMA header
- * to the destination. On MPI_Recv, the destination then posts an RDMA get.
- * Hardware acks arrive at both dest/source signaling done.
+ * @brief The DirectPut class
+ * Models a one-sided put into a pre-registered window: every message, whatever
+ * its size, is a single RDMA put with no header exchange, selected by
+ * `use_put_window`. The receiver's buffer is unknown when the put is issued,
+ * so the NIC stages the payload on the message (wire buffer) and the matched
+ * receive copies it out. On MPI_Send the payload is packed into a contiguous
+ * snapshot, as Eager0 does (a null skeleton buffer takes none); the send
+ * completes on the hardware ack, which also frees the snapshot.
  */
 class DirectPut final : public MpiProtocol
 {
@@ -270,7 +274,11 @@ class DirectPut final : public MpiProtocol
   void incomingAck(MpiMessage* msg);
   void incomingPayload(MpiMessage* msg);
 
-  std::map<uint64_t,MpiRequest*> send_flows_;
+  struct Send {
+    MpiRequest* req;
+    void* snapshot;  // packed copy of the user buffer, freed on ack
+  };
+  std::map<uint64_t,Send> send_flows_;
 };
 
 }

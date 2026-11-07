@@ -137,6 +137,13 @@ NetworkMessage::memmoveLocalToRemote()
   //to have a null remote buffer
   if (isNonNullBuffer(remote_buffer_) && isNonNullBuffer(local_buffer_)){
     ::memcpy(remote_buffer_, local_buffer_, payload_bytes_);
+  } else if (isNonNullBuffer(local_buffer_)){
+    // A put that carries data but has no remote buffer yet (the receiver has
+    // not posted one, as in Mask-MPI's direct-put protocol). Stage the payload
+    // on the message, which is where the wire path leaves it too, so the
+    // receiving protocol can copy it out once the receive is matched and the
+    // sender may free its buffer as soon as the ack arrives.
+    putBufferOnWire(local_buffer_, payload_bytes_);
   }
 }
 

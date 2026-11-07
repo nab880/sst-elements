@@ -94,6 +94,7 @@ EXTRA_DIST = \
  tests/test_ring_allreduce.py \
  tests/test_hierarchical_allreduce.py \
  tests/test_sendrecv.py \
+ tests/test_sendrecv_put_window.py \
  tests/test_alltoall.py \
  tests/test_allgather.py \
  tests/test_halo3d26.py \
@@ -107,6 +108,9 @@ EXTRA_DIST = \
  tests/refFiles/test_hierarchical_allreduce_no_smp.out \
  tests/refFiles/test_hierarchical_allreduce_sparse_comm_warning.out \
  tests/refFiles/test_sendrecv.out \
+ tests/refFiles/test_sendrecv_put_window.out \
+ tests/refFiles/test_sendrecv_put_window_intranode.out \
+ tests/refFiles/test_sendrecv_put_window_vector.out \
  tests/refFiles/test_alltoall.out \
  tests/refFiles/test_direct_alltoall.out \
  tests/refFiles/test_allgather.out \

@@ -24,6 +24,19 @@ class testcase_mask_mpi(SSTTestCase):
     def test_sendrecv(self):
         self.mask_mpi_template("test_sendrecv")
 
+    def test_sendrecv_put_window(self):
+        self.mask_mpi_template("test_sendrecv_put_window")
+
+    def test_sendrecv_put_window_intranode(self):
+        self.mask_mpi_template("test_sendrecv_put_window_intranode",
+                               sdl="test_sendrecv_put_window",
+                               model_args="--nodes 1 --cores 2")
+
+    def test_sendrecv_put_window_vector(self):
+        self.mask_mpi_template("test_sendrecv_put_window_vector",
+                               sdl="test_sendrecv_put_window",
+                               model_args="--vector")
+
     def test_reduce(self):
         self.mask_mpi_template("test_reduce")
 

@@ -94,7 +94,17 @@ DirectPut::start(void* buffer, int src_rank, int dst_rank, SST::Hg::TaskId tid, 
                  int tag, MPI_Comm comm, int seq_id, MpiRequest* req)
 {
   int qos = 0;
-  auto* msg = mpi_->rdmaPut<MpiMessage>(tid, count*type->packed_size(), nullptr, nullptr,
+  uint64_t payload_bytes = count*type->packed_size();
+  // Pack the user buffer into one contiguous snapshot, as Eager0 does, and
+  // put that (a null buffer is a skeleton send and carries none). The remote
+  // buffer is unknown because the receive may not be posted yet, so the NIC
+  // stages the payload on the message and incoming(msg, req) lands it once
+  // the receive is matched.
+  void* snapshot = nullptr;
+  if (isNonNullBuffer(buffer)){
+    snapshot = fillSendBuffer(count, buffer, type);
+  }
+  auto* msg = mpi_->rdmaPut<MpiMessage>(tid, payload_bytes, snapshot, nullptr,
                 queue_->pt2ptCqId(), queue_->pt2ptCqId(),
                 Iris::sumi::Message::pt2pt, qos,
                 src_rank, dst_rank, type->id, tag, comm, seq_id, count, type->packed_size(),
@@ -102,7 +112,7 @@ DirectPut::start(void* buffer, int src_rank, int dst_rank, SST::Hg::TaskId tid, 
 
   send_flows_.emplace(std::piecewise_construct,
                       std::forward_as_tuple(msg->flowId()),
-                      std::forward_as_tuple(req));
+                      std::forward_as_tuple(Send{req, snapshot}));
 }
 
 void
@@ -114,8 +124,11 @@ DirectPut::incomingAck(MpiMessage *msg)
     sst_hg_abort_printf("could not find matching ack for %s", msg->toString().c_str());
   }
 
-  MpiRequest* req = iter->second;
-  req->complete();
+  Send& send = iter->second;
+  send.req->complete();
+  if (send.snapshot){
+    delete[] (char*) send.snapshot;
+  }
   send_flows_.erase(iter);
   delete msg;
 }
@@ -142,8 +155,15 @@ DirectPut::incoming(MpiMessage* msg)
 void
 DirectPut::incoming(MpiMessage *msg, MpiQueueRecvRequest *req)
 {
+  // The NIC staged the payload on the message because no remote buffer was
+  // known when the put was issued; land it in the matched receive. A null
+  // staged buffer means the sender passed a null (skeleton) buffer.
+  void* staged = msg->wireBuffer();
+  if (staged && isNonNullBuffer(req->recv_buffer_)){
+    ::memcpy(req->recv_buffer_, staged, msg->payloadBytes());
+  }
   queue_->finalizeRecv(msg, req);
-  delete msg;
+  delete msg; // also frees the staged copy
 }
 
 void
