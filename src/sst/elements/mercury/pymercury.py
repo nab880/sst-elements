@@ -88,17 +88,28 @@ class HgNIC(TemplateBase):
 
 class HgOS(TemplateBase):
 
+    def _forwardAppParam(self, key, value):
+        if value is None:
+            self._groups["params"].pop(key, None)
+        else:
+            self._groups["params"][key] = value
+
     def addParam(self, key, value):
-        # Forward the namespace intact; allreduce is both a key and a prefix.
+        # app1.* keys that HgOS does not declare belong to the application:
+        # collective selectors (allreduce is both a key and a prefix),
+        # app1.env.* entries, and parameters read by hgcc pragmas such as
+        # `#pragma sst overhead <param>` (app1.<param>). Forward them to the
+        # component intact. TemplateBase would drop an undeclared variable
+        # silently (KeyError) and reject an unknown level such as env with an
+        # AttributeError (a platform param set prints that as a warning), so
+        # declared-ness is checked here.
         if key.startswith("app1."):
             app_key = key[len("app1."):]
-            if (app_key.startswith("collective.") or
-                    app_key in ("allgather", "alltoall")):
-                if value is None:
-                    self._groups["params"].pop(key, None)
-                else:
-                    self._groups["params"][key] = value
-                return
+            app1 = self.__dict__.get("app1")
+            declared = (app1 is not None and "." not in app_key
+                        and app_key in app1._vars)
+            if not declared:
+                return self._forwardAppParam(key, value)
         return TemplateBase.addParam(self, key, value)
 
     def __init__(self):
