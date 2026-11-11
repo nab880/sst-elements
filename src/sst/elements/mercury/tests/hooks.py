@@ -1,6 +1,8 @@
-# Runs tests/hooks.cc on one node. --mode picks the hooks it calls.
+# Runs tests/hooks.cc on one compute-modelled node. --mode picks the hooks it
+# calls.
 
 import argparse
+import os
 import sst
 from sst.merlin.base import *
 from sst.merlin.endpoint import *
@@ -11,12 +13,27 @@ from sst.hg import *
 parser = argparse.ArgumentParser()
 parser.add_argument("--mode", default="free")
 args = parser.parse_args()
+if args.mode == "static-init":
+    os.environ["HOOKS_STATIC_INIT"] = "1"
 
 platdef = PlatformDefinition("platform_hg_hooks")
 PlatformDefinition.registerPlatformDefinition(platdef)
-platdef.addParamSet("node", {"name" : "hg.NodeCL"})
+platdef.addParamSet("node", {
+    "name" : "hg.NodeCL",
+    "frequency" : "2.1GHz",
+    "parallelism" : "1.0",
+    "negligible_compute_bytes" : "64B",
+    "channel_bandwidth" : "11.2 GB/s",
+    "num_channels" : "4",
+})
 platdef.addParamSet("nic", {"mtu" : "4096 B"})
-platdef.addParamSet("operating_system", {"name" : "hg.OperatingSystemCL"})
+platdef.addParamSet("operating_system", {
+    "name" : "hg.OperatingSystemCL",
+    "ncores" : "4",
+    "nsockets" : "1",
+    "app1.compute_library_access_width" : "64",
+    "app1.compute_library_loop_overhead" : "1.0",
+})
 platdef.addParamSet("topology", {"link_latency" : "20ns", "num_ports" : "1"})
 platdef.addParamSet("network_interface", {
     "link_bw" : "11.25 GB/s",
@@ -43,6 +60,7 @@ platform.addParamSet("operating_system", {
     "app1.name" : "hooks",
     "app1.exe_library_name" : "hooks",
     "app1.argv" : args.mode,
+    "app1.libraries" : ["computelibrary:ComputeLibrary"],
 })
 
 topo = topoSingle()

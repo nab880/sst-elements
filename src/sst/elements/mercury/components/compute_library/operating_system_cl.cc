@@ -20,6 +20,8 @@
 #include <mercury/common/util.h>
 #include <mercury/libraries/compute/compute_scheduler.h>
 #include <mercury/libraries/compute/compute_event.h>
+#include <atomic>
+#include <iostream>
 
 namespace SST {
 namespace Hg {
@@ -51,6 +53,18 @@ void OperatingSystemCL::setup() {
 void
 OperatingSystemCL::execute(COMP_FUNC func, Event *data, int nthr)
 {
+  // More threads than the node has cores would wait forever for cores that
+  // never become free; run on all of them instead.
+  int ncores = compute_sched_->ncores();
+  if (nthr > ncores) {
+    static std::atomic<bool> warned{false};
+    if (!warned.exchange(true)) {
+      std::cerr << "warning: a compute region asks for " << nthr
+                << " threads, but the node has " << ncores
+                << " cores; it runs on " << ncores << "\n";
+    }
+    nthr = ncores;
+  }
   int owned_ncores = activeThread()->numActiveCcores();
   if (owned_ncores < nthr){
     compute_sched_->reserveCores(nthr-owned_ncores, active_thread_);
@@ -60,9 +74,16 @@ OperatingSystemCL::execute(COMP_FUNC func, Event *data, int nthr)
   ExecutionEvent* cb = newCallback(this, &OperatingSystemImpl::unblock, active_thread_);
 
   switch (func) {
-    case COMP_INSTR:
+    case COMP_INSTR: {
+      // The processor divides the time by the event's own thread count, so
+      // keep that to the cores the request gets.
+      BasicComputeEvent* bev = safe_cast(BasicComputeEvent, data);
+      if (bev->data().nthread > nthr) {
+        bev->data().nthread = nthr;
+      }
       node_cl_->proc()->compute(data, cb);
       break;
+    }
     case COMP_TIME: {
       TimedComputeEvent* ev = safe_cast(TimedComputeEvent, data);
       sendDelayedExecutionEvent(ev->data(), cb);

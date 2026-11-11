@@ -82,6 +82,16 @@ extern "C" void sst_hg_free_stack(void* ptr)
 //  SST::Hg::StackAlloc::free(ptr);
 }
 
+bool
+ThreadInfo::onUserSpaceStack()
+{
+  if (sst_hg_global_stacksize == 0){
+    return false;
+  }
+  char* tls = (char*) get_sst_hg_tls();
+  return *((int*) &tls[SST_HG_TLS_SANITY_CHECK]) == tls_sanity_check;
+}
+
 void
 ThreadInfo::registerUserSpaceVirtualThread(int phys_thread_id, void *stack,
                                            void* globalsMap, void* tlsMap,

@@ -33,10 +33,25 @@ class testcase_hg(SSTTestCase):
     def test_hooks_free(self):
         self.hooks_template("hooks_free", "--mode free")
 
+    @unittest.skipIf(testing_check_get_num_ranks() > 1, "hooks not tested with more than one rank")
+    def test_hooks_compute(self):
+        self.hooks_template("hooks_compute", "--mode compute")
+
+    @unittest.skipIf(testing_check_get_num_ranks() > 1, "hooks not tested with more than one rank")
+    def test_hooks_compute_zero_threads(self):
+        self.hooks_template("hooks_compute_zero_threads", "--mode compute-zero",
+                            expected_error="thread count 0")
+
+    @unittest.skipIf(testing_check_get_num_ranks() > 1, "hooks not tested with more than one rank")
+    def test_hooks_compute_static_init(self):
+        self.hooks_template("hooks_compute_static_init", "--mode static-init",
+                            expected_error="called outside a running Mercury application thread")
+
 #####
 
-    def hooks_template(self, testcase, model_args):
-        # Runs tests/hooks.py; its output must match the reference file.
+    def hooks_template(self, testcase, model_args, expected_error=None):
+        # Runs tests/hooks.py. With expected_error, the run must fail with
+        # that message; otherwise its output must match the reference file.
         test_path = self.get_testsuite_dir()
         outdir = self.get_test_output_run_dir()
         tmpdir = self.get_test_output_tmp_dir()
@@ -46,6 +61,12 @@ class testcase_hg(SSTTestCase):
         errfile = "{0}/{1}.err".format(outdir, testcase)
         cmpfile = "{0}/{1}.cmp".format(tmpdir, testcase)
         other_args = '--model-options="{0}"'.format(model_args)
+        if expected_error is not None:
+            self.run_sst(sdlfile, outfile, errfile, set_cwd=test_path,
+                         other_args=other_args, expected_rc=1)
+            with open(outfile) as out, open(errfile) as err:
+                self.assertIn(expected_error, out.read() + err.read())
+            return
         self.run_sst(sdlfile, outfile, errfile, set_cwd=test_path,
                      other_args=other_args)
         testing_remove_component_warning_from_file(outfile)

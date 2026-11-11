@@ -36,6 +36,11 @@ class ThreadInfo {
 
   static void deregisterUserSpaceVirtualThread(void* stack);
 
+  /** Whether the caller runs on the stack of a Mercury user-space thread,
+   *  which registerUserSpaceVirtualThread marks. Code that runs on the
+   *  native stack, such as a static initializer, does not. */
+  static bool onUserSpaceStack();
+
   static inline int currentPhysicalThreadId(){
     uintptr_t localStorage = get_sst_hg_tls();
     int* tls = (int*) (localStorage + SST_HG_TLS_THREAD_ID);

@@ -18,6 +18,8 @@
 
 #pragma once
 
+#include <stdint.h>
+
 #define SSTPP_QUOTE(name) #name
 #define SSTPP_STR(name) SSTPP_QUOTE(name)
 
@@ -97,6 +99,14 @@ void sst_hg_blocking_call(int condition, double timeout, const char* api);
  * (null_buffer.h), whose addresses skeletons pass around instead of real
  * buffers. */
 void sst_hg_free(void* ptr);
+/* Emitted by hgcc's `#pragma sst compute`: charge a modeled loop nest to the
+ * calling rank through the app's ComputeLibrary, advancing its simulated
+ * time. bytes is the memory the loop reads (hgcc passes its read bytes). The
+ * _nthr form spreads the work over nthread threads, at least 1; more threads
+ * than the node has cores run on all its cores. */
+void sst_hg_compute_detailed(uint64_t flops, uint64_t intops, uint64_t bytes);
+void sst_hg_compute_detailed_nthr(uint64_t flops, uint64_t intops, uint64_t bytes,
+                                  int nthread);
 #ifdef __cplusplus
 }
 #endif
