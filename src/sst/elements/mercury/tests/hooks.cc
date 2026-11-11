@@ -54,6 +54,10 @@ int main(int argc, char** argv) {
     printf("compute: done\n");
   } else if (!strcmp(mode, "compute-zero")) {
     sst_hg_compute_detailed_nthr(2100000, 0, 0, 0);
+  } else if (!strcmp(mode, "advance")) {
+    // Charges app1.ov, which hooks.py passes through HgOS.
+    sst_hg_advance_time("ov");
+    printf("advance: done\n");
   }
   return 0;
 }

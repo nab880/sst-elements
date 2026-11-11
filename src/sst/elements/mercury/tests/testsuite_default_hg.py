@@ -47,6 +47,34 @@ class testcase_hg(SSTTestCase):
         self.hooks_template("hooks_compute_static_init", "--mode static-init",
                             expected_error="called outside a running Mercury application thread")
 
+    @unittest.skipIf(testing_check_get_num_ranks() > 1, "hooks not tested with more than one rank")
+    def test_hooks_advance(self):
+        self.hooks_template("hooks_advance", "--mode advance --param ov=19ns")
+
+    @unittest.skipIf(testing_check_get_num_ranks() > 1, "hooks not tested with more than one rank")
+    def test_hooks_advance_missing(self):
+        self.hooks_template("hooks_advance_missing", "--mode advance",
+                            expected_error="app 1 has no parameter 'ov'; set app1.ov")
+
+    @unittest.skipIf(testing_check_get_num_ranks() > 1, "hooks not tested with more than one rank")
+    def test_hooks_advance_bad_unit(self):
+        self.hooks_template("hooks_advance_bad_unit", "--mode advance --param ov=10usec",
+                            expected_error="is not a time: ")
+
+    @unittest.skipIf(testing_check_get_num_ranks() > 1, "hooks not tested with more than one rank")
+    def test_hooks_advance_not_time(self):
+        self.hooks_template("hooks_advance_not_time", "--mode advance --param ov=10Hz",
+                            expected_error="is not a time; give it units of seconds")
+
+    @unittest.skipIf(testing_check_get_num_ranks() > 1, "hooks not tested with more than one rank")
+    def test_hooks_advance_negative_zero(self):
+        self.hooks_template("hooks_advance_negative_zero", "--mode advance --param ov=-0us")
+
+    @unittest.skipIf(testing_check_get_num_ranks() > 1, "hooks not tested with more than one rank")
+    def test_hooks_advance_negative(self):
+        self.hooks_template("hooks_advance_negative", "--mode advance --param ov=-5us",
+                            expected_error="is negative")
+
 #####
 
     def hooks_template(self, testcase, model_args, expected_error=None):

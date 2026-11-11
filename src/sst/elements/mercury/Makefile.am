@@ -224,7 +224,9 @@ EXTRA_DIST = \
     tests/refFiles/ostest-nano.out \
     tests/hooks.py \
     tests/refFiles/hooks_free.out \
-    tests/refFiles/hooks_compute.out
+    tests/refFiles/hooks_compute.out \
+    tests/refFiles/hooks_advance.out \
+    tests/refFiles/hooks_advance_negative_zero.out
 
 EXTRA_DIST += \
     tests/fcontext_fp_preservation.py \

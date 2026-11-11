@@ -1,5 +1,6 @@
 # Runs tests/hooks.cc on one compute-modelled node. --mode picks the hooks it
-# calls.
+# calls; --param key=value adds app1.key, which HgOS passes to the app, as an
+# application's own parameters reach it.
 
 import argparse
 import os
@@ -12,6 +13,7 @@ from sst.hg import *
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--mode", default="free")
+parser.add_argument("--param", action="append", default=[])
 args = parser.parse_args()
 if args.mode == "static-init":
     os.environ["HOOKS_STATIC_INIT"] = "1"
@@ -56,12 +58,16 @@ platdef.addClassType("router", "sst.merlin.base.hr_router")
 
 PlatformDefinition.setCurrentPlatform("platform_hg_hooks")
 platform = PlatformDefinition.getCurrentPlatform()
-platform.addParamSet("operating_system", {
+params = {
     "app1.name" : "hooks",
     "app1.exe_library_name" : "hooks",
     "app1.argv" : args.mode,
     "app1.libraries" : ["computelibrary:ComputeLibrary"],
-})
+}
+for item in args.param:
+    key, value = item.split("=", 1)
+    params["app1." + key] = value
+platform.addParamSet("operating_system", params)
 
 topo = topoSingle()
 topo.num_ports = 1

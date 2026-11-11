@@ -21,10 +21,17 @@
 #include <mercury/common/errors.h>
 #include <mercury/common/null_buffer.h>
 #include <mercury/libraries/compute/compute_api.h>
+#include <mercury/operating_system/process/app.h>
 #include <mercury/operating_system/process/thread.h>
 #include <mercury/operating_system/process/thread_info.h>
+#include <sst/core/params.h>
+#include <sst/core/unitAlgebra.h>
+#include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <exception>
+#include <string>
 
 namespace SST::Hg {
 
@@ -122,4 +129,64 @@ extern "C" void
 sst_hg_compute_detailed(uint64_t flops, uint64_t intops, uint64_t bytes)
 {
   computeDetailed("sst_hg_compute_detailed", flops, intops, bytes, 1);
+}
+
+// Hook emitted by hgcc's `#pragma sst overhead <param>` (declared in
+// skeleton.h). The parameter is looked up in the calling app's own
+// parameters, so in app N `#pragma sst overhead launch_overhead` reads
+// appN.launch_overhead, which must be a time such as "10us". The time is
+// charged as busy time on the calling rank, the way ComputeLibrary::compute
+// charges a TimeDelta.
+extern "C" void
+sst_hg_advance_time(const char* param_name)
+{
+  SST::Hg::Thread* thread = hookThread("sst_hg_advance_time");
+  SST::Hg::App* app = thread->parentApp();
+  if (!app) {
+    sst_hg_abort_printf("sst_hg_advance_time(\"%s\") called outside a Mercury "
+                        "application", param_name);
+  }
+  SST::Params& params = app->params();
+  if (!params.contains(param_name)) {
+    sst_hg_abort_printf("sst_hg_advance_time: app %d has no parameter '%s'; "
+                        "set app%d.%s to a time such as \"10us\"",
+                        thread->aid(), param_name, thread->aid(), param_name);
+  }
+  std::string text = params.find<std::string>(param_name);
+  SST::UnitAlgebra value;
+  try {
+    value = SST::UnitAlgebra(text);
+  } catch (const std::exception& e) {
+    sst_hg_abort_printf("sst_hg_advance_time: parameter '%s' = \"%s\" is not a "
+                        "time: %s", param_name, text.c_str(), e.what());
+  }
+  if (!value.hasUnits("s")) {
+    sst_hg_abort_printf("sst_hg_advance_time: parameter '%s' = \"%s\" is not a "
+                        "time; give it units of seconds, such as \"10us\"",
+                        param_name, text.c_str());
+  }
+  // UnitAlgebra keeps the sign apart and drops it in toDouble(), so a
+  // negative time would be charged as a positive one; a zero is accepted
+  // whatever its sign. UnitAlgebra skips leading whitespace as isspace does.
+  size_t first = 0;
+  while (first < text.size() &&
+         std::isspace(static_cast<unsigned char>(text[first]))) {
+    ++first;
+  }
+  if (first < text.size() && text[first] == '-' && !value.getValue().isZero()) {
+    sst_hg_abort_printf("sst_hg_advance_time: parameter '%s' = \"%s\" is "
+                        "negative", param_name, text.c_str());
+  }
+  double seconds = value.getValue().toDouble();
+  if (seconds > SST::Hg::TimeDelta::maxTime()) {
+    sst_hg_abort_printf("sst_hg_advance_time: parameter '%s' = \"%s\" is "
+                        "longer than %e s", param_name, text.c_str(),
+                        SST::Hg::TimeDelta::maxTime());
+  }
+  // TimeDelta(double) truncates, and toDouble() can fall just short of an
+  // exact decimal time, so round to the nearest tick (to double precision:
+  // above about 4096 s a double no longer holds every picosecond).
+  SST::Hg::OperatingSystemImpl::currentOs()->blockTimeout(SST::Hg::TimeDelta(
+      SST::Hg::TimeDelta::tick_t(std::round(seconds * SST::Hg::TimeDelta::one_second)),
+      SST::Hg::TimeDelta::exact));
 }
