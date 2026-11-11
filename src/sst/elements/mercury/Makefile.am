@@ -12,7 +12,7 @@ AM_LIBTOOLFLAGS = --tag=CXX
 comp_LTLIBRARIES = libhg.la
 compdir = $(pkglibdir)
 
-ext_LTLIBRARIES = libcomputelibrary.la libostest.la libostest-nano.la
+ext_LTLIBRARIES = libcomputelibrary.la libostest.la libostest-nano.la libhooks.la
 extdir = $(pkglibdir)/ext
 
 ext_LTLIBRARIES += libfcontext_fp_preservation.la
@@ -106,6 +106,9 @@ libostest_la_SOURCES = \
 
 libostest_nano_la_SOURCES = \
   tests/ostest-nano.cc
+
+libhooks_la_SOURCES = \
+  tests/hooks.cc
 
 library_includedir=$(includedir)/sst/elements/mercury
 
@@ -218,7 +221,9 @@ EXTRA_DIST = \
     tests/ostest.py \
     tests/ostest-nano.py \
     tests/refFiles/ostest.out \
-    tests/refFiles/ostest-nano.out
+    tests/refFiles/ostest-nano.out \
+    tests/hooks.py \
+    tests/refFiles/hooks_free.out
 
 EXTRA_DIST += \
     tests/fcontext_fp_preservation.py \
@@ -234,6 +239,7 @@ libhg_la_LDFLAGS = -module -avoid-version -shared
 libcomputelibrary_la_LDFLAGS = -module -avoid-version -shared
 libostest_la_LDFLAGS = -module -avoid-version -shared
 libostest_nano_la_LDFLAGS = -module -avoid-version -shared
+libhooks_la_LDFLAGS = -module -avoid-version -shared
 
 install-exec-hook:
 	$(SST_REGISTER_TOOL) SST_ELEMENT_SOURCE     mercury=$(abs_srcdir)

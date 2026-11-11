@@ -92,6 +92,11 @@ void sst_hg_advance_time(const char* param_name);
 void sst_hg_blocking_call(int condition, double timeout, const char* api);
 /* Alias for hgcc-generated pragma: ssthg_blocking_call -> sst_hg_blocking_call */
 #define ssthg_blocking_call sst_hg_blocking_call
+/* Called in place of free() by code hgcc rewrites (skeletonize and shadowize
+ * modes): frees ptr unless it lies in Mercury's reserved null-buffer range
+ * (null_buffer.h), whose addresses skeletons pass around instead of real
+ * buffers. */
+void sst_hg_free(void* ptr);
 #ifdef __cplusplus
 }
 #endif

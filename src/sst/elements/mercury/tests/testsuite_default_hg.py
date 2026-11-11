@@ -29,7 +29,32 @@ class testcase_hg(SSTTestCase):
     def test_os_nano(self):
         self.simple_components_template("ostest-nano")
 
+    @unittest.skipIf(testing_check_get_num_ranks() > 1, "hooks not tested with more than one rank")
+    def test_hooks_free(self):
+        self.hooks_template("hooks_free", "--mode free")
+
 #####
+
+    def hooks_template(self, testcase, model_args):
+        # Runs tests/hooks.py; its output must match the reference file.
+        test_path = self.get_testsuite_dir()
+        outdir = self.get_test_output_run_dir()
+        tmpdir = self.get_test_output_tmp_dir()
+        sdlfile = "{0}/hooks.py".format(test_path)
+        reffile = "{0}/refFiles/{1}.out".format(test_path, testcase)
+        outfile = "{0}/{1}.out".format(outdir, testcase)
+        errfile = "{0}/{1}.err".format(outdir, testcase)
+        cmpfile = "{0}/{1}.cmp".format(tmpdir, testcase)
+        other_args = '--model-options="{0}"'.format(model_args)
+        self.run_sst(sdlfile, outfile, errfile, set_cwd=test_path,
+                     other_args=other_args)
+        testing_remove_component_warning_from_file(outfile)
+        os.system("cp {0} {1}".format(outfile, cmpfile))
+        cmp_result = testing_compare_sorted_diff(testcase, cmpfile, reffile)
+        if (cmp_result == False):
+            diffdata = testing_get_diff_data(testcase)
+            log_failure(diffdata)
+        self.assertTrue(cmp_result, "Sorted Output file {0} does not match sorted Reference File {1}".format(cmpfile, reffile))
 
     def simple_components_template(self, testcase, striptotail=0):
         # Get the path to the test files

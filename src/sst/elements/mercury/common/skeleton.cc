@@ -18,6 +18,8 @@
 #include <mercury/operating_system/libraries/unblock_event.h>
 #include <mercury/components/operating_system_api.h>
 #include <mercury/components/operating_system_impl.h>
+#include <mercury/common/null_buffer.h>
+#include <cstdlib>
 
 namespace SST::Hg {
 
@@ -52,4 +54,14 @@ ssthg_nanosleep(unsigned int nsecs) {
 }
 
 } //end namespace SST::Hg
+
+// Called in place of free() by code hgcc rewrote in skeletonize or shadowize
+// mode (declared in skeleton.h).
+extern "C" void
+sst_hg_free(void* ptr)
+{
+  if (isNonNullBuffer(ptr)) {
+    ::free(ptr);
+  }
+}
 
